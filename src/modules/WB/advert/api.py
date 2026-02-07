@@ -9,9 +9,9 @@ async def get_advert_info_wb(account, token, session):
     params = {"statuses": 9}
     delay = 60
     attempts = 3
-    for attempt in attempts:
+    for attempt in range(attempts+1):
         try:
-            async with session.get(url, headers=headers, params=params, timeout=10) as response:
+            async with session.get(url, headers=headers, params=params, timeout=15) as response:
                 # 1. Сразу пытаемся распарсить JSON, если это возможно
                 content_type = response.headers.get('Content-Type', '')
                 data = await response.json() if 'application/json' in content_type else None
@@ -30,16 +30,14 @@ async def get_advert_info_wb(account, token, session):
                 elif response.status == 429:
                     print(f"⏳ [{account}] Ошибка 429: Лимит запросов! ({error_detail})")
                     await asyncio.sleep(delay)
-                    attempt +=1
                     continue                    
                 elif response.status == 400:
                     print(f"❓ [{account}] Ошибка 400: Плохой запрос. ({error_detail})")
                     await asyncio.sleep(delay)
-                    attempt +=1
                     continue
                 else:
                     print(f"❌ [{account}] Ошибка {response.status}: {error_detail}")
-                    
+
                 return None
                 
         except Exception as e:
