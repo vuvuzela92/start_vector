@@ -1,7 +1,7 @@
 import asyncio
 import aiohttp
 
-
+# === Информация о рекламных кампаниях ===
 async def get_advert_info_wb(account, token, session):
     """Асинхронная функция для получения информации о рекламных кампаниях c ВБ."""
     url = "https://advert-api.wildberries.ru/api/advert/v2/adverts"
@@ -53,3 +53,63 @@ async def fetch_advert_info(tokens: dict):
             # Ожидаем завершения всех задач и собираем результаты
             results = await asyncio.gather(*tasks)
             return results
+    
+# === Информация о рекламных затратах ===
+async def get_advert_spend(account: str, token: str, date_from: str, date_to: str, api_token: str, session: aiohttp.ClientSession):
+    """Получает данные по рекламным затратам за указанный период"""
+    url = "https://advert-api.wildberries.ru/adv/v1/upd"
+    headers = {
+        "Authorization": api_token
+    }
+    params = {
+        "from": date_from,
+        "to": date_to
+        }
+    # Интервал для запросов на ВБ
+    delay = 1
+    # Количество попыток в случае ошибки
+    attempts = 3
+    for attempt in range(attempts+1):
+        try:
+                async with session.get(url, headers=headers, params=params, timeout=10) as res:
+                    # 1. Пытаемся распарсить JSON, если это возможно
+                    content_type = res.headers.get('Content-Type', '')
+                    data = await res.json() if 'application/json' in content_type else None
+
+                    if res.status == 200:
+                        for d in data:
+                            d['account'] = account.upper() # Добавляем информацию об аккаунте в данные
+                        print(f"✅ [{account}] Данные получены за {date_from}")
+                        return data             
+
+                    # 2. Безопасно достаем описание ошибки
+                    error_detail = data.get('detail') if data else await res.text()
+                    
+                    # 3. Обработка ошибок без дублирования кода
+                    if res.status == 401:
+                        print(f"🔑 [{account}] Ошибка 401: Неверный токен. ({error_detail})")
+                    elif res.status == 429:
+                        print(f"⏳ [{account}] Ошибка 429: Лимит запросов! ({error_detail})")
+                        asyncio.sleep(delay)
+                        continue
+                    elif res.status == 400:
+                        print(f"❓ [{account}] Ошибка 400: Плохой запрос. ({error_detail})")
+                    else:
+                        print(f"❌ [{account}] Ошибка {res.status}: {error_detail}")
+                    
+                    return None
+                    
+        except Exception as e:
+                print(f"💥 [{account}] Непредвиденная ошибка: {e}")
+                return None
+
+
+async def fetch_advert_spend_info(tokens: dict, date_from, date_to):
+    """Асинхронная функция для получения информации о рекламных кампаниях для всех аккаунтов и токенов."""
+    # Асинхронно обрабатываем все аккаунты и токены
+    async with aiohttp.ClientSession() as session:
+            # Создаем задачи для каждого аккаунта и токена
+            tasks = [get_advert_spend(account, token, date_from, date_to, token, session) for account, token in tokens.items()]
+            # Ожидаем завершения всех задач и собираем результаты
+            results = await asyncio.gather(*tasks)
+            return results   

@@ -3,14 +3,15 @@ import asyncio
 import os
 from src.core.utils_general import load_api_tokens
 from src.core.utils_gspread import safe_open_spreadsheet
-from src.modules.WB.reports.api import fetch_advert_info
+from src.modules.WB.reports.api import fetch_orders_info
 from src.modules.WB.reports.processing import process_orders_info
 
 
 def orders_report_today():
+    """Полчает данные по отчету orders"""
     tokens = load_api_tokens()
 
-    orders_info = asyncio.run(fetch_advert_info(tokens))
+    orders_info = asyncio.run(fetch_orders_info(tokens))
 
     df = process_orders_info(orders_info)
 

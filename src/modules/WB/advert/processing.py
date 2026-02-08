@@ -1,9 +1,10 @@
 # Импортируем библиотеки для работы с системой и путями
-import os
-from  pathlib import Path
-import sys
+# import os
+# from  pathlib import Path
+# import sys
+import pandas as pd
 
-
+# === Данные рекламных кампаний ===
 # Обработка данных
 def extract_campaign_info(advert_info_data):
     """
@@ -71,3 +72,24 @@ def extract_campaign_info(advert_info_data):
             
     return campaign_info
 
+# === Данные о затратах по рекламе ===
+
+def process_advert_spend_info(data, date_from):
+    """ Функция обрабатывает полученные данные по рекламным затратам за один день. Метод АПИ возвращает лишние даты, фунцкия так же производит фильтрацию"""
+    if data:
+        # Список для хранения данных
+        data_list = []
+        # Проходим внешним циклом по данным каждого ЛК
+        for orders_lk in data:
+            # Достаем отдельно данные по каждому заказу и добваляем в общий список
+            for orders in orders_lk:
+                data_list.append(orders)
+        df = pd.DataFrame(data_list)
+        df['date'] = pd.to_datetime(df['updTime'],
+                                      format='ISO8601',
+                                      utc=True).dt.date
+        df = df.loc[df['date'] == pd.to_datetime(date_from).date()]
+        return df
+    else:
+        return pd.DataFrame() 
+    

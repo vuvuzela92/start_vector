@@ -52,7 +52,7 @@ async def get_orders(account: str, token: str, date_from: str, api_token: str, s
             return None    
 
 
-async def fetch_advert_info(tokens: dict):
+async def fetch_orders_info(tokens: dict):
     """Асинхронная функция для получения информации о рекламных кампаниях для всех аккаунтов и токенов."""
     # Асинхронно обрабатываем все аккаунты и токены
     async with aiohttp.ClientSession() as session:

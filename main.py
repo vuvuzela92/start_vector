@@ -1,7 +1,7 @@
 # main.py
 import argparse
 import sys
-from src.modules.WB.advert.tasks import advert_info
+from src.modules.WB.advert.tasks import advert_info, advert_spend
 from src.modules.WB.reports.tasks import orders_report_today
 
 
@@ -13,7 +13,7 @@ def main():
         # первое слово после имени скрипта будет записано в переменную task
         "task",
         # Заполняем список запускаемых задач 
-        choices=["advert_info", "orders_report_today"], 
+        choices=["advert_info", "orders_report_today", "advert_spend"], 
         help="Укажите задачу для запуска из списка choices"
     )
     # Считывает те команды, что попадают в терминал
@@ -25,10 +25,13 @@ def main():
     if args.task == "advert_info":
         print("🚀 Запуск обновления рекламы...")
         advert_info()
+    elif args.task == "advert_spend":
+        print("💵 Запуск получения данных о рекламных затратах")
+        advert_spend()
     # === Запуск программ для раздела отчеты ===
     elif args.task == "orders_report_today":
-        orders_report_today()
         print("🛒 Запуск обновления отчета о заказах за сегодня")
+        orders_report_today()
         
     # elif args.task == "all":
     #     print("🔄 Запуск полной синхронизации...")
