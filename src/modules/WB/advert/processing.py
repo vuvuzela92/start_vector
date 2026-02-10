@@ -74,7 +74,7 @@ def extract_campaign_info(advert_info_data):
 
 # === Данные о затратах по рекламе ===
 
-def process_advert_spend_info(data, date_from):
+def process_advert_spend_info(data):
     """ Функция обрабатывает полученные данные по рекламным затратам за один день. Метод АПИ возвращает лишние даты, фунцкия так же производит фильтрацию"""
     if data:
         # Список для хранения данных
@@ -86,10 +86,8 @@ def process_advert_spend_info(data, date_from):
                 data_list.append(orders)
         df = pd.DataFrame(data_list)
         df['date'] = pd.to_datetime(df['updTime'],
-                                      format='ISO8601',
-                                      utc=True).dt.date
-        df = df.loc[df['date'] == pd.to_datetime(date_from).date()]
+                                      format='ISO8601'
+                                      ).dt.date
         return df
     else:
         return pd.DataFrame() 
-    

@@ -31,26 +31,10 @@ def advert_info():
 
 # === Получение данных о рекламных затратах
 
-async def advert_spend_info(days_count=28):
-    """ Обрабатывает данные собранные за несколько дней. По умолчанию за 28 дней."""
-    # Список для хранения данных
-    all_data = []
-    # Проходим циклом по каждому дню
-    for day in range(1, days_count+1):
-        date_from = date_to = (datetime.now()-timedelta(days=day)).strftime("%Y-%m-%d")
-        data = await fetch_advert_spend_info(load_api_tokens(), date_from, date_to)
-        try:
-            df_data = process_advert_spend_info(data, date_from)   
-            all_data.append(df_data)
-        except Exception:
-            all_data.append(pd.DataFrame())
-
-    df_all_data = pd.concat(all_data)
-    return df_all_data
-
 def advert_spend():
     """Получение данных по затратам"""
-    df = asyncio.run(advert_spend_info())
+    spend_info = asyncio.run(fetch_advert_spend_info(load_api_tokens()))
+    df = process_advert_spend_info(spend_info)
     # Присваиваем имена колонок в snake_case
     df = df.rename(columns={
         'updTime': 'upd_time',
