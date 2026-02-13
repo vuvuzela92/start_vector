@@ -7,6 +7,7 @@ import requests
 import pandas as pd
 from datetime import datetime
 
+
 from pathlib import Path
 from dotenv import load_dotenv
 

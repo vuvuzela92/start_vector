@@ -3,6 +3,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import URL
 import os
 from dotenv import load_dotenv
+from sqlalchemy import text
 
 # Загружаем переменные (если еще не загружены)
 load_dotenv()

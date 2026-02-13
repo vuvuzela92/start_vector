@@ -3,6 +3,7 @@ import argparse
 import sys
 from src.modules.WB.advert.tasks import advert_info, advert_spend
 from src.modules.WB.reports.tasks import orders_report_today
+from src.modules.GOOGLE_SHEETS.calculation_of_purchases_russia import update_penalties_in_gs_purchase_russia
 
 
 def main():
@@ -13,7 +14,7 @@ def main():
         # первое слово после имени скрипта будет записано в переменную task
         "task",
         # Заполняем список запускаемых задач 
-        choices=["advert_info", "orders_report_today", "advert_spend"], 
+        choices=["advert_info", "orders_report_today", "advert_spend", "update_penalties_in_gs_purchase_russia"], 
         help="Укажите задачу для запуска из списка choices"
     )
     # Считывает те команды, что попадают в терминал
@@ -32,6 +33,10 @@ def main():
     elif args.task == "orders_report_today":
         print("🛒 Запуск обновления отчета о заказах за сегодня")
         orders_report_today()
+    # === Запуск программ для раздела GOOGLE_SHEETS ===
+    elif args.task == "update_penalties_in_gs_purchase_russia":
+        print("📊 Запуск обновления данных о штрафах и виртуальных остатках в Google Sheets")
+        update_penalties_in_gs_purchase_russia()
         
     # elif args.task == "all":
     #     print("🔄 Запуск полной синхронизации...")
