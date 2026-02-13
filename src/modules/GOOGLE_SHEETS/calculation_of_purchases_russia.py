@@ -57,6 +57,16 @@ def update_penalties_in_gs_purchase_russia():
     sheet_unit_df = pd.DataFrame(sheet_unit_data[1:], columns=sheet_unit_data[0])
     # Выбираем колонки по индексам
     sheet_unit_df = sheet_unit_df[['wild', 'ФБС']]
+    # Группируем данные по колонке 'wild', суммируя значения в колонке 'ФБС' для каждой группы
+    # Перед группировкой обрабатываем пропуски в колонке 'ФБС', заменяя пустые строки и NaN на 0, а затем приводим значения к целочисленному типу
+    sheet_unit_df['ФБС'] = (
+    sheet_unit_df['ФБС']
+        .replace('', 0)         
+        .fillna(0)               
+        .astype(int)
+        )
+    sheet_unit_df = sheet_unit_df.groupby('wild', as_index=False).agg({'ФБС': 'sum'})
+
     # Удаляем дубликаты по колонке 'wild', оставляя только первую встречающуюся запись для каждого уникального значения в этой колонке
     sheet_unit_df = sheet_unit_df.drop_duplicates(subset=['wild'], keep='first')
     # Объединяем данные из Google Sheets с данными из базы данных по колонке 'local_vendor_code' и 'wild'
