@@ -1,6 +1,7 @@
 # Импорт внешних библиотек
 import asyncio
 from datetime import datetime, timedelta
+from sqlalchemy import text
 import pandas as pd
 # Импорт внутренних модулей и функций
 from src.core.utils_general import load_api_tokens
@@ -52,8 +53,18 @@ def advert_spend():
     engine = get_db_engine()
 
     table_name = list(advert_spend_info_dict.keys())[0]
+
+    # Поскольку ВБ обновляетя данные по затратам с некоторой задержкой, удаляем данные за последние 28 дней перед добавлением новых
+    # Удаление данных из таблицы перед добавлением новых
+    with engine.connect() as connection:
+            sql_stmt = text(f"DELETE FROM {table_name} WHERE date >= CURRENT_DATE - INTERVAL '28 days'")
+            
+            print(f"🧹 Очистка данных в {table_name} за последние 28 дней...")
+            connection.execute(sql_stmt)
+            connection.commit() # Обязательно фиксируем изменения
+            
     unique_keys = ['advert_id', 'upd_num', 'upd_time']  # Уникальность по ID кампании
     # В ключе указываем имя таблицы в БД
-    schema_definition = advert_spend_info_dict.get(table_name)
-
+    schema_definition = advert_spend_info_dict.get(table_name)        
+    # Синхронизация данных в базу данных    
     sync_data_to_postgres(engine, table_name, data, schema_definition, unique_keys)

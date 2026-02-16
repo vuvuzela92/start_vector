@@ -91,14 +91,14 @@ async def get_advert_spend(account: str, date_from: str, date_to: str, api_token
                         print(f"🔑 [{account}] Ошибка 401: Неверный токен. ({error_detail})")
                     elif res.status == 429:
                         print(f"⏳ [{account}] Ошибка 429: Лимит запросов! ({error_detail})")
-                        asyncio.sleep(delay)
+                        await asyncio.sleep(delay)
                         continue
                     elif res.status == 400:
                         print(f"❓ [{account}] Ошибка 400: Плохой запрос. ({error_detail})")
-                        asyncio.sleep(delay)
+                        await asyncio.sleep(delay)
                     elif res.status == 503:
                         print(f"❓ [{account}] Ошибка 503: Сервис недоступен. ({error_detail})")
-                        asyncio.sleep(delay)
+                        await asyncio.sleep(delay)
                         continue
                     else:
                         print(f"❌ [{account}] Ошибка {res.status}: {error_detail}")
