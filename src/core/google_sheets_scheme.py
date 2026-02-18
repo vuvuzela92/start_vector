@@ -8,3 +8,7 @@ calculation_of_purchases_russia_table_copy = {"title": "Копия Расчет 
 # === Таблица UNIT ===
 unit_table = {"title": "UNIT 2.0 (tested)",
               "sheet_unit": "MAIN (tested)"}
+
+# === Таблица Кредитный анализ Вектор ===
+credit_analyze_vector_table = {"title": "Кредитный анализ Вектор",
+                                    "sheet_credit_analyze_vector": "БД Кредит"}

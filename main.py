@@ -1,9 +1,10 @@
 # main.py
 import argparse
-import sys
+# import sys
 from src.modules.WB.advert.tasks import advert_info, advert_spend
 from src.modules.WB.reports.tasks import orders_report_today
 from src.modules.GOOGLE_SHEETS.calculation_of_purchases_russia import update_penalties_in_gs_purchase_russia
+from src.modules.GOOGLE_SHEETS.credit_analyze_vector import update_credit_data_vector
 
 
 def main():
@@ -14,7 +15,7 @@ def main():
         # первое слово после имени скрипта будет записано в переменную task
         "task",
         # Заполняем список запускаемых задач 
-        choices=["advert_info", "orders_report_today", "advert_spend", "update_penalties_in_gs_purchase_russia"], 
+        choices=["advert_info", "orders_report_today", "advert_spend", "update_penalties_in_gs_purchase_russia", "update_credit_data_vector"], 
         help="Укажите задачу для запуска из списка choices"
     )
     # Считывает те команды, что попадают в терминал
@@ -34,9 +35,14 @@ def main():
         print("🛒 Запуск обновления отчета о заказах за сегодня")
         orders_report_today()
     # === Запуск программ для раздела GOOGLE_SHEETS ===
+    # таблица Расчет закупки Россия
     elif args.task == "update_penalties_in_gs_purchase_russia":
         print("📊 Запуск обновления данных о штрафах и виртуальных остатках в Google Sheets")
         update_penalties_in_gs_purchase_russia()
+    # таблица Кредитный анализ Вектор
+    elif args.task == "update_credit_data_vector":
+        print("📊 Запуск обновления данных в Google Sheets для Кредитного анализа Вектор")
+        update_credit_data_vector()
         
     # elif args.task == "all":
     #     print("🔄 Запуск полной синхронизации...")

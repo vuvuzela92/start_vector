@@ -61,13 +61,59 @@ def safe_open_spreadsheet(title, retries=5, delay=5, creds_file = CREDS_PATH):
                 raise  # если ошибка не 503 — пробрасываем дальше
     raise RuntimeError(f"Не удалось открыть таблицу '{title}' после {retries} попыток.")
 
-
-
-
-
-
-
 # -------------------------------- ПОЛУЧЕНИЕ ДАННЫХ --------------------------------
+
+def update_df_in_google(df: pd.DataFrame, sheet):
+    """
+    Перезаписывает данные DataFrame на указанный лист Google Таблицы.
+    Также добавляет дату и время последнего обновления в первую строку последней колонки.
+    
+    Параметры:
+    df (DataFrame): DataFrame, который нужно отправить.
+    sheet (gspread.models.Worksheet): Объект листа, на который будут записаны данные.
+
+    Возвращаемое значение:
+    None
+    """
+    try:
+        # Обрабатываем NaN значения в DataFrame (заменяем на пустые строки)
+        df = df.fillna('')
+
+        # Проверка на наличие новых данных
+        if df.empty:
+            print("DataFrame пуст. Создание резервной копии...")
+            # Создание резервной копии данных
+            backup_sheet = sheet.spreadsheet.add_worksheet(title=f"Резервная копия{sheet.title}", rows="1000", cols="20")
+            backup_sheet.append_rows(sheet.get_all_values(), value_input_option='RAW')
+            print("Создана резервная копия текущих данных.")
+            return  # Прекращаем выполнение, чтобы не перезаписывать пустыми данными
+
+        # Очищаем лист перед записью новых данных
+        sheet.clear()
+
+        # Подготовка данных для записи
+        df_data_to_append = [df.columns.values.tolist()] + df.values.tolist()
+
+        # Запись данных на лист
+        sheet.append_rows(df_data_to_append, value_input_option='USER_ENTERED')
+        print("Данные успешно перезаписаны на лист.")
+        
+        # Получаем текущую дату и время
+        now = datetime.now()
+        formatted_time = now.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Получаем количество колонок на листе
+        max_columns = sheet.col_count
+        
+        # Записываем дату и время в первую строку последней колонки
+        sheet.update_cell(1, max_columns, formatted_time)
+        print(f"Дата и время последнего обновления: {formatted_time}")
+
+    except Exception as e:
+        print(f"Произошла ошибка: {e}")
+        # Проверяем на ошибку, связанную с лимитом ячеек
+        if "APIError: [400]: This action would increase the number of cells in the workbook" in str(e):
+            print("Превышен лимит ячеек Google Таблицы. Создание резервной копии в Excel...")
 
 
 def get_articles_and_clients_df(wild = False):
@@ -143,7 +189,6 @@ def get_articles_autopilot(sh = None, remote = False):
         raise
 
     return articles
-
 
 
 def get_data_offset(url, headers, extract_callback=lambda x: x, limit = 1000, return_keys = None, other_params=None):
@@ -261,9 +306,6 @@ def get_col_index(sh, col_name, header_row=1, zero_based=False, header=None):
         return index if zero_based else index + 1
     except ValueError:
         raise ValueError(f"Столбец '{col_name}' не найден в строке {header_row}")
-
-
-
 
 
 # -------------------------------- ДОБАВЛЕНИЕ ДАННЫХ  --------------------------------
