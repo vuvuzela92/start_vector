@@ -45,3 +45,5 @@ def update_credit_data_vector():
     # Получаем данные из листа
     credits_sheet = credit_table.worksheet(credit_analyze_vector_table['sheet_credit_analyze_vector'])
     set_with_dataframe(credits_sheet, df)
+
+

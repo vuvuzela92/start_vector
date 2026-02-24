@@ -1,8 +1,10 @@
 # main.py
 import argparse
+import asyncio
 # import sys
 from src.modules.WB.advert.tasks import advert_info, advert_spend
 from src.modules.WB.reports.tasks import orders_report_today
+from src.modules.WB.docs.tasks import get_bukh_docs
 from src.modules.GOOGLE_SHEETS.calculation_of_purchases_russia import update_penalties_in_gs_purchase_russia
 from src.modules.GOOGLE_SHEETS.credit_analyze_vector import update_credit_data_vector
 
@@ -15,7 +17,7 @@ def main():
         # первое слово после имени скрипта будет записано в переменную task
         "task",
         # Заполняем список запускаемых задач 
-        choices=["advert_info", "orders_report_today", "advert_spend", "update_penalties_in_gs_purchase_russia", "update_credit_data_vector"], 
+        choices=["advert_info", "orders_report_today", "advert_spend", "update_penalties_in_gs_purchase_russia", "update_credit_data_vector", "get_bukh_docs"], 
         help="Укажите задачу для запуска из списка choices"
     )
     # Считывает те команды, что попадают в терминал
@@ -43,6 +45,9 @@ def main():
     elif args.task == "update_credit_data_vector":
         print("📊 Запуск обновления данных в Google Sheets для Кредитного анализа Вектор")
         update_credit_data_vector()
+    elif args.task == "get_bukh_docs":
+        print("📑 Запуск получения данных по документам бухгалтерии")
+        asyncio.run(get_bukh_docs())   
         
     # elif args.task == "all":
     #     print("🔄 Запуск полной синхронизации...")

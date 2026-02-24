@@ -10,5 +10,5 @@ unit_table = {"title": "UNIT 2.0 (tested)",
               "sheet_unit": "MAIN (tested)"}
 
 # === Таблица Кредитный анализ Вектор ===
-credit_analyze_vector_table = {"title": "Кредитный анализ Вектор",
+credit_analyze_vector_table = {"title": "Общая таблица ВБ Финанс",
                                     "sheet_credit_analyze_vector": "БД Кредит"}
