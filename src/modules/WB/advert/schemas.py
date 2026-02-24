@@ -1,9 +1,10 @@
 # Модуль описывает таблицы в БД
-from sqlalchemy import BigInteger, String, Boolean, DateTime, Numeric
+from sqlalchemy import BigInteger, String, Boolean, DateTime, Numeric, Float
 
 
 # === vector_db ===
 
+# --- Рекламные таблицы ---
 # Таблица advert_campaigns_info в БД vector_db, содержит данные о рекламных кампаниях
 advert_campaigns_info_dict = {
     "advert_campaigns_info": {
@@ -34,5 +35,19 @@ advert_spend_info_dict = {
         'advert_status': BigInteger,
         'date': DateTime,
         'account': String
+    }
+}
+
+# --- Данные из раздела Документы на ВБ --- 
+weekly_implementation_report_dict = {
+    "weekly_implementation_report": {
+        '№': String(255),
+        'Наименование': String(255),
+        'Документ основание': String(255),
+        'Дата': DateTime(),
+        '№ документа': Numeric(12,2),
+        'Сумма, руб.': Numeric(12,2),
+        'в т.ч НДС, руб.': Numeric(12,2),
+        'account': String(255)
     }
 }

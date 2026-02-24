@@ -74,3 +74,6 @@ tzlocal==5.3.1
 urllib3==2.5.0
 wcwidth==0.2.14
 yarl==1.22.0
+openai
+pymupdf
+pip install pdfplumber
