@@ -105,7 +105,7 @@ def update_week_n_redeem():
 		w.total_sum AS "Всего_товара",
 		w.total_sum_without_vat AS "Всего_товара_БЕЗ_НДС",
 		w.damages_comp_other AS "Компенсации_ущерба_и_прочие_выплаты",
-		w.discount_loyalty AS " Компенсация_скидки_по_программе_лояльности",
+		w.discount_loyalty AS "Компенсация_скидки_по_программе_лояльности",
 		r.redeem_notif AS "Уведомление_о_выкупе_№",
 		r.sum_rub_with_vat AS "Выкуплено_по_уведомлению",
 		r.sum_rub_without_vat AS "Выкуплено_по_уведомлению_без_НДС",
