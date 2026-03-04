@@ -57,7 +57,7 @@ def sync_data_to_postgres(engine, table_name, data, schema_definition, unique_ke
     # Создаем таблицу, если её нет
     metadata.create_all(engine)
 
-    if not data:
+    if data is None or data.empty:
         return
 
     # 3. Выполнение Upsert
