@@ -277,7 +277,8 @@ class GetDataFromDB:
             f.grouped_bonus_type_name,
             f.total_deduction
             FROM daily_fin_reports_deductions f
-            WHERE f.grouped_bonus_type_name IS NOT NULL;
+            WHERE f.grouped_bonus_type_name IS NOT NULL
+            ORDER BY f.date_from desc;
         """)
         # Используем контекстный менеджер соединения
         with self.engine.connect() as connection:
