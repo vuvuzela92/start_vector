@@ -38,7 +38,7 @@ class GetDataFromDB:
                 FROM weekly_fin_reports_mv wfrm
                 LEFT JOIN wfrm_agg w ON wfrm.date_to = w.date_to
                 LEFT JOIN exp e ON wfrm.date_to = e.end_date
-                ORDER BY wfrm.date_to;
+                ORDER BY wfrm.date_to DESC;
             """)
 
             # Используем контекстный менеджер соединения
@@ -252,7 +252,34 @@ class GetDataFromDB:
                 FROM public.expenses
             ) t
             WHERE category <> 'Не определено'
+            ORDER BY end_date DESC;
                     """)
         # Используем контекстный менеджер соединения
         with self.engine.connect() as connection:
             return pd.read_sql(query, connection)
+
+
+    def get_fin_deductions_mv(self):
+        "Удержания: Детализация"
+        query = text("""
+        SELECT *
+            FROM fin_deductions_mv
+        """)
+        # Используем контекстный менеджер соединения
+        with self.engine.connect() as connection:
+            return pd.read_sql(query, connection)
+
+
+    def get_daily_fin_reports_deductions_agg(self):
+        "Удержания: Детализация"
+        query = text("""
+            SELECT TO_CHAR(f.date_from, 'MM-YYYY') AS month,
+            f.grouped_bonus_type_name,
+            f.total_deduction
+            FROM daily_fin_reports_deductions f
+            WHERE f.grouped_bonus_type_name IS NOT NULL;
+        """)
+        # Используем контекстный менеджер соединения
+        with self.engine.connect() as connection:
+            return pd.read_sql(query, connection)
+                     
