@@ -92,9 +92,9 @@ class HTTPClient:
         
         return None
     
-    # Удобные обёртки
+    # Обертка get запроса 
     async def get(self, url: str, **kwargs) -> Optional[Dict]:
         return await self.request("GET", url, **kwargs)
-    
+    # Обертка post запроса 
     async def post(self, url: str, **kwargs) -> Optional[Dict]:
         return await self.request("POST", url, **kwargs)
