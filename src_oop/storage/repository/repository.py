@@ -283,4 +283,15 @@ class GetDataFromDB:
         # Используем контекстный менеджер соединения
         with self.engine.connect() as connection:
             return pd.read_sql(query, connection)
+    
+    def get_wild_frm_products(self):
+            "Удержания: Детализация"
+            query = text("""
+                SELECT DISTINCT(p.id)
+                    FROM products p
+            """)
+            # Используем контекстный менеджер соединения
+            with self.engine.connect() as connection:
+                df = pd.read_sql(query, connection)
+                return df['id'].to_list()
                      
