@@ -36,7 +36,7 @@ def transport_data_to_annual_procurement_plan():
             return np.nan
         
         # 4. Удаляем знаки валют и все виды пробелов
-        for char in ['$', '€', '¥', '₽', 'RMB', 'руб', 'р.', ' ', ',', '\u00A0', '\t', '\n']:
+        for char in ['$', '€', '¥', '₽', 'RMB', 'руб', 'р.', ' ', '\u00A0', '\t', '\n']:
             val = val.replace(char, '')
         
         # 5. Заменяем запятую на точку
