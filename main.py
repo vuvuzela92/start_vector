@@ -12,6 +12,8 @@ from src.modules.GOOGLE_SHEETS.credit_analyze_vector import update_credit_data_v
 # Импорт данных для обновления таблицы ОТЧЕТ за 2023-2024 пров v.2.0
 from src.modules.GOOGLE_SHEETS.week_n_redeem import update_week_n_redeem
 
+from src_oop.services.googles_sheets_job.annual_procurement_plan import transport_data_to_annual_procurement_plan
+
 
 def main():
     parser = argparse.ArgumentParser(description="Регулировщик запуска задач, просматривает все что напечатали в консоли после слова python main.py")
@@ -21,7 +23,7 @@ def main():
         # первое слово после имени скрипта будет записано в переменную task
         "task",
         # Заполняем список запускаемых задач 
-        choices=["advert_info", "orders_report_today", "advert_spend", "update_penalties_in_gs_purchase_russia", "update_credit_data_vector", "get_bukh_docs", "update_week_n_redeem"], 
+        choices=["advert_info", "orders_report_today", "advert_spend", "update_penalties_in_gs_purchase_russia", "update_credit_data_vector", "get_bukh_docs", "update_week_n_redeem", "transport_data_to_annual_procurement_plan"], 
         help="Укажите задачу для запуска из списка choices"
     )
     # Считывает те команды, что попадают в терминал
@@ -58,6 +60,11 @@ def main():
     elif args.task == "update_week_n_redeem":
         print("🔁 Запуск обновления данных в гугл-таблице ОТЧЕТ за 2023-2024 пров v.2.0")
         update_week_n_redeem() 
+    # Обновление таблицы Годовой план закупа 2026 данными по заказам
+    elif args.task == "transport_data_to_annual_procurement_plan":
+        print()
+        transport_data_to_annual_procurement_plan()
+
         
 
 if __name__ == "__main__":

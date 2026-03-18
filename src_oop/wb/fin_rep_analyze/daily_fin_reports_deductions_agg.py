@@ -14,7 +14,7 @@ def export_daily_fin_reports_deductions_agg():
     df = repo.get_daily_fin_reports_deductions_agg()
     df = df.fillna(0)
  
-    # Создаем соединение с гугл-таблицей
+    # Задаем данные гуглы-таблицы для подключения
     google_table = fin_rep_analyze.get("title")
     table_sheet = fin_rep_analyze.get("export_daily_fin_reports_deductions_agg")
 
