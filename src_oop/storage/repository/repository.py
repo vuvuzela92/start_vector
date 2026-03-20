@@ -56,7 +56,7 @@ class GetDataFromDB:
                     TO_CHAR(date_from, 'YYYY-MM') AS "Месяц",
                     EXTRACT(YEAR FROM date_from) AS year,
                     EXTRACT(MONTH FROM date_from) AS month_number,
-                    SUM(wb_commission)                    AS "Комиссия WB",
+                    SUM(wb_commission) AS "Комиссия WB",
                     ROUND(AVG(wb_commission_pct)/100,2) AS "Комиссия WB_pct",
                     SUM(payout) AS "К перечислению",
                     SUM(logistics) AS "Логистика",
