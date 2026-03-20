@@ -3,6 +3,7 @@ import pandas as pd
 from sqlalchemy import text
 import logging
 from src_oop.storage.repository.tables_scheme import orders_articles_analyze_table
+from repository.repository import GetDataFromDB
 
 logger = logging.getLogger(__name__)
 
@@ -316,5 +317,8 @@ class ArticleAnalyze:
         repo = GetDataFromDB(engine)
         # 3. Получаем данные
         df = self.merging_dataframes()
+        # 4. Определяем колонки для вставки данных
+        scheme_definition = orders_articles_analyze_table.get("columns")
+        
         
         
