@@ -1,19 +1,11 @@
-from src_oop.core.database import Database
 import pandas as pd
 from sqlalchemy import text
-import logging
-from src_oop.jobs.orders_articles_analyze.tables_scheme import orders_articles_analyze_table
-from src_oop.storage.repository.repository import GetDataFromDB
-from src_oop.core.database import Database
 
-logger = logging.getLogger(__name__)
-
-class ArticleAnalyze:
+class GetDataFromDB:
     """Класс для получения сложной аналитики из БД."""
     
-    def __init__(self, engine, days_ago: int = 30, days_to: int = 1):
+    def __init__(self, engine):
         self.engine = engine
-
 
     def get_general_stat(self, days_ago: int = 30, days_to: int = 1) -> pd.DataFrame:
         query = text(f"""-- == version 2.0 ==
@@ -295,42 +287,3 @@ class ArticleAnalyze:
         # Используем контекстный менеджер соединения
         with self.engine.connect() as connection:
             return pd.read_sql(query, connection)
-        
-    def merging_dataframes(self, days_ago: int = 30, days_to: int = 1) -> pd.DataFrame:
-        df1 = self.get_adv_stat(days_ago, days_to)
-        if df1:
-            logger.info(f"Получено {len(df1)} строк из orders_revenues и связанных таблиц для периода с {days_ago} по {days_to} дней.")        
-        df2 = self.get_general_stat(days_ago, days_to)
-        if df2:
-            logger.info(f"Получено {len(df2)} строк из advert_stat и advert_spend для периода с {days_ago} по {days_to} дней.")
-        df = pd.merge(pd.merge(df1, df2, on=['article_id', 'date'], how='left'))
-        # Оформляем данные в датафрейме
-        df = df.drop_duplicates(subset=['date', 'article_id'])
-        df = df.fillna(0)
-        df = df.sort_values(by=['date', 'orders_sum_rub'], ascending=[False, False])
-        return df
-
-    def execute_orders_articles_analyze(self, days_ago: int = 30, days_to: int = 1):
-        """Функция добавляет данные по артикульному анализу в БД"""
-        # 1. Получаем engine
-        engine = Database.get_engine()
-        # 2. Инициализируем репозиторий
-        repo = GetDataFromDB(engine)
-        # 3. Получаем данные
-        df = self.merging_dataframes()
-        # 4. Определяем колонки для вставки данных
-        scheme_definition = orders_articles_analyze_table.get("columns")
-        title = orders_articles_analyze_table.get("title")
-        # 5.
-        key_cols = orders_articles_analyze_table.get("key_columns")
-        # 6.
-        insert_data = Database.sync_data_to_postgres(engine=engine, table_name=title, data=df, scheme_definition = scheme_definition, unique_keys=key_cols)
-        insert_data()
-
-
-if __name__ == "__main__":
-    engine = Database.get_engine()
-    analyzer = ArticleAnalyze(engine)
-    analyzer.execute_orders_articles_analyze()
-        
-        

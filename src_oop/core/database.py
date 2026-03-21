@@ -90,12 +90,18 @@ class Database:
         # Создаем таблицу, если её нет
         metadata.create_all(engine)
 
-        if not data:
+        if data is None or data.empty:
             return
+        
+        # Если data — это DataFrame, конвертируем в список словарей
+        if hasattr(data, "to_dict"):
+            data_to_insert = data.to_dict(orient="records")
+        else:
+            data_to_insert = data
 
         # 3. Выполнение Upsert
         with engine.begin() as conn:
-            stmt = insert(table).values(data)
+            stmt = insert(table).values(data_to_insert)
             
             # Определяем, какие поля обновлять (все, кроме тех, что в UniqueConstraint)
             update_cols = {
@@ -114,4 +120,5 @@ class Database:
             print(f"✅ Таблица '{table_name}': успешно синхронизирована по ключам {unique_keys}")
 
             result = conn.execute(upsert_stmt)
-            print(f"✅ Таблица '{table_name}': обработано {len(data)} строк.")
+            print(f"✅ Таблица '{table_name}': успешно синхронизирована по ключам {unique_keys}")
+            print(f"✅ Таблица '{table_name}': обработано {len(data_to_insert)} строк.")
