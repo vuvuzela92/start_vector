@@ -1,5 +1,6 @@
 from sqlalchemy import Date, String, BigInteger, Numeric
 
+# Колонки Артикульного анализа
 orders_articles_analyze_table = {
     "title": "orders_articles_analyze",
     "columns": {
@@ -67,4 +68,24 @@ orders_articles_analyze_table = {
         'in_way_from_client': BigInteger,
     },
     "unique_keys": ["date", "article_id"]
+}
+
+# Колонки Условного расчета
+conditional_calculations ={
+        "columns": {
+        'account': String(255),
+        'orders_sum': BigInteger,
+        'sales_sum': BigInteger,
+        'profit_by_cond_orders': BigInteger,
+        'profit_by_cond_sales': BigInteger,
+        'sales_count': BigInteger,
+        'order_count': BigInteger,
+        'adv_spend': BigInteger,
+        'bonuses': BigInteger,
+        'profit_cond_sales_minus_adv_spend': BigInteger,
+        'cost_price_orders': BigInteger,
+        'cost_price_sales': BigInteger,
+        'date': Date
+    },
+    "unique_keys": ["date", "account"]
 }

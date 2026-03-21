@@ -13,7 +13,7 @@ class ArticleAnalyzeUseCase:
         self.repo = GetDataFromDB(engine)
         self.service = ArticleAnalyzeService(self.repo)
 
-    def run(self, days_ago: int = 30, days_to: int = 1):
+    def orders_article_analyze_run(self, days_ago: int = 30, days_to: int = 1):
         df = self.service.build_dataset(days_ago, days_to)
 
         if df.empty:
@@ -32,7 +32,7 @@ class ArticleAnalyzeUseCase:
             unique_keys=keys
         )
 
-if __name__ == "__main__":
-    engine = Database.get_engine()
-    use_case = ArticleAnalyzeUseCase(engine)
-    use_case.run()
+# if __name__ == "__main__":
+#     engine = Database.get_engine()
+#     use_case = ArticleAnalyzeUseCase(engine)
+#     use_case.orders_article_analyze_run()

@@ -5,7 +5,7 @@ from src_oop.jobs.orders_articles_analyze.repository import GetDataFromDB
 logger = logging.getLogger(__name__)
 
 class ArticleAnalyzeService:
-
+    """Класс для создания артикульного анализа"""
     def __init__(self, repo: GetDataFromDB):
         self.repo = repo
 
