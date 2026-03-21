@@ -34,7 +34,8 @@ advert_spend_info_dict = {
         'advert_type': BigInteger,
         'advert_status': BigInteger,
         'date': DateTime,
-        'account': String
+        'account': String,
+        'currency': String
     }
 }
 

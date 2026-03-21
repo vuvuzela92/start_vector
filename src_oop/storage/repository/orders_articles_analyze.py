@@ -4,6 +4,7 @@ from sqlalchemy import text
 import logging
 from src_oop.storage.repository.tables_scheme import orders_articles_analyze_table
 from repository.repository import GetDataFromDB
+from src_oop.core.database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -319,6 +320,16 @@ class ArticleAnalyze:
         df = self.merging_dataframes()
         # 4. Определяем колонки для вставки данных
         scheme_definition = orders_articles_analyze_table.get("columns")
+        title = orders_articles_analyze_table.get("title")
+        # 5.
+        key_cols = orders_articles_analyze_table.get("key_columns")
+        # 6.
+        insert_data = Database.sync_data_to_postgres(engine=repo, table_name=title, data=df, scheme_definition = scheme_definition, unique_keys=key_cols)
+        insert_data()
+
+
+if __name__ == "__main__":
+    ArticleAnalyze.execute_orders_articles_analyze()
         
         
         
