@@ -14,12 +14,11 @@ from src.modules.GOOGLE_SHEETS.week_n_redeem import update_week_n_redeem
 # Ежегодный план
 from src_oop.services.googles_sheets_job.annual_procurement_plan import transport_data_to_annual_procurement_plan
 # Артикульный анализ
-from src_oop.jobs.orders_articles_analyze.use_case import ArticleAnalyzeUseCase
+from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 # Условный расчет
-from src_oop.jobs.conditional_calculations.service import ConditionalCalculations
-from src_oop.core.database import Database
-from src_oop.jobs.conditional_calculations.repository import GetDataFromDB
-from src_oop.jobs.conditional_calculations.use_case import ConditionalCalculationsToGS
+from src_oop.jobs.conditional_calculations.run import conditional_calculation_to_db_run, update_conditional_calculations_to_gs
+# Остаток из WMS
+from src_oop.jobs.wms_stocks.run import wms_stocks_run
 
 
 def main():
@@ -30,7 +29,7 @@ def main():
         # первое слово после имени скрипта будет записано в переменную task
         "task",
         # Заполняем список запускаемых задач 
-        choices=["advert_info", "orders_report_today", "advert_spend", "update_penalties_in_gs_purchase_russia", "update_credit_data_vector", "get_bukh_docs", "update_week_n_redeem", "transport_data_to_annual_procurement_plan", "orders_article_analyze_run", "conditional_calculation_to_db_run", "update_conditional_calculations_to_gs"], 
+        choices=["advert_info", "orders_report_today", "advert_spend", "update_penalties_in_gs_purchase_russia", "update_credit_data_vector", "get_bukh_docs", "update_week_n_redeem", "transport_data_to_annual_procurement_plan", "orders_article_analyze_run", "conditional_calculation_to_db_run", "update_conditional_calculations_to_gs", "wms_stocks_run"], 
         help="Укажите задачу для запуска из списка choices"
     )
     # Считывает те команды, что попадают в терминал
@@ -73,24 +72,22 @@ def main():
         transport_data_to_annual_procurement_plan()
     # Обновление таблицы Годовой план закупа 2026 данными по заказам
     elif args.task == "orders_article_analyze_run":
-        engine = Database.get_engine()
-        use_case = ArticleAnalyzeUseCase(engine)
-        use_case.orders_article_analyze_run()
+        orders_article_analyze_run()
+    #     engine = Database.get_engine()
+    #     use_case = ArticleAnalyzeUseCase(engine)
+    #     use_case.orders_article_analyze_run()
     # Обновление таблицы Годовой план закупа 2026 данными по заказам
     elif args.task == "conditional_calculation_to_db_run":
         print("🔁 Запуск условного расчета и загрузки в БД")
-        engine = Database.get_engine()
-        # 6. Передаем только engine, как теперь требует __init__
-        repo = GetDataFromDB(engine)
-        use_case = ConditionalCalculations(repo, engine)
-        use_case.conditional_calculation_to_db_run()
-    # Обновление таблицы Годовой план закупа 2026 данными по заказам
+        conditional_calculation_to_db_run()
+    # Обновление таблицы Условный расчет
     elif args.task == "update_conditional_calculations_to_gs":
-        print("🔁 Запуск условного расчета и загрузки в БД")
-        use_case = ConditionalCalculationsToGS()
-        use_case.update_conditional_calculations_to_gs()
+        # print("🔁 Выгрузка условного расчета и загрузки в гугл-таблицу")
+        update_conditional_calculations_to_gs()
+    elif args.task == "wms_stocks_run":
+        print("🔁 Выгрузка данных об остатках из сервиса WMS")
+        asyncio.run(wms_stocks_run())
 
         
-
 if __name__ == "__main__":
     main()
