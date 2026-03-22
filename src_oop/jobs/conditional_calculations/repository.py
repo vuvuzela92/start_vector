@@ -3,7 +3,7 @@ from sqlalchemy import text
 from src_oop.core.database import Database
 
 
-class ConditionalCalculations:
+class ConditionalCalculationsRepository:
     def __init__(self, days_ago: int = 30, days_to: int = 1):
         self.days_ago = days_ago
         self.days_to = days_to
@@ -28,7 +28,7 @@ class ConditionalCalculations:
             o.date
         FROM orders_articles_analyze o
         WHERE o.date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days'
-            AND CURRENT_DATE - INTERVAL '{self.days_ago} days'
+            AND CURRENT_DATE - INTERVAL '{self.days_to} days'
             AND o.account != '0'
         GROUP BY o.account,
                 o.date;
@@ -45,4 +45,4 @@ class ConditionalCalculations:
         ORDER BY cc.date ASC,
             cc.account;
         """)
-        return Database.read_sql_to_dataframe(query)     
+        return Database.read_sql_to_dataframe(query) 

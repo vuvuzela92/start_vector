@@ -1,4 +1,4 @@
-from sqlalchemy import Date, String, BigInteger, Numeric
+from sqlalchemy import Date, String, BigInteger
 
 
 # Колонки Условного расчета

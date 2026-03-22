@@ -1,4 +1,4 @@
-from src_oop.jobs.conditional_calculations.db_client import ConditionalCalculations
+from src_oop.jobs.conditional_calculations.repository import ConditionalCalculationsRepository
 from src_oop.jobs.conditional_calculations.tables_scheme import conditional_calculations
 import logging
 from src_oop.core.database import Database
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 def conditional_calculation_to_db_run(days_ago: int = 30, days_to: int = 1):
     """Функция получает данные по Условному расчету и добавляет их в БД"""
-    df = ConditionalCalculations(days_ago, days_to).execute_conditional_calculations()
+    df = ConditionalCalculationsRepository(days_ago, days_to).execute_conditional_calculations()
 
     if df.empty:
         logger.warning("Нет данных для записи")
@@ -28,7 +28,7 @@ def conditional_calculation_to_db_run(days_ago: int = 30, days_to: int = 1):
     )
 
 def update_conditional_calculations_to_gs(table_name: str = "Условный расчет", sheet_name: str = "Справочная информация"):
-    df = ConditionalCalculations().get_conditional_calculations()
+    df = ConditionalCalculationsRepository().get_conditional_calculations()
    
     try:
         # Создаем соединение с гугл-таблицей
