@@ -17,6 +17,9 @@ class ProcessArticleAnalyze:
         if df_gen.empty:
             logger.warning("general_stat пустой")
 
+        print("Удаляем дубликаты")
+        df_gen = df_gen.sort_values(by=["date", "orders_sum_rub"], ascending=[False, False]).drop_duplicates(subset=["article_id", "date"])
+
         self._validate_unique_keys(df_adv, "df_adv")
         self._validate_unique_keys(df_gen, "df_gen")
 

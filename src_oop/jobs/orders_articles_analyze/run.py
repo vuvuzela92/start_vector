@@ -6,10 +6,12 @@ from src_oop.jobs.orders_articles_analyze.repository import ArticleAnalyzeReposi
 
 logger = logging.getLogger(__name__)
 
-def orders_article_analyze_run(days_ago: int = 30, days_to: int = 1):
+def orders_article_analyze_run(days_ago: int = 28, days_to: int = 1):
     """Запуск Артикульного анализа"""
     logger.info("Запуск получения данных по Артикульному анализу")
-    repo = ArticleAnalyzeRepository()
+    print("Запуск получения данных по Артикульному анализу")
+    repo = ArticleAnalyzeRepository(days_ago, days_to)
+    print("Обработка данных по Артикульному анализу")
     df = ProcessArticleAnalyze(repo).build_dataset(days_ago, days_to)
 
     if df.empty:
@@ -19,7 +21,7 @@ def orders_article_analyze_run(days_ago: int = 30, days_to: int = 1):
     scheme = orders_articles_analyze_table.get("columns")
     table = orders_articles_analyze_table.get("title")
     unique_keys = orders_articles_analyze_table.get("unique_keys")
-
+    print("Добавление данных в БД")
     Database.sync_data_to_postgres(
         table_name=table,
         data=df,

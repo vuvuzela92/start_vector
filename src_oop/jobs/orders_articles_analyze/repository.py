@@ -3,7 +3,7 @@ from src_oop.core.database import Database
 
 class ArticleAnalyzeRepository:
     """Класс для хранения запросов на получение данных по Артикульному анализу"""
-    def __init__(self, days_ago: int = 30, days_to: int = 1):
+    def __init__(self, days_ago: int = 28, days_to: int = 1):
         self.days_ago = days_ago
         self.days_to = days_to
 
@@ -263,22 +263,30 @@ class ArticleAnalyzeRepository:
             return Database.read_sql_to_dataframe(query)
 
     def get_adv_stat(self):
-        query = text(f"""SELECT as3.article_id,
-            as3.date,
-            SUM(as3.clicks) AS clicks,
-            SUM(as3."views") AS "views",
-            ROUND(AVG(as3.cpc), 2) AS cpc,
-            ROUND(AVG(as3.cpm), 2) AS cpm,
-            SUM(as2.upd_sum) AS adv_spend,
-            SUM(CASE WHEN as2.payment_type IN ('Бонусы','Кэшбэк')
-                            THEN as2.upd_sum END) AS bonuses
-        FROM advert_stat as3
-        LEFT JOIN advert_spend as2
-        ON as2.advert_id = as3.campaign_id
-        AND as2.date = as3.date
-        WHERE as3.date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to}'
-        AND as2.date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to}'
-        GROUP BY as3.article_id,
-            as3.date;
-        """)
+        query = text(f"""WITH spend_agg AS (
+                SELECT 
+                    advert_id,
+                    date,
+                    SUM(upd_sum) AS adv_spend,
+                    SUM(CASE WHEN payment_type IN ('Бонусы','Кэшбэк') THEN upd_sum END) AS bonuses
+                FROM advert_spend
+                WHERE date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to} days'
+                GROUP BY advert_id, date
+            )
+            SELECT 
+                as3.article_id,
+                as3.date,
+                SUM(as3.clicks) AS clicks,
+                SUM(as3."views") AS "views",
+                ROUND((SUM(as3.clicks)::NUMERIC / NULLIF(SUM(as3."views"), 0)) * 100, 2) AS ctr,
+                ROUND(AVG(as3.cpc), 2) AS cpc,
+                ROUND(AVG(as3.cpm), 2) AS cpm,
+                SUM(spend_agg.adv_spend) AS adv_spend,
+                SUM(spend_agg.bonuses) AS bonuses
+            FROM advert_stat as3
+            LEFT JOIN spend_agg ON spend_agg.advert_id = as3.campaign_id AND spend_agg.date = as3.date
+            WHERE as3.date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' 
+                AND CURRENT_DATE - INTERVAL '{self.days_to} days'
+            GROUP BY as3.article_id, as3.date;
+                    """)                        
         return Database.read_sql_to_dataframe(query)

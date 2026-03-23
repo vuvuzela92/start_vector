@@ -49,7 +49,7 @@ class Database:
             return pd.read_sql(query, connection, params=params)
 
     @classmethod
-    def sync_data_to_postgres(cls, table_name, data, schema_definition, unique_keys):
+    def sync_data_to_postgres(cls, table_name, data, schema_definition, unique_keys, chunk_size=5000):
         engine = cls.get_engine()
         metadata = MetaData()
 
@@ -61,7 +61,6 @@ class Database:
             columns.append(UniqueConstraint(*unique_keys, name=f"uq_{table_name}_keys"))
 
         table = Table(table_name, metadata, *columns)
-
         metadata.create_all(engine)
 
         if data is None or data.empty:
@@ -72,20 +71,36 @@ class Database:
         else:
             data_to_insert = data
 
+        # 🔥 РАЗБИВАЕМ НА ЧАНКИ
+        total = len(data_to_insert)
+        inserted = 0
+        
         with engine.begin() as conn:
-            stmt = insert(table).values(data_to_insert)
+            for i in range(0, total, chunk_size):
+                chunk = data_to_insert[i:i + chunk_size]
+                
+                stmt = insert(table).values(chunk)
+                
+                # update_cols = {
+                #     col.name: col
+                #     for col in stmt.excluded
+                #     if col.name not in unique_keys
+                # }
+                available_cols = set(chunk[0].keys()) if chunk else set()
+                update_cols = {
+                    col.name: getattr(stmt.excluded, col.name)
+                    for col in table.c
+                    if col.name not in unique_keys and col.name in available_cols
+                }
 
-            update_cols = {
-                col.name: col
-                for col in stmt.excluded
-                if col.name not in unique_keys
-            }
+                upsert_stmt = stmt.on_conflict_do_update(
+                    index_elements=unique_keys,
+                    set_=update_cols,
+                )
 
-            upsert_stmt = stmt.on_conflict_do_update(
-                index_elements=unique_keys,
-                set_=update_cols,
-            )
-
-            conn.execute(upsert_stmt)
-            print(f"✅ Таблица '{table_name}': успешно синхронизирована по ключам {unique_keys}")
-            print(f"✅ Таблица '{table_name}': обработано {len(data_to_insert)} строк.")
+                conn.execute(upsert_stmt)
+                inserted += len(chunk)
+                print(f"✅ Чанк {i}-{i+len(chunk)} из {total} загружен")
+        
+        print(f"✅ Таблица '{table_name}': успешно синхронизирована")
+        print(f"✅ Всего обработано {inserted} строк.")
