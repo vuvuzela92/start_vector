@@ -5,6 +5,7 @@ from src_oop.core.database import Database
 from src_oop.core.my_gspread import GoogleTabs
 from gspread_dataframe import set_with_dataframe
 import gspread
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ def conditional_calculation_to_db_run(days_ago: int = 30, days_to: int = 1):
 
 def update_conditional_calculations_to_gs(table_name: str = "Условный расчет", sheet_name: str = "Справочная информация"):
     df = ConditionalCalculationsRepository().get_conditional_calculations()
+    df['updatet_at'] = datetime.now().strftime('%Y-%m-%d %H-%M-%S')
    
     try:
         # Создаем соединение с гугл-таблицей

@@ -73,9 +73,6 @@ def main():
     # Обновление таблицы Годовой план закупа 2026 данными по заказам
     elif args.task == "orders_article_analyze_run":
         orders_article_analyze_run()
-    #     engine = Database.get_engine()
-    #     use_case = ArticleAnalyzeUseCase(engine)
-    #     use_case.orders_article_analyze_run()
     # Обновление таблицы Годовой план закупа 2026 данными по заказам
     elif args.task == "conditional_calculation_to_db_run":
         print("🔁 Запуск условного расчета и загрузки в БД")
