@@ -4,7 +4,7 @@ from src_oop.core.database import Database
 
 
 class ConditionalCalculationsRepository:
-    def __init__(self, days_ago: int = 30, days_to: int = 1):
+    def __init__(self, days_ago: int = 83, days_to: int = 1):
         self.days_ago = days_ago
         self.days_to = days_to
     
@@ -29,7 +29,9 @@ class ConditionalCalculationsRepository:
         FROM orders_articles_analyze o
         WHERE o.date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days'
             AND CURRENT_DATE - INTERVAL '{self.days_to} days'
-            AND o.account != '0'
+            AND o.account != '0' 
+            AND o.account IS NOT NULL
+            AND o.account != 'NaN'
         GROUP BY o.account,
                 o.date;
     """)

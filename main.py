@@ -75,11 +75,11 @@ def main():
         orders_article_analyze_run()
     # Обновление таблицы Годовой план закупа 2026 данными по заказам
     elif args.task == "conditional_calculation_to_db_run":
-        print("🔁 Запуск условного расчета и загрузки в БД")
+        # print("🔁 Запуск условного расчета и загрузки в БД")
         conditional_calculation_to_db_run()
     # Обновление таблицы Условный расчет
     elif args.task == "update_conditional_calculations_to_gs":
-        # print("🔁 Выгрузка условного расчета и загрузки в гугл-таблицу")
+        print("🔁 Выгрузка условного расчета и загрузка в гугл-таблицу")
         update_conditional_calculations_to_gs()
     elif args.task == "wms_stocks_run":
         print("🔁 Выгрузка данных об остатках из сервиса WMS")
