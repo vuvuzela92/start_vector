@@ -4,6 +4,7 @@ from src_oop.core.my_gspread import GoogleTabs
 from src_oop.storage.google_sheets.google_sheets import fin_rep_analyze
 import gspread
 
+# python -m src_oop.wb.fin_rep_analyze.incomes_outcomes_analyze_month
 def get_incomes_outcomes_analyze_month():
     # 1. Получаем engine
     engine = Database.get_engine()

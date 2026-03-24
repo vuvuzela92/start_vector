@@ -3,7 +3,7 @@ from src_oop.core.database import Database
 
 class ArticleAnalyzeRepository:
     """Класс для хранения запросов на получение данных по Артикульному анализу"""
-    def __init__(self, days_ago: int = 28, days_to: int = 1):
+    def __init__(self, days_ago: int = 83, days_to: int = 1):
         self.days_ago = days_ago
         self.days_to = days_to
 
@@ -95,7 +95,9 @@ class ArticleAnalyzeRepository:
                     cd.rating,
                     hs.end_of_day_balance,
                     ws.in_way_to_client,
-                    ws.in_way_from_client
+                    ws.in_way_from_client,
+                    COALESCE(fin.sales_revenue_rep, 0) AS sales_revenue_rep,
+                    0 AS sales_profit_cond_rep
                 FROM funnel_daily o
                 LEFT JOIN card_data cd
                     ON o.nm_id = cd.article_id
@@ -118,7 +120,7 @@ class ArticleAnalyzeRepository:
                     SUM(CASE WHEN ord.warehouse_type = 'Склад продавца' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS fbs_orders,
                     SUM(CASE WHEN ord.warehouse_type = 'Склад WB' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS fbo_orders
                 FROM orders ord
-                WHERE ord.date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to}'
+                WHERE ord.date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to} days'
                 GROUP BY ord.article_id,
                     ord."date"
                         ) AS ord
@@ -129,7 +131,7 @@ class ArticleAnalyzeRepository:
                     ROUND(AVG(cp.purchase_price)) AS purchase_price,
                     cp.date
                     FROM cost_price cp
-                    WHERE cp.date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to}'
+                    WHERE cp.date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to} days'
                     GROUP BY
                     cp.date,
                     cp.local_vendor_code
@@ -141,7 +143,7 @@ class ArticleAnalyzeRepository:
                         SUM(anpd.sum_net_profit) AS profit_by_orders,
                         anpd."date"
                     FROM accurate_net_profit_data anpd
-                        WHERE anpd."date" BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to}'
+                        WHERE anpd."date" BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to} days'
                     GROUP BY anpd.article_id, anpd."date"
                     ) anpd
                 ON anpd.article_id = o.nm_id
@@ -155,7 +157,7 @@ class ArticleAnalyzeRepository:
                         COUNT(s.is_realization) AS sales_count
                     FROM sales s
                     WHERE is_realization IS TRUE
-                    AND s.date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to}'
+                    AND s.date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to} days'
                     GROUP BY s.article_id, s.date
                     ) s
                 ON s.article_id = o.nm_id
@@ -167,7 +169,7 @@ class ArticleAnalyzeRepository:
                         pami.promo_title,
                         pami.promo_status
                 FROM promo_and_managers_info AS pami
-                WHERE pami.date  BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to}'
+                WHERE pami.date  BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to} days'
                     ) pami
                 ON pami.nm_id = o.nm_id
                     AND pami."date" = o."date"
@@ -182,7 +184,7 @@ class ArticleAnalyzeRepository:
                     SUM(CASE WHEN itr.federal_district = 'Северо-Кавказский' THEN quantity ELSE 0 END) AS north_caucase,
                     SUM(quantity) AS total_quantity
                 FROM inventory_turnover_by_reg AS itr
-                WHERE itr.date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to}'
+                WHERE itr.date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to} days'
                 GROUP BY itr.article_id,
                         itr.date
                     ) itr
@@ -194,7 +196,7 @@ class ArticleAnalyzeRepository:
                     subject_name,
                     AVG(kgvp_marketplace) AS kgvp_marketplace
                 FROM comission_wb_data
-                WHERE date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to}'
+                WHERE date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to} days'
                 GROUP BY date,
                     subject_name) cwd
                 ON cwd."date" = o."date"
@@ -218,7 +220,7 @@ class ArticleAnalyzeRepository:
                     ic_2025.date_from,
                     ic_2025.date_to
                 FROM individual_conditions ic_2025
-                WHERE ic_2025.date_from  BETWEEN '2026-01-01' AND '2026-12-31'
+                WHERE ic_2025.date_from  BETWEEN '2025-01-01' AND '2025-12-31'
                 GROUP BY ic_2025.subject_name,
                 ic_2025.date_from,
                 ic_2025.date_to
@@ -232,7 +234,7 @@ class ArticleAnalyzeRepository:
                         pd.discounted_price,
                         pd.logistic_from_wb_wh_to_opp
                     FROM prices_data pd
-                    WHERE date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to}'
+                    WHERE date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to} days'
                     ) pd
                 ON pd.article_id = o.nm_id
                     AND pd."date" = o."date"
@@ -243,7 +245,7 @@ class ArticleAnalyzeRepository:
                         SUM(ws.in_way_from_client) AS in_way_from_client,
                         SUM(quantity) AS quantity
                     FROM wb_stock ws
-                    WHERE DATE(ws.last_change_date) BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to}'
+                    WHERE DATE(ws.last_change_date) BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to} days'
                     GROUP BY date,
                             ws.nm_id) ws
                 ON ws.nm_id = o.nm_id
@@ -253,11 +255,28 @@ class ArticleAnalyzeRepository:
                         hs.end_of_day_balance,
                         hs.wild
                     FROM historical_stocks_fbs_service hs
-                    WHERE DATE(hs.transaction_date) BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to}'
+                    WHERE DATE(hs.transaction_date) BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to} days'
                     ) hs
                 ON hs.wild = a.local_vendor_code
                     AND hs.transaction_date = o.date
-                WHERE o."date" BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to}'
+                LEFT JOIN (
+                    SELECT 
+                        fin.nm_id,
+                        DATE(fin.date_from) AS date,
+                        SUM(
+                            CASE WHEN fin.supplier_oper_name = 'Продажа' THEN fin.retail_price_withdisc_rub ELSE 0 END
+                            - CASE WHEN fin.supplier_oper_name = 'Возврат' THEN fin.retail_price_withdisc_rub ELSE 0 END
+                            - CASE WHEN fin.supplier_oper_name = 'Коррекция возвратов' THEN fin.retail_price_withdisc_rub ELSE 0 END
+                            + CASE WHEN fin.supplier_oper_name = 'Коррекция продаж' THEN fin.retail_price_withdisc_rub ELSE 0 END
+                        ) AS sales_revenue_rep
+                    FROM daily_fin_reports_full fin
+                    WHERE DATE(fin.date_from) BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' 
+                                                AND CURRENT_DATE - INTERVAL '{self.days_to} days'
+                    GROUP BY fin.nm_id, DATE(fin.date_from)
+                ) fin
+                ON fin.date = o.date  
+                AND fin.nm_id = o.nm_id
+                WHERE o."date" BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days' AND CURRENT_DATE - INTERVAL '{self.days_to} days'
                 ORDER BY o."date" DESC,
                     o.orders_sum DESC;""")
             return Database.read_sql_to_dataframe(query)

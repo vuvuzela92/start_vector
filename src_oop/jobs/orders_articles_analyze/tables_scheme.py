@@ -46,8 +46,6 @@ orders_articles_analyze_table = {
         'logistic_from_wb_wh_to_opp': Numeric(15, 2),
         'fbs_orders': BigInteger,
         'fbo_orders': BigInteger,
-        'procurement_status': String(255),
-        'parent_name': String(255),
         'clicks': BigInteger,
         'views': BigInteger,
         'ctr': Numeric(15, 2),
@@ -56,15 +54,11 @@ orders_articles_analyze_table = {
         'adv_spend': Numeric(15, 2),
         'bonuses': Numeric(15, 2),
         'rating': Numeric(15, 2),
-        'price_with_disc_median_for_30days': Numeric(15, 2),
-        'price_with_disc_av_for_30days': Numeric(15, 2),
-        'orders_count_sum_for_30days': Numeric(15, 2),
-        'orders_count_av_for_30days': Numeric(15, 2),
-        'orders_sum_rub_sum_for_30days': Numeric(15, 2),
-        'orders_sum_rub_av_for_30days': Numeric(15, 2),
         'end_of_day_balance': BigInteger,
         'in_way_to_client': BigInteger,
         'in_way_from_client': BigInteger,
+        'sales_revenue_rep': Numeric(15, 2),
+        'sales_profit_cond_rep': Numeric(10, 2)
     },
     "unique_keys": ["date", "article_id"]
     }

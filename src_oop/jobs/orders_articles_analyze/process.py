@@ -23,7 +23,7 @@ class ProcessArticleAnalyze:
         self._validate_unique_keys(df_adv, "df_adv")
         self._validate_unique_keys(df_gen, "df_gen")
 
-        df = pd.merge(df_adv, df_gen, on=["article_id", "date"], how="left")
+        df = pd.merge(df_gen, df_adv, on=["article_id", "date"], how="left")
 
         numeric_cols = df.select_dtypes(include="number").columns
         df[numeric_cols] = df[numeric_cols].fillna(0)
