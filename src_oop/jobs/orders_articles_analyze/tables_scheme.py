@@ -58,7 +58,12 @@ orders_articles_analyze_table = {
         'in_way_to_client': BigInteger,
         'in_way_from_client': BigInteger,
         'sales_revenue_rep': Numeric(15, 2),
-        'sales_profit_cond_rep': Numeric(10, 2)
+        'sales_profit_cond_rep': Numeric(10, 2),
+        'wb_commission_rep': Numeric(10, 2),
+        'logistics': Numeric(10, 2),
+        'sales_count_rep': BigInteger,
+        'returns_count_rep': BigInteger,
+        'cost_price_sales_fin_rep': Numeric(10, 2)
     },
     "unique_keys": ["date", "article_id"]
     }
