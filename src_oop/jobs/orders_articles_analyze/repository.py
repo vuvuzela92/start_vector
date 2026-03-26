@@ -3,7 +3,7 @@ from src_oop.core.database import Database
 
 class ArticleAnalyzeRepository:
     """Класс для хранения запросов на получение данных по Артикульному анализу"""
-    def __init__(self, days_ago: int = 84, days_to: int = 1):
+    def __init__(self, days_ago: int = 85, days_to: int = 1):
         self.days_ago = days_ago
         self.days_to = days_to
 
@@ -89,7 +89,8 @@ class ArticleAnalyzeRepository:
                     COALESCE(fin.logistics, 0) AS logistics, 
                     COALESCE(fin.sales_count_rep, 0) AS sales_count_rep, 
                     COALESCE(fin.returns_count_rep, 0) AS returns_count_rep,
-                    COALESCE(fin.sales_count_rep, 0) * cp.purchase_price AS cost_price_sales_fin_rep
+                    COALESCE(fin.sales_count_rep, 0) * cp.purchase_price AS cost_price_sales_fin_rep,
+                    COALESCE(fin.returns_count_rep, 0) * cp.purchase_price AS cost_price_returns_fin_rep                
                 FROM base b -- базовая таблица с уникальными парами (date, article_id) за нужный период
                 -- Теперь все остальные таблицы джойним к base по паре (date, article_id)
                 LEFT JOIN article a ON a.nm_id = b.article_id

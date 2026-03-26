@@ -1,0 +1,28 @@
+Запуск получения данных по Артикульному анализу
+Обработка данных по Артикульному анализу
+Удаляем дубликаты
+Добавление данных в БД
+Traceback (most recent call last):
+  File "C:\Users\123\Desktop\start_vector\main.py", line 90, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\123\Desktop\start_vector\main.py", line 75, in main
+    orders_article_analyze_run()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\123\Desktop\start_vector\src_oop\jobs\orders_articles_analyze\run.py", line 25, in orders_article_analyze_run
+    Database.sync_data_to_postgres(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        table_name=table,
+        ^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        unique_keys=unique_keys
+        ^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\123\Desktop\start_vector\src_oop\core\database.py", line 103, in sync_data_to_postgres
+    print(f"\u2705 Чанк {i}-{i+len(chunk)} из {total} загружен")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\encodings\cp1251.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2705' in position 0: character maps to <undefined>

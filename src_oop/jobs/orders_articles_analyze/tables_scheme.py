@@ -63,7 +63,8 @@ orders_articles_analyze_table = {
         'logistics': Numeric(10, 2),
         'sales_count_rep': BigInteger,
         'returns_count_rep': BigInteger,
-        'cost_price_sales_fin_rep': Numeric(10, 2)
+        'cost_price_sales_fin_rep': Numeric(10, 2),
+        'cost_price_returns_fin_rep': Numeric(10, 2)
     },
     "unique_keys": ["date", "article_id"]
     }

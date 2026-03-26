@@ -6,7 +6,7 @@ from src_oop.jobs.orders_articles_analyze.repository import ArticleAnalyzeReposi
 
 logger = logging.getLogger(__name__)
 
-def orders_article_analyze_run(days_ago: int = 84, days_to: int = 1):
+def orders_article_analyze_run(days_ago: int = 85, days_to: int = 1):
     """Запуск Артикульного анализа"""
     logger.info("Запуск получения данных по Артикульному анализу")
     print("Запуск получения данных по Артикульному анализу")

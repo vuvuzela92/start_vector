@@ -100,7 +100,7 @@ class Database:
 
                 conn.execute(upsert_stmt)
                 inserted += len(chunk)
-                print(f"✅ Чанк {i}-{i+len(chunk)} из {total} загружен")
+                print(f"[OK] Успешно {i}-{i+len(chunk)} из {total} синхронизировано")
         
-        print(f"✅ Таблица '{table_name}': успешно синхронизирована")
-        print(f"✅ Всего обработано {inserted} строк.")
+        print(f" Таблица '{table_name}': успешно синхронизирована")
+        print(f" Всего обработано {inserted} строк.")
