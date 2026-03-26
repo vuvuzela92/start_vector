@@ -3,7 +3,7 @@ from src_oop.core.database import Database
 
 class ArticleAnalyzeRepository:
     """Класс для хранения запросов на получение данных по Артикульному анализу"""
-    def __init__(self, days_ago: int = 85, days_to: int = 1):
+    def __init__(self, days_ago: int = 28, days_to: int = 1):
         self.days_ago = days_ago
         self.days_to = days_to
 

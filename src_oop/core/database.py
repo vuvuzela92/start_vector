@@ -49,7 +49,7 @@ class Database:
             return pd.read_sql(query, connection, params=params)
 
     @classmethod
-    def sync_data_to_postgres(cls, table_name, data, schema_definition, unique_keys, chunk_size=10000):
+    def sync_data_to_postgres(cls, table_name, data, schema_definition, unique_keys, chunk_size=30000):
         engine = cls.get_engine()
         metadata = MetaData()
 
