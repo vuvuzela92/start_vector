@@ -1,18 +1,18 @@
-from sqlalchemy import Date, String, BigInteger, Numeric
+from sqlalchemy import Date, String, BigInteger, Numeric, Integer, Float
 
 # Колонки Артикульного анализа
 orders_articles_analyze_table = {
     "title": "orders_articles_analyze",
     "columns": {
         'date': Date,
-        'week_num': BigInteger,
-        'month_num': BigInteger,
+        'week_num': Integer,  
+        'month_num': Integer, 
         'account': String(255),
         'local_vendor_code': String(255),
         'article_id': Numeric(20, 0),
         'subject_name': String(255),
         'price_with_disc': Numeric(15, 2),
-        'spp': BigInteger,
+        'spp': Numeric(15, 2), 
         'orders_sum_rub': Numeric(15, 2),
         'orders_count': BigInteger,
         'profit_by_orders': Numeric(15, 2),
@@ -42,7 +42,7 @@ orders_articles_analyze_table = {
         'syberian_fo_orders': BigInteger,
         'purchase_price': Numeric(15, 2),
         'kgvp_marketplace': Numeric(15, 2),
-        'ind_comission_fbo': BigInteger,
+        'ind_comission_fbo': Numeric(15, 2), 
         'logistic_from_wb_wh_to_opp': Numeric(15, 2),
         'fbs_orders': BigInteger,
         'fbo_orders': BigInteger,
@@ -58,13 +58,13 @@ orders_articles_analyze_table = {
         'in_way_to_client': BigInteger,
         'in_way_from_client': BigInteger,
         'sales_revenue_rep': Numeric(15, 2),
-        'sales_profit_cond_rep': Numeric(10, 2),
-        'wb_commission_rep': Numeric(10, 2),
-        'logistics': Numeric(10, 2),
+        'sales_profit_cond_rep': Numeric(15, 2), 
+        'wb_commission_rep': Numeric(15, 2),     
+        'logistics': Numeric(15, 2),             
         'sales_count_rep': BigInteger,
         'returns_count_rep': BigInteger,
-        'cost_price_sales_fin_rep': Numeric(10, 2),
-        'cost_price_returns_fin_rep': Numeric(10, 2)
+        'cost_price_sales_fin_rep': Numeric(15, 2),
+        'cost_price_returns_fin_rep': Numeric(15, 2)
     },
     "unique_keys": ["date", "article_id"]
-    }
+}

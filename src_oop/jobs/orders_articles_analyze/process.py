@@ -1,5 +1,6 @@
 import logging
 import pandas as pd
+import numpy as np
 from src_oop.jobs.orders_articles_analyze.repository import ArticleAnalyzeRepository
 
 logger = logging.getLogger(__name__)
@@ -45,5 +46,18 @@ class ProcessArticleAnalyze:
         # === 🔢 3. Заполняем числовые колонки нулями ===
         numeric_cols = df.select_dtypes(include="number").columns
         df.loc[:, numeric_cols] = df[numeric_cols].fillna(0)
+
+        # 1. Заменяем бесконечности (если где-то было деление на 0 в Pandas) на NaN
+        df = df.replace([np.inf, -np.inf], np.nan)
+
+        # 2. Заполняем числовые колонки нулями (это у тебя уже есть)
+        numeric_cols = df.select_dtypes(include="number").columns
+        df.loc[:, numeric_cols] = df[numeric_cols].fillna(0)
+
+        # 3. Дополнительная защита: убедимся, что дробные числа не пытаются записаться как BIGINT
+        for col in numeric_cols:
+            # Если в базе это дробное поле (FLOAT / NUMERIC), принудительно делаем его float в Python
+            if df[col].max() > 2147483647 or df[col].min() < -2147483648:
+                df[col] = df[col].astype(float)
 
         return df.sort_values(by=["date", "orders_sum_rub"], ascending=[False, False]).reset_index(drop=True)
