@@ -246,3 +246,13 @@ class ArticleAnalyzeRepository:
                 AND CURRENT_DATE - INTERVAL '{days_to} days'
             GROUP BY as3.article_id, as3.date;""")
         return Database.read_sql_to_dataframe(query)
+    
+
+    def get_all_goods_directory(self):
+        """Получить полный справочник товаров без привязки к датам"""
+        query = text("""
+            SELECT DISTINCT a.nm_id AS article_id, a.account, a.local_vendor_code, cd.subject_name
+            FROM article a
+            LEFT JOIN card_data cd ON a.nm_id = cd.article_id
+        """)
+        return Database.read_sql_to_dataframe(query)
