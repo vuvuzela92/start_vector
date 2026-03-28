@@ -28,7 +28,7 @@ class WMSStockService:
         if date_to is None:
             date_to = datetime.now().strftime("%Y-%m-%d")
 
-        # 2. URL без пробелов
+        # 2. URL
         url = "https://api-routing.star-vector.ru/api/warehouse_and_balances/get_historical_stocks"
         
         # 3. Создаем клиент
@@ -50,7 +50,7 @@ class WMSStockService:
                 "page_num": page_num
             }
             
-            # 4. Асинхронный POST-запрос через твой класс
+            # 4. Асинхронный POST-запрос
             data = await client.post(url, json=payload, delay=1.0, retries=3)
             
             logger.debug(f"📄 Страница {page_num}: отправлен запрос")
