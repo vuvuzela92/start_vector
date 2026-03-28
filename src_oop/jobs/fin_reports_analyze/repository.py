@@ -3,7 +3,7 @@ from sqlalchemy import text
 
 from src_oop.core.database import Database
 
-class GetDataFromDB:
+class FinReportsAnalyze:
     """Класс для получения сложной аналитики из БД."""
     
     def __init__(self, engine):
@@ -47,7 +47,7 @@ class GetDataFromDB:
             return Database.read_sql_to_dataframe(query)
             
     def get_monthly_profit_report(self) -> pd.DataFrame:
-        """Формирует отчет по чистой прибыли и расходам."""
+        """Формирует отчет по чистой прибыли и расходам за месяц."""
         
         # Оборачиваем строку в text() для SQLAlchemy 2.0+
         query = text("""
