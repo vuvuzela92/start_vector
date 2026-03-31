@@ -16,7 +16,7 @@ class ConditionalCalculationsRepository:
             SUM(o.orders_sum_rub) AS orders_sum,
             ROUND(SUM(o.sales_revenue_rep)) AS sales_sum,
             ROUND(SUM(o.profit_by_cond_orders)) AS profit_by_ind_cond_orders,
-            ROUND(SUM(o.profit_by_cond_sales)) AS profit_by_ind_cond_sales,
+            ROUND(SUM(o.sales_profit_cond_rep)) AS profit_by_ind_cond_sales,
             SUM(o.sales_count_rep) AS sales_count,
             SUM(o.orders_count) AS order_count,
             SUM(o.adv_spend) AS adv_spend,
