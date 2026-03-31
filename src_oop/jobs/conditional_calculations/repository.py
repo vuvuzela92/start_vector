@@ -4,7 +4,7 @@ from src_oop.core.database import Database
 
 
 class ConditionalCalculationsRepository:
-    def __init__(self, days_ago: int = 84, days_to: int = 1):
+    def __init__(self, days_ago: int = 7, days_to: int = 1):
         self.days_ago = days_ago
         self.days_to = days_to
     

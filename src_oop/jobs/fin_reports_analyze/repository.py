@@ -78,18 +78,20 @@ class FinReportsAnalyze:
                     SUM(purchase_cost_total) AS "Закупочная стоимость",
                     ROUND(AVG(margin_before_cost_pct)/100,2) AS "Наша доля до вычета себестомости_pct",
                     SUM(gp_after_wb) AS "ВП после WB",
-                    ROUND(AVG(gp_after_wb_pct)/100,2) AS "ВП после WB_pct"
+                    ROUND(AVG(gp_after_wb_pct)/100,2) AS "ВП после WB_pct",
+                    COUNT(*) OVER (PARTITION BY DATE_TRUNC('month', date_from)) AS count_acc,
+                    account
                 FROM daily_fin_reports_agg
                 GROUP BY
+                    account,
                     DATE_TRUNC('month', date_from),
                     TO_CHAR(date_from, 'YYYY-MM'),
                     EXTRACT(YEAR FROM date_from),
-                    EXTRACT(MONTH FROM date_from)
-            ),
-            exp AS (
+                    EXTRACT(MONTH FROM date_from)),
+                exp AS (
                 SELECT
                     EXTRACT(YEAR FROM start_date) AS e_year,
-                    month AS e_month,
+                    TO_CHAR(start_date, 'YYYY-MM') AS e_month,
                     -- Individual expense columns
                     SUM(CASE WHEN type='Расходы офис' THEN value ELSE 0 END) AS "Расходы офис",
                     SUM(CASE WHEN type='Услуги подбора персонала' THEN value ELSE 0 END) AS "Услуги подбора персонала",
@@ -141,29 +143,64 @@ class FinReportsAnalyze:
                             'Рови факторинг:пени', 'Лизинг, покупка оборудования, помещений', 'Заработная плата'
                         ) THEN value ELSE 0 END
                     ) AS "Расходы компании"
-                FROM expenses
-                GROUP BY EXTRACT(YEAR FROM start_date), month
-            )
-            SELECT
-                m.*,
-                e.*,
-                m."ВП после WB" - e."Расходы компании" as "Чистая прибыль",
-                ROUND((m."ВП после WB" - e."Расходы компании")/m."Выручка", 2) as "Чистая прибыль_pct",
-                m."Удержания" / NULLIF(m."Выручка", 0) AS "Удержания_pct",
-                m."Логистика" / NULLIF(m."Выручка", 0) AS "Логистика_pct",
-                m."Перечисления по кредиту" / NULLIF(m."Выручка", 0) AS "Перечисления по кредиту_pct",
-                m."ВП после WB" - e."Расходы компании" AS "Чистая прибыль",
-                ROUND(
-                    (m."ВП после WB" - e."Расходы компании")
-                    / NULLIF(m."Выручка", 0),
-                    2
-                ) AS "Чистая прибыль_pct"
-            FROM main m
-            LEFT JOIN exp e
-                ON m.year = e.e_year
-            AND m.month_number = e.e_month
-            ORDER BY m.month desc;
-        """)
+                FROM expenses e
+                GROUP BY EXTRACT(YEAR FROM start_date), TO_CHAR(start_date, 'YYYY-MM')
+                )
+                SELECT
+                    m.*,
+                    e.e_year,
+                    e."Расходы офис"/m.count_acc AS "Расходы офис",
+                    e."Услуги подбора персонала"/m.count_acc AS "Услуги подбора персонала",
+                    e."Арендные платежи (офис)"/m.count_acc AS "Арендные платежи (офис)",
+                    e."Услуги связи (интернет, телефон)"/m.count_acc AS "Услуги связи (интернет, телефон)",
+                    e."Стоянка"/m.count_acc AS "Стоянка",
+                    e."Эксплуатация здания"/m.count_acc AS "Эксплуатация здания",
+                    e."Коммунальные платежи"/m.count_acc AS "Коммунальные платежи",
+                    e."Расчеты с поставщиком материалы"/m.count_acc AS "Расчеты с поставщиком материалы",
+                    e."Карго"/m.count_acc AS "Карго",
+                    e."Консультационные услуги по оформл"/m.count_acc AS "Консультационные услуги по оформл",
+                    e."Расходы склад"/m.count_acc AS "Расходы склад",
+                    e."Транспортные расходы, ГСМ"/m.count_acc AS "Транспортные расходы, ГСМ",
+                    e."Парковка"/m.count_acc AS "Парковка",
+                    e."Обслуживание а/м"/m.count_acc AS "Обслуживание а/м",
+                    e."Арендные платежи (склад)"/m.count_acc AS "Арендные платежи (склад)",
+                    e."Страховка"/m.count_acc AS "Страховка",
+                    e."ПО, сервисы, обслуживание ПО"/m.count_acc AS "ПО, сервисы, обслуживание ПО",
+                    e."Реклама/продвижение на площадках МП"/m.count_acc AS "Реклама/продвижение на площадках",
+                    e."ВБ смена номера, перенос карточек"/m.count_acc AS "ВБ смена номера, перенос карточек",
+                    e."Услуги банка"/m.count_acc AS "Услуги банка",
+                    e."Налог: НДФЛ"/m.count_acc AS "Налог: НДФЛ",
+                    e."Налог: УСН"/m.count_acc AS "Налог: УСН",
+                    e."Налог: СВ"/m.count_acc AS "Налог: СВ",
+                    e."Налог: прочее"/m.count_acc AS "Налог: прочее",
+                    e."Налог: НДС"/m.count_acc AS "Налог: НДС",
+                    e."Штрафы, взыскания"/m.count_acc AS "Штрафы, взыскания",
+                    e."Проценты кредит ВБ"/m.count_acc AS "Проценты кредит ВБ",
+                    e."Проценты СИМПЛФИНАНС"/m.count_acc AS "Проценты СИМПЛФИНАНС",
+                    e."Займ ВБ: проценты"/m.count_acc AS "Займ ВБ: проценты",
+                    e."Кредит Сбер: проценты"/m.count_acc AS "Кредит Сбер: проценты",
+                    e."Рови факторинг: проценты"/m.count_acc AS "Рови факторинг: проценты",
+                    e."Рови факторинг: пени"/m.count_acc AS "Рови факторинг: пени",
+                    e."Лизинг, покупка оборудования, поме"/m.count_acc AS "Лизинг, покупка оборудования, поме",
+                    e."Заработная плата"/m.count_acc AS "Заработная плата",
+                    e."Расходы компании"/m.count_acc AS "Расходы компании",
+                    m."ВП после WB" - e."Расходы компании"/m.count_acc as "Чистая прибыль",
+                    ROUND((m."ВП после WB" - e."Расходы компании"/m.count_acc)/m."Выручка", 2) as "Чистая прибыль_pct",
+                    m."Удержания" / NULLIF(m."Выручка", 0) AS "Удержания_pct",
+                    m."Логистика" / NULLIF(m."Выручка", 0) AS "Логистика_pct",
+                    m."Перечисления по кредиту" / NULLIF(m."Выручка", 0) AS "Перечисления по кредиту_pct",
+                    m."ВП после WB" - e."Расходы компании"/m.count_acc AS "Чистая прибыль",
+                    ROUND(
+                        (m."ВП после WB" - e."Расходы компании"/m.count_acc)
+                        / NULLIF(m."Выручка", 0),
+                        2
+                    ) AS "Чистая прибыль_pct"
+                FROM main m
+                LEFT JOIN exp e
+                    ON m.year = e.e_year
+                    AND m.Месяц = e.e_month
+                ORDER BY m.month desc;
+                        """)
 
         # Возвращаем результат в виде DataFrame от SQL-запроса
         return Database.read_sql_to_dataframe(query)
