@@ -89,6 +89,7 @@ async def get_advert_spend(account: str, date_from: str, date_to: str, api_token
                     # 3. Обработка ошибок без дублирования кода
                     if res.status == 401:
                         print(f"🔑 [{account}] Ошибка 401: Неверный токен. ({error_detail})")
+                        return []
                     elif res.status == 429:
                         print(f"⏳ [{account}] Ошибка 429: Лимит запросов! ({error_detail})")
                         await asyncio.sleep(delay)
@@ -125,4 +126,6 @@ async def fetch_advert_spend_info(tokens: dict, date_from = (datetime.now()-time
             # tasks = [get_advert_spend(account, '2025-12-31', '2026-01-01', token,session) for account, token in tokens.items()]            
             # Ожидаем завершения всех задач и собираем результаты
             results = await asyncio.gather(*tasks)
+            # убираем None (на всякий случай)
+            results = [r for r in results if r]
             return results   
