@@ -16,6 +16,6 @@ credit_analyze_vector_table = {"title": "Общая таблица ВБ Фина
                                     "sheet_credit_analyze_vector": "БД Кредит"}
 # ОТЧЕТ за 2023-2024 пров v.2.0
 week_n_redeem = {
-    "title": "ОТЧЕТ за 2023-2024 пров v.2.0",
+    "title": "ОТЧЕТ за 2026 пров v.2.0",
     "data": "БД"
     }
