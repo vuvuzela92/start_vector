@@ -1,13 +1,46 @@
 import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import engine, text
+from datetime import datetime
+import gspread
+from src_oop.core.my_gspread import GoogleTabs
+from gspread_dataframe import set_with_dataframe
 
 from src_oop.core.database import Database
 
 class FinReportsAnalyze:
-    """Класс для получения сложной аналитики из БД."""
+    """Класс для получения аналитики по фин отчетам из БД."""
     
-    def __init__(self, engine):
-        self.engine = engine
+    def __init__(self, engine=None):
+        if engine:
+            self.engine = engine
+        else:
+            self.engine = Database.get_engine()
+
+    def get_df_from_db(self, query: str):
+        """Универсальная функция для получения DataFrame из БД по произвольному SQL-запросу"""
+        query = text(query)
+        # Возвращаем результат в виде DataFrame от SQL-запроса
+        return Database.read_sql_to_dataframe(query)  
+
+
+    def set_processed_df_to_google(self, query, table_name: str = None, sheet_name: str = None):
+        """Функция для вставки в таблицу Анализ_фин_отчетов_Вектор данных о еженедельных удержаниях"""
+        df = self.get_df_from_db(query)
+        # Получаем датафрейм из БД
+        df['updatet_at'] = datetime.now().strftime('%Y-%m-%d %H-%M-%S')
+        # Создаем соединение с гугл-таблицей
+        try:
+            google_connect = GoogleTabs(table_title=table_name, sheet_title=sheet_name)
+            set_with_dataframe(google_connect.sheet_title, df)
+            print("Данные вставлены в гугл таблицу")
+        except gspread.exceptions.SpreadsheetNotFound:
+            print(f"Не найдена таблица {table_name}")
+        except gspread.exceptions.WorksheetNotFound as e:
+            print(f"Не найден лист {sheet_name} в таблице {table_name}")
+        except StopIteration:
+            print(f"Не найден лист {sheet_name} в таблице {table_name}")
+        except RuntimeError as e:
+            print(f"Ошибка подключения: {e}")     
 
     def get_weekly_profit_report(self) -> pd.DataFrame:
             """Формирует отчет по чистой прибыли и расходам."""
@@ -315,6 +348,12 @@ class FinReportsAnalyze:
             WHERE f.grouped_bonus_type_name IS NOT NULL
             ORDER BY f.date_from desc;
         """)
+        # Возвращаем результат в виде DataFrame от SQL-запроса
+        return Database.read_sql_to_dataframe(query)
+    
+    def get_df_from_db(self,query: str):
+        """Универсальная функция для получения DataFrame из БД по произвольному SQL-запросу"""
+        query = text(query)
         # Возвращаем результат в виде DataFrame от SQL-запроса
         return Database.read_sql_to_dataframe(query)
     
