@@ -13,7 +13,7 @@ from src_oop.services.googles_sheets_job.annual_procurement_plan import transpor
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 from src_oop.jobs.conditional_calculations.run import conditional_calculation_to_db_run, update_conditional_calculations_to_gs
 from src_oop.jobs.wms_stocks.run import wms_stocks_run
-from src_oop.jobs.fin_reports_analyze.run import update_monthly_profit_report, update_weekly_profit_report, update_outcomes_detalize, update_fin_deductions_mv, update_daily_fin_reports_deductions_agg
+from src_oop.jobs.fin_reports_analyze.run import update_monthly_profit_report, update_weekly_profit_report, update_outcomes_detalize, update_fin_deductions_mv, update_deductions_by_month, update_cash_flow_writeoffs
 
 def smart_run(func: Callable):
     """
@@ -97,11 +97,14 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_fin_deductions_mv),
         "desc": "💵 Выгрузка детализированных данных фин отчета об удержаниях"
     }, 
-    "update_daily_fin_reports_deductions_agg": {
-        "func": smart_run(update_daily_fin_reports_deductions_agg),
+    "update_deductions_by_month": {
+        "func": smart_run(update_deductions_by_month),
         "desc": "💵 Выгрузка детализированных данных фин отчета об удержаниях, сгруппированных по типам"
     }, 
-
+    "update_cash_flow_writeoffs": {
+        "func": smart_run(update_cash_flow_writeoffs),
+        "desc": "💵 Выгрузка детализированных данных по затратам из 1С"
+    }, 
     # Раздел: Склад
     "wms_stocks_run": {
         "func": smart_run(wms_stocks_run),

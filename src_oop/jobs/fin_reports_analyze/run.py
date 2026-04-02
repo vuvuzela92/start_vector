@@ -7,6 +7,8 @@ import gspread
 from src_oop.core.my_gspread import GoogleTabs
 from src_oop.storage.google_sheets.google_sheets import fin_rep_analyze
 
+from src_oop.jobs.fin_reports_analyze.queries import query_deductions_by_month, query_cash_flow_writeoffs
+
 logger = logging.getLogger(__name__)
 
 def update_monthly_profit_report():
@@ -121,31 +123,21 @@ def update_fin_deductions_mv(table_name: str = "Анализ_фин_отчето
     except RuntimeError as e:
         print(f"Ошибка подключения: {e}") 
 
-
-def update_daily_fin_reports_deductions_agg(table_name: str = "Анализ_фин_отчетов_Вектор", sheet_name: str = "отчет_по_неделям"):
-    """Функция для вставки в таблицу Анализ_фин_отчетов_Вектор данных о еженедельных удержаниях"""
-    # Создаем движок для подключения к БД
-    engine = Database.get_engine()
-    # Получаем датафрейм из БД
-    df = FinReportsAnalyze(engine).get_daily_fin_reports_deductions_agg()
-    df['updatet_at'] = datetime.now().strftime('%Y-%m-%d %H-%M-%S')
-
-    
-    # Определяем таблицу и лист для вставки данных
+def update_deductions_by_month():
+    """ Обновление данных о ежемесячных удержаниях в таблице Анализ_фин_отчетов_Вектор, лист отчет_по_месяцам"""
+    analyze = FinReportsAnalyze()
     table_name = fin_rep_analyze.get("title")
-    sheet_name = fin_rep_analyze.get("export_daily_fin_reports_deductions_agg")
+    sheet_name = fin_rep_analyze.get("deductions_by_month")
+    analyze.set_processed_df_to_google(query_deductions_by_month, table_name=table_name, sheet_name=sheet_name)
 
-    try:
-        # Создаем соединение с гугл-таблицей
-        google_connect = GoogleTabs(table_title=table_name, sheet_title=sheet_name)
-        # Вставляем данные в гугл-таблицу
-        set_with_dataframe(google_connect.sheet_title, df)
-        print("Данные вставлены в гугл таблицу")
-    except gspread.exceptions.SpreadsheetNotFound:
-        print(f"Не найдена таблица {table_name}")
-    except gspread.exceptions.WorksheetNotFound as e:
-        print(f"Не найден лист {sheet_name} в таблице {table_name}")
-    except StopIteration:
-        print(f"Не найден лист {sheet_name} в таблице {table_name}")
-    except RuntimeError as e:
-        print(f"Ошибка подключения: {e}")
+def update_cash_flow_writeoffs():
+    """ Выгрузка детализированных данных по затратам из 1С Анализ_фин_отчетов_Вектор, лист расходы_по_банку"""
+    analyze = FinReportsAnalyze()
+    table_name = fin_rep_analyze.get("title")
+    sheet_name = fin_rep_analyze.get("query_cash_flow_writeoffs")
+    analyze.set_processed_df_to_google(query_cash_flow_writeoffs, table_name=table_name, sheet_name=sheet_name)
+
+
+# python -m src_oop.jobs.fin_reports_analyze.run
+# if __name__ == "__main__":
+#     update_cash_flow_writeoffs()
