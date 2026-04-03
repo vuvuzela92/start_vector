@@ -4,7 +4,7 @@ from src_oop.core.database import Database
 
 
 class ConditionalCalculationsRepository:
-    def __init__(self, days_ago: int = 7, days_to: int = 1):
+    def __init__(self, days_ago: int = 130, days_to: int = 1):
         self.days_ago = days_ago
         self.days_to = days_to
     
@@ -12,7 +12,7 @@ class ConditionalCalculationsRepository:
         """Функция для пересчета данных Условного расчета за указанное количество дней"""
         query = text(f"""
         SELECT
-            o.account,
+            UPPER(TRIM(o.account)) AS account,
             SUM(o.orders_sum_rub) AS orders_sum,
             ROUND(SUM(o.sales_revenue_rep)) AS sales_sum,
             ROUND(SUM(o.profit_by_cond_orders)) AS profit_by_ind_cond_orders,
@@ -32,7 +32,7 @@ class ConditionalCalculationsRepository:
             AND o.account != '0' 
             AND o.account IS NOT NULL
             AND o.account != 'NaN'
-        GROUP BY o.account,
+        GROUP BY UPPER(TRIM(o.account)),
                 o.date;
     """)
 

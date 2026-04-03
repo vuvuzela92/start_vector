@@ -17,15 +17,26 @@ class ProcessConditionalCalculation:
             logger.warning("Датасет для Условного расчета пустой")
             return df
 
+        # --- ДОБАВЬТЕ ЭТОТ БЛОК ---
+        # Убеждаемся, что колонка date — это именно дата без времени
+        df['date'] = pd.to_datetime(df['date']).dt.date
+        
+        # Удаляем дубликаты по уникальным ключам, оставляя только одну запись
+        # (например, последнюю встреченную)
+        before_count = len(df)
+        df = df.drop_duplicates(subset=['date', 'account'], keep='last')
+        after_count = len(df)
+        
+        if before_count != after_count:
+            logger.info(f"Удалено {before_count - after_count} дубликатов строк перед загрузкой")
+        # --------------------------
+
         # 1. Очистка от бесконечностей и NaN
-        # Заменяем их на 0, чтобы конвертация в int прошла успешно
         df = df.replace([np.inf, -np.inf], np.nan)
         
         # 2. Проходим по всем колонкам
         for col in df.columns:
-            # если имя колонки не в списке исключений
             if col.lower() not in ["date", "account"]:
-                # Превращаем колонку в целые числа
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(np.int64)
         
         return df
