@@ -42,42 +42,42 @@ class FinReportsAnalyze:
         except RuntimeError as e:
             print(f"Ошибка подключения: {e}")     
 
-    def get_weekly_profit_report(self) -> pd.DataFrame:
-            """Формирует отчет по чистой прибыли и расходам."""
+    # def get_weekly_profit_report(self) -> pd.DataFrame:
+    #         """Формирует отчет по чистой прибыли и расходам."""
             
-            # Оборачиваем строку в text() для SQLAlchemy 2.0+
-            query = text("""
-                WITH exp AS (
-                    SELECT
-                        end_date,
-                        SUM(CASE WHEN type='Расходы офис' THEN value ELSE 0 END) AS "Расходы офис",
-                        -- ... остальные твои CASE WHEN ...
-                        SUM(CASE WHEN type IN ('Расходы офис', 'Заработная плата') THEN value ELSE 0 END) AS "Расходы компании"
-                    FROM expenses
-                    GROUP BY end_date
-                ),
-                wfrm_agg AS (
-                    SELECT
-                        date_to,
-                        SUM("Выручка") AS "Выручка",
-                        SUM("Удержания") AS "Удержания",
-                        SUM("Логистика") AS "Логистика",
-                        SUM("ВП после ВБ") AS "ВП после ВБ"
-                    FROM weekly_fin_reports_mv
-                    GROUP BY date_to
-                )
-                SELECT
-                    wfrm.*,
-                    (w."ВП после ВБ" - e."Расходы компании") AS "Чистая прибыль",
-                    e.*
-                FROM weekly_fin_reports_mv wfrm
-                LEFT JOIN wfrm_agg w ON wfrm.date_to = w.date_to
-                LEFT JOIN exp e ON wfrm.date_to = e.end_date
-                ORDER BY wfrm.date_to DESC;
-            """)
+    #         # Оборачиваем строку в text() для SQLAlchemy 2.0+
+    #         query = text("""
+    #             WITH exp AS (
+    #                 SELECT
+    #                     end_date,
+    #                     SUM(CASE WHEN type='Расходы офис' THEN value ELSE 0 END) AS "Расходы офис",
+    #                     -- ... остальные твои CASE WHEN ...
+    #                     SUM(CASE WHEN type IN ('Расходы офис', 'Заработная плата') THEN value ELSE 0 END) AS "Расходы компании"
+    #                 FROM expenses
+    #                 GROUP BY end_date
+    #             ),
+    #             wfrm_agg AS (
+    #                 SELECT
+    #                     date_to,
+    #                     SUM("Выручка") AS "Выручка",
+    #                     SUM("Удержания") AS "Удержания",
+    #                     SUM("Логистика") AS "Логистика",
+    #                     SUM("ВП после ВБ") AS "ВП после ВБ"
+    #                 FROM weekly_fin_reports_mv
+    #                 GROUP BY date_to
+    #             )
+    #             SELECT
+    #                 wfrm.*,
+    #                 (w."ВП после ВБ" - e."Расходы компании") AS "Чистая прибыль",
+    #                 e.*
+    #             FROM weekly_fin_reports_mv wfrm
+    #             LEFT JOIN wfrm_agg w ON wfrm.date_to = w.date_to
+    #             LEFT JOIN exp e ON wfrm.date_to = e.end_date
+    #             ORDER BY wfrm.date_to DESC;
+    #         """)
 
-            # Возвращаем результат в виде DataFrame от SQL-запроса
-            return Database.read_sql_to_dataframe(query)
+    #         # Возвращаем результат в виде DataFrame от SQL-запроса
+    #         return Database.read_sql_to_dataframe(query)
             
     def get_monthly_profit_report(self) -> pd.DataFrame:
         """Формирует отчет по чистой прибыли и расходам за месяц."""

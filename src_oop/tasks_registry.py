@@ -13,7 +13,7 @@ from src_oop.services.googles_sheets_job.annual_procurement_plan import transpor
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 from src_oop.jobs.conditional_calculations.run import conditional_calculation_to_db_run, update_conditional_calculations_to_gs
 from src_oop.jobs.wms_stocks.run import wms_stocks_run
-from src_oop.jobs.fin_reports_analyze.run import update_monthly_profit_report, update_weekly_profit_report, update_outcomes_detalize, update_fin_deductions_mv, update_deductions_by_month, update_cash_flow_writeoffs
+from src_oop.jobs.fin_reports_analyze.run import update_monthly_report, update_weekly_profit_report, update_outcomes_detalize, update_fin_deductions_mv, update_deductions_by_month, update_cash_flow_writeoffs
 
 def smart_run(func: Callable):
     """
@@ -81,8 +81,8 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "desc": "📤 Выгрузка условного расчета в Google Sheets"
     },
     # Таблица в гугл Анализ_фин_отчетов_Вектор
-    "update_monthly_profit_report": {
-        "func": smart_run(update_monthly_profit_report),
+    "update_monthly_report": {
+        "func": smart_run(update_monthly_report),
         "desc": "💵 Выгрузка сводных данных фин отчета за месяц"
     },  
     "update_weekly_profit_report": {

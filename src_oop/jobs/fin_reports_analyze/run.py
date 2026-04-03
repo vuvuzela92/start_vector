@@ -7,37 +7,9 @@ import gspread
 from src_oop.core.my_gspread import GoogleTabs
 from src_oop.storage.google_sheets.google_sheets import fin_rep_analyze
 
-from src_oop.jobs.fin_reports_analyze.queries import query_deductions_by_month, query_cash_flow_writeoffs
+from src_oop.jobs.fin_reports_analyze.queries import query_deductions_by_month, query_cash_flow_writeoffs, query_monthly_report
 
 logger = logging.getLogger(__name__)
-
-def update_monthly_profit_report():
-    """Функция для вставки в таблицу Анализ_фин_отчетов_Вектор данных о ежемесячных удержаниях"""
-    # Создаем движок для подключения к БД
-    engine = Database.get_engine()
-    # Получаем датафрейм из БД
-    df = FinReportsAnalyze(engine).get_monthly_profit_report()
-    df['updatet_at'] = datetime.now().strftime('%Y-%m-%d %H-%M-%S')
-
-    # Определяем таблицу и лист для вставки данных
-    table_name = fin_rep_analyze.get("title")
-    sheet_name = fin_rep_analyze.get("monthly_rep")
-
-    try:
-        # Создаем соединение с гугл-таблицей
-        google_connect = GoogleTabs(table_title=table_name, sheet_title=sheet_name)
-        # Вставляем данные в гугл-таблицу
-        set_with_dataframe(google_connect.sheet_title, df)
-        print("Данные вставлены в гугл таблицу")
-    except gspread.exceptions.SpreadsheetNotFound:
-        print(f"Не найдена таблица {table_name}")
-    except gspread.exceptions.WorksheetNotFound as e:
-        print(f"Не найден лист {sheet_name} в таблице {table_name}")
-    except StopIteration:
-        print(f"Не найден лист {sheet_name} в таблице {table_name}")
-    except RuntimeError as e:
-        print(f"Ошибка подключения: {e}") 
-
 
 def update_weekly_profit_report():
     """Функция для вставки в таблицу Анализ_фин_отчетов_Вектор данных о еженедельных удержаниях"""
@@ -137,7 +109,13 @@ def update_cash_flow_writeoffs():
     sheet_name = fin_rep_analyze.get("query_cash_flow_writeoffs")
     analyze.set_processed_df_to_google(query_cash_flow_writeoffs, table_name=table_name, sheet_name=sheet_name)
 
+def update_monthly_report():
+    analyze = FinReportsAnalyze()
+    table_name = fin_rep_analyze.get("title")
+    sheet_name = fin_rep_analyze.get("monthly_rep")
+    analyze.set_processed_df_to_google(query_monthly_report, table_name=table_name, sheet_name=sheet_name)
+
 
 # python -m src_oop.jobs.fin_reports_analyze.run
 # if __name__ == "__main__":
-#     update_cash_flow_writeoffs()
+#     update_monthly_report()
