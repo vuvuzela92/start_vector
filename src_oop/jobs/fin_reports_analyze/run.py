@@ -7,7 +7,7 @@ import gspread
 from src_oop.core.my_gspread import GoogleTabs
 from src_oop.storage.google_sheets.google_sheets import fin_rep_analyze
 
-from src_oop.jobs.fin_reports_analyze.queries import query_deductions_by_month, query_cash_flow_writeoffs, query_monthly_report
+from src_oop.jobs.fin_reports_analyze.queries import query_deductions_by_month, query_cash_flow_writeoffs, query_monthly_report, query_stock_analyze
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +115,12 @@ def update_monthly_report():
     sheet_name = fin_rep_analyze.get("monthly_rep")
     analyze.set_processed_df_to_google(query_monthly_report, table_name=table_name, sheet_name=sheet_name)
 
+def update_stock_analyze():
+    analyze = FinReportsAnalyze()
+    table_name = fin_rep_analyze.get("title")
+    sheet_name = fin_rep_analyze.get("stock_analyze")
+    analyze.set_processed_df_to_google(query_stock_analyze, table_name=table_name, sheet_name=sheet_name)
 
 # python -m src_oop.jobs.fin_reports_analyze.run
 # if __name__ == "__main__":
-#     update_monthly_report()
+#     update_stock_analyze()

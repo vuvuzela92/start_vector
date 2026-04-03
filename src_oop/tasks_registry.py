@@ -13,7 +13,7 @@ from src_oop.services.googles_sheets_job.annual_procurement_plan import transpor
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 from src_oop.jobs.conditional_calculations.run import conditional_calculation_to_db_run, update_conditional_calculations_to_gs
 from src_oop.jobs.wms_stocks.run import wms_stocks_run
-from src_oop.jobs.fin_reports_analyze.run import update_monthly_report, update_weekly_profit_report, update_outcomes_detalize, update_fin_deductions_mv, update_deductions_by_month, update_cash_flow_writeoffs
+from src_oop.jobs.fin_reports_analyze.run import update_monthly_report, update_weekly_profit_report, update_outcomes_detalize, update_fin_deductions_mv, update_deductions_by_month, update_cash_flow_writeoffs, update_stock_analyze
 
 def smart_run(func: Callable):
     """
@@ -104,6 +104,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "update_cash_flow_writeoffs": {
         "func": smart_run(update_cash_flow_writeoffs),
         "desc": "💵 Выгрузка детализированных данных по затратам из 1С"
+    }, 
+    "update_stock_analyze": {
+        "func": smart_run(update_stock_analyze),
+        "desc": "📦 Выгрузка данных об остатках из арт анализа"
     }, 
     # Раздел: Склад
     "wms_stocks_run": {
