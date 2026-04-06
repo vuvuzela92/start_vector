@@ -57,7 +57,7 @@ def advert_spend():
     # Поскольку ВБ обновляетя данные по затратам с некоторой задержкой, удаляем данные за последние 28 дней перед добавлением новых
     # Удаление данных из таблицы перед добавлением новых
     with engine.connect() as connection:
-            sql_stmt = text(f"DELETE FROM {table_name} WHERE date >= CURRENT_DATE - INTERVAL '28 days'")
+            sql_stmt = text(f"DELETE FROM {table_name} WHERE date >= CURRENT_DATE - INTERVAL '3 days'")
             
             print(f"🧹 Очистка данных в {table_name} за последние 28 дней...")
             connection.execute(sql_stmt)
