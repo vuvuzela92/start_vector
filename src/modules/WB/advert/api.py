@@ -117,13 +117,12 @@ async def get_advert_spend(account: str, date_from: str, date_to: str, api_token
                 return None     
 
 
-async def fetch_advert_spend_info(tokens: dict, date_from = (datetime.now()-timedelta(days=28)).strftime('%Y-%m-%d'), date_to = (datetime.now()-timedelta(days=1)).strftime('%Y-%m-%d')):
+async def fetch_advert_spend_info(tokens: dict, date_from = (datetime.now()-timedelta(days=3)).strftime('%Y-%m-%d'), date_to = (datetime.now()-timedelta(days=1)).strftime('%Y-%m-%d')):
     """Асинхронная функция для получения информации о рекламных кампаниях для всех аккаунтов и токенов."""
     # Асинхронно обрабатываем все аккаунты и токены
     async with aiohttp.ClientSession() as session:
             # Создаем задачи для каждого аккаунта и токена
-            tasks = [get_advert_spend(account, date_from, date_to, token,session) for account, token in tokens.items()]
-            # tasks = [get_advert_spend(account, '2025-12-31', '2026-01-01', token,session) for account, token in tokens.items()]            
+            tasks = [get_advert_spend(account, date_from, date_to, token,session) for account, token in tokens.items()]      
             # Ожидаем завершения всех задач и собираем результаты
             results = await asyncio.gather(*tasks)
             # убираем None (на всякий случай)

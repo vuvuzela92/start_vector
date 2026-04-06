@@ -77,6 +77,7 @@ query_stock_analyze = """
     AND o.local_vendor_code != 'notwild'
     GROUP BY o."date",
         TO_CHAR(o."date", 'YYYY-mm'),
+        
         o.local_vendor_code
     ORDER BY o."date" DESC;
             """

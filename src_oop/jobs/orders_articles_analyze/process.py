@@ -60,4 +60,5 @@ class ProcessArticleAnalyze:
             if df[col].max() > 2147483647 or df[col].min() < -2147483648:
                 df[col] = df[col].astype(float)
 
+        print(f"ROWS RETURNED: {len(df)}")
         return df.sort_values(by=["date", "orders_sum_rub"], ascending=[False, False]).reset_index(drop=True)
