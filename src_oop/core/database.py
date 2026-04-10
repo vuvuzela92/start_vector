@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, Column, MetaData, Table, UniqueConstraint
+from sqlalchemy import create_engine, Column, MetaData, Table, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker
@@ -45,11 +45,28 @@ class Database:
     
     @classmethod
     def read_sql_to_dataframe(cls, query, params=None):
+        """
+        Выполняет SQL-запрос и возвращает результат в датафрейме.
+        """
         with cls.get_engine().connect() as connection:
             return pd.read_sql(query, connection, params=params)
+        
+    @classmethod
+    def read_sql_to_dict(cls, query, params=None):
+        """
+        Выполняет SQL-запрос и возвращает результат в виде списка словарей.
+        """
+        with cls.get_engine().connect() as connection:
+            # Оборачиваем строковый запрос в text() для безопасности и совместимости
+            result = connection.execute(text(query), params or {})
+            
+            # Превращаем результат в список словарей
+            # mappings() позволяет обращаться к полям по именам колонок
+            return [dict(row) for row in result.mappings()]
 
     @classmethod
     def sync_data_to_postgres(cls, table_name, data, schema_definition, unique_keys, chunk_size=30000):
+        """Синхронизирует данные с PostgreSQL, выполняя UPSERT по уникальным ключам."""
         engine = cls.get_engine()
         metadata = MetaData()
 

@@ -114,3 +114,35 @@ class GoogleTabs():
                 
         except Exception as e:
             print(f"An error occurred: {e}")
+
+    def update_column_by_name(self, column_name: str, data_to_write: list):
+            """
+            Находит колонку по названию и обновляет её содержимое, начиная со 2-й строки.
+            data_to_write: плоский список значений ['реклама', '', 'реклама'...]
+            """
+            try:
+                # 1. Получаем все заголовки из первой строки
+                headers = self.sheet_title.row_values(1)
+                
+                if column_name not in headers:
+                    raise ValueError(f"Колонка '{column_name}' не найдена в таблице!")
+
+                # 2. Определяем индекс колонки (в gspread нумерация с 1)
+                col_idx = headers.index(column_name) + 1
+                
+                # 3. Готовим данные: gspread ожидает список списков для диапазона
+                # Пример: [['реклама'], [''], ['реклама']]
+                vertical_values = [[val] for val in data_to_write]
+                
+                # 4. Определяем диапазон. Например, если col_idx=3, то это будет "C2:C100"
+                from gspread.utils import rowcol_to_a1
+                start_cell = rowcol_to_a1(2, col_idx) # Строка 2, нужная колонка
+                end_cell = rowcol_to_a1(len(data_to_write) + 1, col_idx)
+                range_label = f"{start_cell}:{end_cell}"
+
+                # 5. Обновляем данные одной командой
+                self.sheet_title.update(range_label, vertical_values)
+                print(f"✅ Данные успешно записаны в колонку '{column_name}' (диапазон {range_label})")
+
+            except Exception as e:
+                print(f"❌ Ошибка при динамическом обновлении: {e}")

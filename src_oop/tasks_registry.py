@@ -9,6 +9,7 @@ from src.modules.WB.docs.tasks import get_bukh_docs
 from src.modules.GOOGLE_SHEETS.calculation_of_purchases_russia import update_penalties_in_gs_purchase_russia
 from src.modules.GOOGLE_SHEETS.credit_analyze_vector import update_credit_data_vector
 from src.modules.GOOGLE_SHEETS.week_n_redeem import update_week_n_redeem
+from src_oop.jobs.unit.update_adv_participants import update_adv_participants_to_gs
 from src_oop.services.googles_sheets_job.annual_procurement_plan import transport_data_to_annual_procurement_plan
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 from src_oop.jobs.conditional_calculations.run import conditional_calculation_to_db_run, update_conditional_calculations_to_gs
@@ -113,5 +114,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "wms_stocks_run": {
         "func": smart_run(wms_stocks_run),
         "desc": "📦 Выгрузка данных об остатках из сервиса WMS"
+    },
+    # Таблица юнит-экономики
+    "update_adv_participants_to_gs": {
+        "func": smart_run(update_adv_participants_to_gs),
+        "desc": "🚗 Выгрузка данных об участии артикулов в рекламных кампаниях в таблице Юнит-экономики"
     },
 }

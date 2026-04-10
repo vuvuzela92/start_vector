@@ -17,15 +17,18 @@ class HTTPClient:
         session: aiohttp.ClientSession,
         api_key: Optional[str] = None,
         account: Optional[str] = None,
-        timeout: float = 1.1
+        timeout: float = 1.1,
+        headers: dict = None
     ):
         self.session = session
         self.api_key = api_key
         self.account = account or "Public"
         self.timeout = aiohttp.ClientTimeout(total=timeout)
-        
-        # 🔑 Заголовки ТОЛЬКО если есть токен
-        self.headers = {"Authorization": api_key} if api_key else {}
+        if headers:
+            self.headers = headers
+
+        else:
+            self.headers = {"Authorization": api_key} if api_key else {}
     
     async def request(
         self,
