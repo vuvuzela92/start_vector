@@ -23,7 +23,7 @@ def transport_data_to_annual_procurement_plan():
     # Убираем знаки валюты из колонки
     df_merge['Сумма заказа, RMB'] = df_merge['Сумма заказа, RMB'].apply(clean_currency_value)
     # Выбираем статусы для фильтрации
-    cancel_statuses = ["отмена", "в планах", "прибыло"]
+    cancel_statuses = plan.cancel_statuses
     # Фильтрация
     df_merge = df_merge.loc[~df_merge['Статус'].isin(cancel_statuses)]
     # Добавляем колонку, указывающую на время обновления

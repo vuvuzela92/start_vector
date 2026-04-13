@@ -22,6 +22,8 @@ class Annual_procurement_plan:
         self.google_connect_to = GoogleTabs(self.table_to, self.sheet_to)
         # Колонки для фильтрации
         self.choosen_orders_columns = ["wild", "Модель", "Статус", "Кол-во к заказу", "Сумма заказа, RMB", "нед прибытие"]
+        # Статусы для фильтрации
+        self.cancel_statuses = ["отмена", "в планах", "прибыло"]
 
     def get_white_orders_data(self):
         # Подключаемся к листу Заказы белые ТЕСТ и получаем данные
