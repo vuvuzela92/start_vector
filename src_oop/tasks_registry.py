@@ -10,7 +10,7 @@ from src.modules.GOOGLE_SHEETS.calculation_of_purchases_russia import update_pen
 from src.modules.GOOGLE_SHEETS.credit_analyze_vector import update_credit_data_vector
 from src.modules.GOOGLE_SHEETS.week_n_redeem import update_week_n_redeem
 from src_oop.jobs.unit.update_adv_participants import update_adv_participants_to_gs
-from src_oop.services.googles_sheets_job.annual_procurement_plan import transport_data_to_annual_procurement_plan
+from src_oop.jobs.annual_procurement_plan.run import transport_data_to_annual_procurement_plan
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 from src_oop.jobs.conditional_calculations.run import conditional_calculation_to_db_run, update_conditional_calculations_to_gs
 from src_oop.jobs.wms_stocks.run import wms_stocks_run

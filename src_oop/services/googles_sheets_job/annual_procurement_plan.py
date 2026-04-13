@@ -70,7 +70,7 @@ def transport_data_to_annual_procurement_plan():
 
     # Выбираем нужные колонки
     # choosen_columns = ["wild", "Статус", "Кол-во к заказу"]
-    cancel_statuses = ["отмена", "в планах"]
+    cancel_statuses = ["отмена", "в планах", "прибыло"]
     # Фильтрация
     df_short = df.loc[~df['Статус'].isin(cancel_statuses)]
     df_short["updatet_at"] = (datetime.now()).strftime("%Y-%m-%d %H:%M:%S")

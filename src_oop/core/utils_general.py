@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 # Импорт библиотеки для работы с JSON.
 import json
+# Импорт библиотеки для работы с числами
+import numpy as np
 # Импорт библиотеки для работы с переменными окружения.
 from dotenv import load_dotenv
 load_dotenv()
@@ -52,4 +54,34 @@ def load_sima_land_tokens(filename: str = None) -> dict:
     except json.JSONDecodeError:
         print(f"Ошибка: файл {filename} содержит некорректный JSON")
         raise
-    
+
+
+
+def clean_currency_value(val):
+        """
+        Очищает строку от мусора и конвертирует в число.
+        """
+        # 1. Обрабатываем None, NaN и пустые значения
+        if val is None or (isinstance(val, float) and np.isnan(val)):
+            return np.nan
+        
+        # 2. Преобразуем в строку 
+        val = str(val).strip()
+        
+        # 3. Пустая строка
+        if val == '' or val.lower() == 'nan':
+            return np.nan
+        
+        # 4. Удаляем знаки валют и все виды пробелов
+        for char in ['$', '€', '¥', '₽', 'RMB', 'руб', 'р.', ' ', '\u00A0', '\t', '\n']:
+            val = val.replace(char, '')
+        
+        # 5. Заменяем запятую на точку
+        val = val.replace(',', '.')
+        
+        # 6. Конвертируем в число
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return np.nan
+        
