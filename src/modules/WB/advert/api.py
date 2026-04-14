@@ -69,7 +69,7 @@ async def get_advert_spend(account: str, date_from: str, date_to: str, api_token
     # Интервал для запросов на ВБ
     delay = 1
     # Количество попыток в случае ошибки
-    attempts = 3
+    attempts = 10
     for attempt in range(attempts+1):
         try:
                 async with session.get(url, headers=headers, params=params, timeout=15) as res:

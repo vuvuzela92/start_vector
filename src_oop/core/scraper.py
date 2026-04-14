@@ -17,7 +17,7 @@ class HTTPClient:
         session: aiohttp.ClientSession,
         api_key: Optional[str] = None,
         account: Optional[str] = None,
-        timeout: float = 1.1,
+        timeout: float = 60.0,
         headers: dict = None
     ):
         self.session = session
