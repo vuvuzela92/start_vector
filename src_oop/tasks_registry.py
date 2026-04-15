@@ -16,6 +16,7 @@ from src_oop.jobs.conditional_calculations.run import conditional_calculation_to
 from src_oop.jobs.wb_api.measurements.run import collect_and_store_measurements, set_measurements_to_google
 from src_oop.jobs.wms_stocks.run import wms_stocks_run
 from src_oop.jobs.fin_reports_analyze.run import update_monthly_report, update_weekly_profit_report, update_outcomes_detalize, update_fin_deductions_mv, update_deductions_by_month, update_cash_flow_writeoffs, update_stock_analyze
+from src_oop.jobs.calculation_of_purchases_russia.run import set_orders_quantity
 
 def smart_run(func: Callable):
     """
@@ -130,6 +131,9 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "set_measurements_to_google": {
         "func": smart_run(set_measurements_to_google),
         "desc": "📤 Запись данных о замерах в Google Sheets"
-    }
-
+    },
+    "set_orders_quantity": {
+        "func": smart_run(set_orders_quantity),
+        "desc": "📤 Запись данных о количестве заказов в таблицу Расчет закупки Россия"
+    },
 }
