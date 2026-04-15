@@ -80,7 +80,7 @@ class Database:
         table = Table(table_name, metadata, *columns)
         metadata.create_all(engine)
 
-        if not data:
+        if data is None or (hasattr(data, 'empty') and data.empty):
             return
 
         if hasattr(data, "to_dict"):
