@@ -7,6 +7,7 @@ import pandas as pd
 from datetime import datetime
 from gspread_dataframe import set_with_dataframe
 from datetime import datetime
+from gspread.utils import rowcol_to_a1
 
 from pathlib import Path
 from dotenv import load_dotenv
@@ -150,7 +151,8 @@ class GoogleTabs():
                 print(f"❌ Ошибка при динамическом обновлении: {e}")
 
     def set_df_to_google(self, df: pd.DataFrame):
-        """Функция для полной перезаписи листа данными из DataFrame"""
+
+        # df['updated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         try:
             google_connect = GoogleTabs(
@@ -158,21 +160,36 @@ class GoogleTabs():
                 sheet_title=self.sheet_title.title
             )
 
-            worksheet = google_connect.sheet_title
+            ws = google_connect.sheet_title
 
-            # ✅ 1. Полная очистка листа
-            worksheet.clear()
+            # --- 1. Подготовка данных ---
+            df = df.copy()
 
-            # ✅ 2. Запись нового датафрейма
-            set_with_dataframe(worksheet, df)
+            # сохраняем типы
+            df = df.where(pd.notnull(df), None)
+            values = [df.columns.tolist()] + df.values.tolist()
 
-            print("Лист очищен и данные записаны заново")
+            # Определяем конечный диапазон для обновления (например, A1:Z1000)
+            rows = len(values) # Количество строк, включая заголовок
+            cols = len(values[0]) # Количество столбцов
+
+            end_range = rowcol_to_a1(rows, cols) # Конвертируем в формат A1 (например, Z1000)
+
+            # --- 2. Перезапись данных ---
+            ws.update(
+                        f"A1:{end_range}",
+                        values,
+                        value_input_option="USER_ENTERED"
+                    )
+
+            # --- 3. если таблица была больше раньше ---
+            ws.batch_clear([f"{end_range}:Z"])
+
+            print("Таблица полностью обновлена")
 
         except gspread.exceptions.SpreadsheetNotFound:
             print(f"Не найдена таблица {self.table_title}")
         except gspread.exceptions.WorksheetNotFound:
-            print(f"Не найден лист {self.sheet_title.title} в таблице {self.table_title}")
-        except StopIteration:
-            print(f"Не найден лист {self.sheet_title.title} в таблице {self.table_title}")
-        except RuntimeError as e:
-            print(f"Ошибка подключения: {e}")
+            print(f"Не найден лист {self.sheet_title.title}")
+        except Exception as e:
+            print(f"Ошибка: {e}")
