@@ -150,20 +150,29 @@ class GoogleTabs():
                 print(f"❌ Ошибка при динамическом обновлении: {e}")
 
     def set_df_to_google(self, df: pd.DataFrame):
-            """Функция для вставки в таблицу Анализ_фин_отчетов_Вектор данных о еженедельных удержаниях"""
-            
-            # Получаем датафрейм из БД
-            df['updatet_at'] = datetime.now().strftime('%Y-%m-%d %H-%M-%S')
-            # Создаем соединение с гугл-таблицей
-            try:
-                google_connect = GoogleTabs(table_title=self.table_title, sheet_title=self.sheet_title.title)
-                set_with_dataframe(google_connect.sheet_title, df)
-                print("Данные вставлены в гугл таблицу")
-            except gspread.exceptions.SpreadsheetNotFound:
-                print(f"Не найдена таблица {self.table_title}")
-            except gspread.exceptions.WorksheetNotFound as e:
-                print(f"Не найден лист {self.sheet_title.title} в таблице {self.table_title}")
-            except StopIteration:
-                print(f"Не найден лист {self.sheet_title.title} в таблице {self.table_title}")
-            except RuntimeError as e:
-                print(f"Ошибка подключения: {e}")
+        """Функция для полной перезаписи листа данными из DataFrame"""
+
+        try:
+            google_connect = GoogleTabs(
+                table_title=self.table_title,
+                sheet_title=self.sheet_title.title
+            )
+
+            worksheet = google_connect.sheet_title
+
+            # ✅ 1. Полная очистка листа
+            worksheet.clear()
+
+            # ✅ 2. Запись нового датафрейма
+            set_with_dataframe(worksheet, df)
+
+            print("Лист очищен и данные записаны заново")
+
+        except gspread.exceptions.SpreadsheetNotFound:
+            print(f"Не найдена таблица {self.table_title}")
+        except gspread.exceptions.WorksheetNotFound:
+            print(f"Не найден лист {self.sheet_title.title} в таблице {self.table_title}")
+        except StopIteration:
+            print(f"Не найден лист {self.sheet_title.title} в таблице {self.table_title}")
+        except RuntimeError as e:
+            print(f"Ошибка подключения: {e}")
