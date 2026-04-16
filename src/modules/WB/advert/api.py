@@ -117,7 +117,7 @@ async def get_advert_spend(account: str, date_from: str, date_to: str, api_token
                 return None     
 
 
-async def fetch_advert_spend_info(tokens: dict, date_from = (datetime.now()-timedelta(days=3)).strftime('%Y-%m-%d'), date_to = (datetime.now()-timedelta(days=1)).strftime('%Y-%m-%d')):
+async def fetch_advert_spend_info(tokens: dict, date_from = (datetime.now()-timedelta(days=3)).strftime('%Y-%m-%d'), date_to = (datetime.now()).strftime('%Y-%m-%d')):
     """Асинхронная функция для получения информации о рекламных кампаниях для всех аккаунтов и токенов."""
     # Асинхронно обрабатываем все аккаунты и токены
     async with aiohttp.ClientSession() as session:
