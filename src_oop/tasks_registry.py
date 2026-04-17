@@ -13,6 +13,7 @@ from src_oop.jobs.unit.update_adv_participants import update_adv_participants_to
 from src_oop.jobs.annual_procurement_plan.run import transport_data_to_annual_procurement_plan
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 from src_oop.jobs.conditional_calculations.run import conditional_calculation_to_db_run, update_conditional_calculations_to_gs
+from src_oop.jobs.unit.update_wild_statuses import update_wild_statuses
 from src_oop.jobs.wb_api.measurements.run import collect_and_store_measurements, set_measurements_to_google
 from src_oop.jobs.wms_stocks.run import wms_stocks_run
 from src_oop.jobs.fin_reports_analyze.run import update_monthly_report, update_weekly_profit_report, update_outcomes_detalize, update_fin_deductions_mv, update_deductions_by_month, update_cash_flow_writeoffs, update_stock_analyze
@@ -135,5 +136,9 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "set_orders_quantity": {
         "func": smart_run(set_orders_quantity),
         "desc": "📤 Запись данных о количестве заказов в таблицу Расчет закупки Россия"
+    },
+    "update_wild_statuses": {
+        "func": smart_run(update_wild_statuses),
+        "desc": "🚩 Обновление статусов вилдов в Google Sheets"
     },
 }

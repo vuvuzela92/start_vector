@@ -11,5 +11,6 @@ query = """
 
 google_table = {"title": "Расчет закупки Россия",
                 "calculate_sheet": "Расчет закупки",
-                "orders_sheet": "БД_Заказы"
+                "orders_sheet": "БД_Заказы",
+                "statuses_sheet": "Статичный лист статусы",
                 }

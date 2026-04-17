@@ -10,3 +10,6 @@ class Calculation_of_purchases_russia:
         self.google_table = google_table.get("title")
         self.sheet = google_table.get("orders_sheet")
         self.google_connect = GoogleTabs(self.google_table, self.sheet)
+        # Получаем статусы из гугл-таблицы
+        self.statuses_sheet = google_table.get("statuses_sheet")
+        self.google_connect_statuses = GoogleTabs(self.google_table, self.statuses_sheet)
