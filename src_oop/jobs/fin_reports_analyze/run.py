@@ -45,8 +45,6 @@ def update_outcomes_detalize(table_name: str = "Анализ_фин_отчето
     engine = Database.get_engine()
     # Получаем датафрейм из БД
     df = FinReportsAnalyze(engine).get_outcomes_detalize()
-    df['updatet_at'] = datetime.now().strftime('%Y-%m-%d %H-%M-%S')
-
     
     # Определяем таблицу и лист для вставки данных
     table_name = fin_rep_analyze.get("title")
@@ -56,7 +54,7 @@ def update_outcomes_detalize(table_name: str = "Анализ_фин_отчето
         # Создаем соединение с гугл-таблицей
         google_connect = GoogleTabs(table_title=table_name, sheet_title=sheet_name)
         # Вставляем данные в гугл-таблицу
-        set_with_dataframe(google_connect.sheet_title, df)
+        google_connect.set_df_to_google(df)
         print("Данные вставлены в гугл таблицу")
     except gspread.exceptions.SpreadsheetNotFound:
         print(f"Не найдена таблица {table_name}")
@@ -73,7 +71,6 @@ def update_fin_deductions_mv(table_name: str = "Анализ_фин_отчето
     engine = Database.get_engine()
     # Получаем датафрейм из БД
     df = FinReportsAnalyze(engine).get_fin_deductions_mv()
-    df['updatet_at'] = datetime.now().strftime('%Y-%m-%d %H-%M-%S')
 
     
     # Определяем таблицу и лист для вставки данных
@@ -84,7 +81,7 @@ def update_fin_deductions_mv(table_name: str = "Анализ_фин_отчето
         # Создаем соединение с гугл-таблицей
         google_connect = GoogleTabs(table_title=table_name, sheet_title=sheet_name)
         # Вставляем данные в гугл-таблицу
-        set_with_dataframe(google_connect.sheet_title, df)
+        google_connect.set_df_to_google(df)
         print("Данные вставлены в гугл таблицу")
     except gspread.exceptions.SpreadsheetNotFound:
         print(f"Не найдена таблица {table_name}")

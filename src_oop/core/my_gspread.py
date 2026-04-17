@@ -152,7 +152,15 @@ class GoogleTabs():
 
     def set_df_to_google(self, df: pd.DataFrame):
 
-        # df['updated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        df['updated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        date_columns = ['date', 'updated_at', 'created_at', 'date_from', 'date_to', 'dt', 'start_date', 'end_date']
+        # Преобразуем все колонки с датами в строковый формат, если они есть в DataFrame
+        for col in date_columns:
+            if col in df.columns:  
+                df[col] = df[col].astype(str)
+            else:
+                continue
 
         try:
             google_connect = GoogleTabs(

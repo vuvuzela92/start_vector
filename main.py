@@ -1,6 +1,7 @@
 import argparse
 import sys
 from src_oop.tasks_registry import TASKS
+import traceback
 
 def main():
     parser = argparse.ArgumentParser(description="Регулировщик запуска задач")
@@ -28,11 +29,17 @@ def main():
     print(f"{'='*50}\n")
     
     try:
-        # Запуск функции (smart_run уже подготовил её)
+        # Запуск функции
         task_data["func"]()
         print(f"\n✅ Задача '{args.task}' успешно завершена.")
     except Exception as e:
-        print(f"\n❌ Ошибка при выполнении задачи '{args.task}': {e}")
+        # Выводим заголовок ошибки
+        print(f"\n❌ Ошибка при выполнении задачи '{args.task}':")
+        
+        # Печатаем подробный путь ошибки (traceback)
+        # file=sys.stdout гарантирует, что текст попадет в стандартный вывод
+        traceback.print_exc(file=sys.stdout)
+        
         sys.exit(1)
 
 if __name__ == "__main__":

@@ -33,13 +33,12 @@ def conditional_calculation_to_db_run():
 
 def update_conditional_calculations_to_gs(table_name: str = "Условный расчет", sheet_name: str = "Справочная информация"):
     df = ConditionalCalculationsRepository().get_conditional_calculations()
-    df['updatet_at'] = datetime.now().strftime('%Y-%m-%d %H-%M-%S')
 
     try:
         # Создаем соединение с гугл-таблицей
         google_connect = GoogleTabs(table_title=table_name, sheet_title=sheet_name)
         # Вставляем данные в гугл-таблицу
-        set_with_dataframe(google_connect.sheet_title, df)
+        google_connect.set_df_to_google(df)
         print("Данные вставлены в гугл таблицу")
     except gspread.exceptions.SpreadsheetNotFound:
         print(f"Не найдена таблица {table_name}")

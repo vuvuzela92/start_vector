@@ -25,13 +25,14 @@ class FinReportsAnalyze:
 
     def set_processed_df_to_google(self, query, table_name: str = None, sheet_name: str = None):
         """Функция для вставки в таблицу Анализ_фин_отчетов_Вектор данных о еженедельных удержаниях"""
+         # Получаем датафрейм из БД
         df = self.get_df_from_db(query)
-        # Получаем датафрейм из БД
-        df['updatet_at'] = datetime.now().strftime('%Y-%m-%d %H-%M-%S')
+        df['month'] = df['month'].astype(str)
+       
         # Создаем соединение с гугл-таблицей
         try:
             google_connect = GoogleTabs(table_title=table_name, sheet_title=sheet_name)
-            set_with_dataframe(google_connect.sheet_title, df)
+            google_connect.set_df_to_google(df)
             print("Данные вставлены в гугл таблицу")
         except gspread.exceptions.SpreadsheetNotFound:
             print(f"Не найдена таблица {table_name}")
