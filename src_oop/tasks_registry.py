@@ -87,7 +87,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
     # Таблица в гугл Анализ_фин_отчетов_Вектор
     "update_monthly_report": {
         "func": smart_run(update_monthly_report),
-        "desc": "💵 Выгрузка сводных данных фин отчета за месяц"
+        "desc": "💵 Выгрузка сводных данных фин отчета за месяц в отчет_по_месяцам"
     },  
     "update_weekly_profit_report": {
         "func": smart_run(update_weekly_profit_report),
@@ -95,15 +95,15 @@ TASKS: Dict[str, Dict[str, Any]] = {
     },  
     "update_outcomes_detalize": {
         "func": smart_run(update_outcomes_detalize),
-        "desc": "💵 Выгрузка данных фин отчета о еженедельных удержаниях"
+        "desc": "💵 Выгрузка данных фин отчета о еженедельных удержаниях в детализация_расходов"
     }, 
     "update_fin_deductions_mv": {
         "func": smart_run(update_fin_deductions_mv),
-        "desc": "💵 Выгрузка детализированных данных фин отчета об удержаниях"
+        "desc": "💵 Выгрузка детализированных данных фин отчета об удержаниях в удержания_детализация"
     }, 
     "update_deductions_by_month": {
         "func": smart_run(update_deductions_by_month),
-        "desc": "💵 Выгрузка детализированных данных фин отчета об удержаниях, сгруппированных по типам"
+        "desc": "💵 Выгрузка детализированных данных фин отчета об удержаниях, сгруппированных по видам удержания_детализация_месяц"
     }, 
     "update_cash_flow_writeoffs": {
         "func": smart_run(update_cash_flow_writeoffs),

@@ -7,7 +7,7 @@ import gspread
 from src_oop.core.my_gspread import GoogleTabs
 from src_oop.storage.google_sheets.google_sheets import fin_rep_analyze
 
-from src_oop.jobs.fin_reports_analyze.queries import query_deductions_by_month, query_cash_flow_writeoffs, query_monthly_report, query_stock_analyze
+from src_oop.jobs.fin_reports_analyze.queries import query_deductions_by_month, query_cash_flow_writeoffs,query_monthly_report, query_stock_analyze
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ def update_weekly_profit_report():
         # Создаем соединение с гугл-таблицей
         google_connect = GoogleTabs(table_title=table_name, sheet_title=sheet_name)
         # Вставляем данные в гугл-таблицу
-        set_with_dataframe(google_connect.sheet_title, df)
+        google_connect.set_df_to_google(df)
         print("Данные вставлены в гугл таблицу")
     except gspread.exceptions.SpreadsheetNotFound:
         print(f"Не найдена таблица {table_name}")
@@ -101,10 +101,24 @@ def update_deductions_by_month():
 
 def update_cash_flow_writeoffs():
     """ Выгрузка детализированных данных по затратам из 1С Анализ_фин_отчетов_Вектор, лист расходы_по_банку"""
-    analyze = FinReportsAnalyze()
-    table_name = fin_rep_analyze.get("title")
-    sheet_name = fin_rep_analyze.get("query_cash_flow_writeoffs")
-    analyze.set_processed_df_to_google(query_cash_flow_writeoffs, table_name=table_name, sheet_name=sheet_name)
+    fin_rep = FinReportsAnalyze()
+    df = fin_rep.get_update_cash_flow_writeoffs()
+    table_name: str = fin_rep_analyze.get("title")
+    sheet_name: str = fin_rep_analyze.get("query_cash_flow_writeoffs")
+    try:
+        # Создаем соединение с гугл-таблицей
+        google_connect = GoogleTabs(table_title=table_name, sheet_title=sheet_name)
+        # Вставляем данные в гугл-таблицу
+        google_connect.set_df_to_google(df)
+        print("Данные вставлены в гугл таблицу")
+    except gspread.exceptions.SpreadsheetNotFound:
+        print(f"Не найдена таблица {table_name}")
+    except gspread.exceptions.WorksheetNotFound as e:
+        print(f"Не найден лист {sheet_name} в таблице {table_name}")
+    except StopIteration:
+        print(f"Не найден лист {sheet_name} в таблице {table_name}")
+    except RuntimeError as e:
+        print(f"Ошибка подключения: {e}")
 
 def update_monthly_report():
     analyze = FinReportsAnalyze()

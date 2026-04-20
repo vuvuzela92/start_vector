@@ -4,6 +4,7 @@ from datetime import datetime
 import gspread
 from src_oop.core.my_gspread import GoogleTabs
 from gspread_dataframe import set_with_dataframe
+from src_oop.jobs.fin_reports_analyze.queries import query_deductions_by_month, query_cash_flow_writeoffs, query_monthly_report, query_stock_analyze
 
 from src_oop.core.database import Database
 
@@ -21,13 +22,21 @@ class FinReportsAnalyze:
         query = text(query)
         # Возвращаем результат в виде DataFrame от SQL-запроса
         return Database.read_sql_to_dataframe(query)  
+    
+    def get_update_cash_flow_writeoffs(self):
+        """ Получение данных по списаниям денежных средств из 1С Анализ_фин_отчетов_Вектор для выгрузки в гугл-таблицу"""
+        query = text(query_cash_flow_writeoffs)
+        return Database.read_sql_to_dataframe(query)
 
 
     def set_processed_df_to_google(self, query, table_name: str = None, sheet_name: str = None):
         """Функция для вставки в таблицу Анализ_фин_отчетов_Вектор данных о еженедельных удержаниях"""
          # Получаем датафрейм из БД
         df = self.get_df_from_db(query)
-        df['month'] = df['month'].astype(str)
+        # try:
+        #     df['Месяц'] = df['Месяц'].astype(str)
+        # except KeyError:
+        #     df['month'] = df['month'].astype(str)
        
         # Создаем соединение с гугл-таблицей
         try:
@@ -349,12 +358,6 @@ class FinReportsAnalyze:
             WHERE f.grouped_bonus_type_name IS NOT NULL
             ORDER BY f.date_from desc;
         """)
-        # Возвращаем результат в виде DataFrame от SQL-запроса
-        return Database.read_sql_to_dataframe(query)
-    
-    def get_df_from_db(self,query: str):
-        """Универсальная функция для получения DataFrame из БД по произвольному SQL-запросу"""
-        query = text(query)
         # Возвращаем результат в виде DataFrame от SQL-запроса
         return Database.read_sql_to_dataframe(query)
     
