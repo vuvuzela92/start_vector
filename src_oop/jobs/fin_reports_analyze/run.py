@@ -17,27 +17,14 @@ def update_weekly_profit_report():
     engine = Database.get_engine()
     # Получаем датафрейм из БД
     df = FinReportsAnalyze(engine).get_weekly_profit_report()
-    df['updatet_at'] = datetime.now().strftime('%Y-%m-%d %H-%M-%S')
-
-    
     # Определяем таблицу и лист для вставки данных
     table_name = fin_rep_analyze.get("title")
     sheet_name = fin_rep_analyze.get("weekly_rep")
-
-    try:
-        # Создаем соединение с гугл-таблицей
-        google_connect = GoogleTabs(table_title=table_name, sheet_title=sheet_name)
-        # Вставляем данные в гугл-таблицу
-        google_connect.set_df_to_google(df)
-        print("Данные вставлены в гугл таблицу")
-    except gspread.exceptions.SpreadsheetNotFound:
-        print(f"Не найдена таблица {table_name}")
-    except gspread.exceptions.WorksheetNotFound as e:
-        print(f"Не найден лист {sheet_name} в таблице {table_name}")
-    except StopIteration:
-        print(f"Не найден лист {sheet_name} в таблице {table_name}")
-    except RuntimeError as e:
-        print(f"Ошибка подключения: {e}")
+    # Создаем соединение с гугл-таблицей
+    google_connect = GoogleTabs(table_title=table_name, sheet_title=sheet_name)
+    # Вставляем данные в гугл-таблицу
+    google_connect.set_df_to_google(df)
+    print("Данные вставлены в гугл таблицу")
 
 def update_outcomes_detalize(table_name: str = "Анализ_фин_отчетов_Вектор", sheet_name: str = "отчет_по_неделям"):
     """Функция для вставки в таблицу Анализ_фин_отчетов_Вектор данных о еженедельных удержаниях"""
@@ -103,28 +90,22 @@ def update_cash_flow_writeoffs():
     """ Выгрузка детализированных данных по затратам из 1С Анализ_фин_отчетов_Вектор, лист расходы_по_банку"""
     fin_rep = FinReportsAnalyze()
     df = fin_rep.get_update_cash_flow_writeoffs()
-    table_name: str = fin_rep_analyze.get("title")
+    table_name = fin_rep_analyze.get("title")
     sheet_name: str = fin_rep_analyze.get("query_cash_flow_writeoffs")
-    try:
-        # Создаем соединение с гугл-таблицей
-        google_connect = GoogleTabs(table_title=table_name, sheet_title=sheet_name)
-        # Вставляем данные в гугл-таблицу
-        google_connect.set_df_to_google(df)
-        print("Данные вставлены в гугл таблицу")
-    except gspread.exceptions.SpreadsheetNotFound:
-        print(f"Не найдена таблица {table_name}")
-    except gspread.exceptions.WorksheetNotFound as e:
-        print(f"Не найден лист {sheet_name} в таблице {table_name}")
-    except StopIteration:
-        print(f"Не найден лист {sheet_name} в таблице {table_name}")
-    except RuntimeError as e:
-        print(f"Ошибка подключения: {e}")
+    # Создаем соединение с гугл-таблицей
+    google_connect = GoogleTabs(table_title=table_name, sheet_title=sheet_name)
+    # Вставляем данные в гугл-таблицу
+    google_connect.set_df_to_google(df)
 
 def update_monthly_report():
-    analyze = FinReportsAnalyze()
+    fin_rep = FinReportsAnalyze()
+    df = fin_rep.get_monthly_profit_report()
     table_name = fin_rep_analyze.get("title")
     sheet_name = fin_rep_analyze.get("monthly_rep")
-    analyze.set_processed_df_to_google(query_monthly_report, table_name=table_name, sheet_name=sheet_name)
+    # Создаем соединение с гугл-таблицей
+    google_connect = GoogleTabs(table_title=table_name, sheet_title=sheet_name)
+    # Вставляем данные в гугл-таблицу
+    google_connect.set_df_to_google(df)
 
 def update_stock_analyze():
     analyze = FinReportsAnalyze()
