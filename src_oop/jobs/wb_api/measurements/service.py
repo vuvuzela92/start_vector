@@ -74,6 +74,8 @@ def get_measurements():
     db = Database()
     # Получаем дату последнего замера из БД, чтобы не запрашивать данные, которые уже есть
     table_name = table['title']
-    query = f"""SELECT * FROM {table_name} ORDER BY date DESC"""
+    query = f"""SELECT * FROM {table_name}
+       WHERE "date" >= CURRENT_DATE - INTERVAL '30 days'
+       ORDER BY date DESC"""
     df = db.read_sql_to_dataframe(query)
     return df
