@@ -18,6 +18,7 @@ from src_oop.jobs.wb_api.measurements.run import collect_and_store_measurements,
 from src_oop.jobs.wms_stocks.run import wms_stocks_run
 from src_oop.jobs.fin_reports_analyze.run import update_monthly_report, update_weekly_profit_report, update_outcomes_detalize, update_fin_deductions_mv, update_deductions_by_month, update_cash_flow_writeoffs, update_stock_analyze
 from src_oop.jobs.calculation_of_purchases_russia.run import set_orders_quantity
+from src_oop.jobs.autopilot.run import update_individual_info
 
 def smart_run(func: Callable):
     """
@@ -123,22 +124,28 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_adv_participants_to_gs),
         "desc": "🚗 Выгрузка данных об участии артикулов в рекламных кампаниях в таблице Юнит-экономики"
     },
+    "update_wild_statuses": {
+        "func": smart_run(update_wild_statuses),
+        "desc": "🚩 Обновление статусов вилдов в Юнитке"
+    },
     # === Получение данных с WB===
     # python main.py collect_and_store_measurements > output.txt 2>&1 - для запуска из консоли и сохранения логов в файл
     "collect_and_store_measurements": {
         "func": smart_run(collect_and_store_measurements),
-        "desc": "📥 Сбор и сохранение данных о замерах"
+        "desc": "📥 Сбор и сохранение данных о замерах в БД"
     },
     "set_measurements_to_google": {
         "func": smart_run(set_measurements_to_google),
-        "desc": "📤 Запись данных о замерах в Google Sheets"
+        "desc": "📤 Запись данных о замерах в таблице Дизайн по новинкам"
     },
+    # Расчет закупки Россия
     "set_orders_quantity": {
         "func": smart_run(set_orders_quantity),
         "desc": "📤 Запись данных о количестве заказов в таблицу Расчет закупки Россия"
     },
-    "update_wild_statuses": {
-        "func": smart_run(update_wild_statuses),
-        "desc": "🚩 Обновление статусов вилдов в Google Sheets"
+    # Панель Управления
+    "update_individual_info": {
+        "func": smart_run(update_individual_info),
+        "desc": "🚩 Обновление данных об индивидуальных условиях в ПУ на листе ИУ_ИНФО"
     },
 }
