@@ -1,9 +1,5 @@
 import pandas as pd
-from sqlalchemy import engine, text
-from datetime import datetime
-import gspread
-from src_oop.core.my_gspread import GoogleTabs
-from gspread_dataframe import set_with_dataframe
+from sqlalchemy import text
 from src_oop.jobs.fin_reports_analyze.queries import query_wild_frm_products, query_cash_flow_writeoffs, query_monthly_report, query_stock_analyze, query_outcomes_detalize, query_fin_deductions_mv, query_daily_fin_reports_deductions_agg
 
 from src_oop.core.database import Database

@@ -154,7 +154,7 @@ class GoogleTabs():
 
         df['updated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        date_columns = ['date', 'updated_at', 'created_at', 'date_from', 'date_to', 'dt', 'start_date', 'end_date', 'month']
+        date_columns = ['date', 'updated_at', 'created_at', 'date_from', 'date_to', 'dt', 'start_date', 'end_date', 'month', 'supply_date']
         # Преобразуем все колонки с датами в строковый формат, если они есть в DataFrame
         for col in date_columns:
             if col in df.columns:  

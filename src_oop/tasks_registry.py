@@ -10,14 +10,21 @@ from src.modules.GOOGLE_SHEETS.calculation_of_purchases_russia import update_pen
 from src.modules.GOOGLE_SHEETS.credit_analyze_vector import update_credit_data_vector
 from src.modules.GOOGLE_SHEETS.week_n_redeem import update_week_n_redeem
 from src_oop.jobs.unit.update_adv_participants import update_adv_participants_to_gs
-from src_oop.jobs.annual_procurement_plan.run import transport_data_to_annual_procurement_plan
+# Годовой план закупа 2026
+from src_oop.jobs.annual_procurement_plan.run import transport_data_to_annual_procurement_plan, transport_unit_data_to_annual_procurement_plan, transport_supplies_data_to_annual_procurement_plan
+# Артикульный анализ
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
+# Условный расчет
 from src_oop.jobs.conditional_calculations.run import conditional_calculation_to_db_run, update_conditional_calculations_to_gs
 from src_oop.jobs.unit.update_wild_statuses import update_wild_statuses
+# Замеры товара
 from src_oop.jobs.wb_api.measurements.run import collect_and_store_measurements, set_measurements_to_google
 from src_oop.jobs.wms_stocks.run import wms_stocks_run
+# Финансовые отчеты
 from src_oop.jobs.fin_reports_analyze.run import update_monthly_report, update_weekly_profit_report, update_outcomes_detalize, update_fin_deductions_mv, update_deductions_by_month, update_cash_flow_writeoffs, update_stock_analyze
+# Таблица Расчет закупки Россия
 from src_oop.jobs.calculation_of_purchases_russia.run import set_orders_quantity
+# Таблица Панель Управления
 from src_oop.jobs.autopilot.run import update_individual_info
 
 def smart_run(func: Callable):
@@ -69,7 +76,14 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(transport_data_to_annual_procurement_plan),
         "desc": "🔁 Запуск обновления в Годовой план закупа 2026"
     },
-
+    "transport_unit_data_to_annual_procurement_plan": {
+        "func": smart_run(transport_unit_data_to_annual_procurement_plan),
+        "desc": "🔁 Запуск обновления данных юнитки в Годовой план закупа 2026"
+    },
+    "transport_supplies_data_to_annual_procurement_plan": {
+        "func": smart_run(transport_supplies_data_to_annual_procurement_plan),
+        "desc": "🔁 Запуск обновления данных поставок в Годовой план закупа 2026"
+    },
     # Артикульный анализ
     "orders_article_analyze_run": {
         "func": smart_run(orders_article_analyze_run),

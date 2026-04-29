@@ -1,13 +1,12 @@
 # Импорт внутренних модулей
-from src_oop.jobs.annual_procurement_plan.annual_procurement_plan import Annual_procurement_plan
+from src_oop.jobs.annual_procurement_plan.annual_procurement_plan import AnnualProcurementPlan
 from src_oop.core.utils_general import clean_currency_value
 # Импорт внешних библиотек
 import pandas as pd
-from datetime import datetime
 
 def transport_data_to_annual_procurement_plan():
     # Создаем экземпляр класса и получаем данные
-    plan = Annual_procurement_plan()
+    plan = AnnualProcurementPlan()
     df_white_orders = plan.get_white_orders_data()
     # Выбираем нужные колонки
     choosen_orders_columns = plan.choosen_orders_columns
@@ -26,7 +25,24 @@ def transport_data_to_annual_procurement_plan():
     cancel_statuses = plan.cancel_statuses
     # Фильтрация
     df_merge = df_merge.loc[~df_merge['Статус'].isin(cancel_statuses)]
-    # Добавляем колонку, указывающую на время обновления
-    df_merge["updatet_at"] = (datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
     # Обновляем данные в таблице Годовой план закупа 2026
-    plan.set_data(df_merge)
+    plan.set_data(plan.google_connect_to, df_merge)
+
+
+def transport_unit_data_to_annual_procurement_plan():
+    # Создаем экземпляр класса и получаем данные
+    plan = AnnualProcurementPlan()
+    df_unit = plan.get_unit_data()
+    df_unit_short = df_unit[plan.unit_cols]
+    df_unit_short = df_unit_short.groupby('wild').agg({  
+        'ФБО': 'first'
+    }).reset_index()
+    # Обновляем данные в таблице Годовой план закупа 2026
+    plan.set_data(plan.annual_plan_connect_to_unit_sheet, df_unit_short)
+
+def transport_supplies_data_to_annual_procurement_plan():
+    # Создаем экземпляр класса и получаем данные
+    plan = AnnualProcurementPlan()
+    df_supplies = plan.get_supplies_data()
+    # Обновляем данные в таблице Годовой план закупа 2026
+    plan.set_data(plan.annual_plan_connect_to_supply_sheet, df_supplies)
