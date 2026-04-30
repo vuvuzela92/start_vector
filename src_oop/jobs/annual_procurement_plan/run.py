@@ -34,8 +34,19 @@ def transport_unit_data_to_annual_procurement_plan():
     plan = AnnualProcurementPlan()
     df_unit = plan.get_unit_data()
     df_unit_short = df_unit[plan.unit_cols]
+    # Используем str.replace с регулярным выражением
+    df_unit_short['ФБО'] = (
+        df_unit_short['ФБО']
+        .astype(str)
+        .str.replace(r'[\s\xa0]+', '', regex=True)
+    )
+    # errors='coerce' превратит некорректные строки в NaN
+    df_unit_short['ФБО'] = pd.to_numeric(df_unit_short['ФБО'], errors='coerce')
+    
+    # Заполняем пустоты нулями и приводим к int
+    df_unit_short['ФБО'] = df_unit_short['ФБО'].fillna(0).astype(int)
     df_unit_short = df_unit_short.groupby('wild').agg({  
-        'ФБО': 'first'
+        'ФБО': 'sum'
     }).reset_index()
     # Обновляем данные в таблице Годовой план закупа 2026
     plan.set_data(plan.annual_plan_connect_to_unit_sheet, df_unit_short)
