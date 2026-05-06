@@ -57,3 +57,10 @@ def transport_supplies_data_to_annual_procurement_plan():
     df_supplies = plan.get_supplies_data()
     # Обновляем данные в таблице Годовой план закупа 2026
     plan.set_data(plan.annual_plan_connect_to_supply_sheet, df_supplies)
+
+def transport_parfume_data_to_annual_procurement_plan():
+    # Создаем экземпляр класса и получаем данные
+    plan = AnnualProcurementPlan()
+    df_parfume = plan.get_parfume_data()
+    # Обновляем данные в таблице Годовой план закупа 2026
+    plan.set_data(plan.annual_plan_connect_to_parfume_sheet, df_parfume)

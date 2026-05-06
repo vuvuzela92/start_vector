@@ -1,6 +1,6 @@
 # Импортируем внутренние модули
 from src_oop.core.my_gspread import GoogleTabs
-from src_oop.jobs.annual_procurement_plan.config import delivery_calculation_china, annual_procurement_plan, unit_gs, supplies_query
+from src_oop.jobs.annual_procurement_plan.config import delivery_calculation_china, annual_procurement_plan, unit_gs, supplies_query, parfume_query
 from src_oop.core.database import Database
 # Импортируем внешние библиотеки
 import pandas as pd
@@ -24,6 +24,7 @@ class AnnualProcurementPlan:
         self._sheet_to_name = annual_procurement_plan.get("orders_sheet")
         self._unit_sheet = annual_procurement_plan.get("unit_sheet")
         self._supply_sheet = annual_procurement_plan.get("supply_sheet")
+        self._parfume_sheet = annual_procurement_plan.get("parfume_sheet")
         self._conn_to = None
 
         # Настройки для юнитки
@@ -41,6 +42,7 @@ class AnnualProcurementPlan:
 
     # --- Свойства для ленивого подключения ---
 
+    # Свойства для ленивого подключения к гугл-таблицам
     @property
     def google_connect_white(self):
         if self._conn_white is None:
@@ -81,6 +83,13 @@ class AnnualProcurementPlan:
         if self._conn_unit is None:
             self._conn_unit = GoogleTabs(self._table_unit, self._sheet_unit)
         return self._conn_unit
+    
+    @property
+    def annual_plan_connect_to_parfume_sheet(self):
+        """Ленивое подключение к листу с данными парфюма в таблице Годовой план закупа 2026"""
+        if self._conn_to is None:
+            self._conn_to = GoogleTabs(self._table_to_name, self._parfume_sheet)
+        return self._conn_to
 
     # --- Методы работы с данными ---
 
@@ -105,6 +114,10 @@ class AnnualProcurementPlan:
     def get_supplies_data(self):
         """Получает данные из базы данных по запросу supplies_query"""
         return Database.read_sql_to_dataframe(supplies_query)
+
+    def get_parfume_data(self):
+        """Получает данные из базы данных по запросу parfume_query"""
+        return Database.read_sql_to_dataframe(parfume_query)
 
     @staticmethod
     def set_data(coonector: GoogleTabs, df: pd.DataFrame):

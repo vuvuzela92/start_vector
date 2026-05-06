@@ -11,7 +11,7 @@ from src.modules.GOOGLE_SHEETS.credit_analyze_vector import update_credit_data_v
 from src.modules.GOOGLE_SHEETS.week_n_redeem import update_week_n_redeem
 from src_oop.jobs.unit.update_adv_participants import update_adv_participants_to_gs
 # Годовой план закупа 2026
-from src_oop.jobs.annual_procurement_plan.run import transport_data_to_annual_procurement_plan, transport_unit_data_to_annual_procurement_plan, transport_supplies_data_to_annual_procurement_plan
+from src_oop.jobs.annual_procurement_plan.run import transport_data_to_annual_procurement_plan, transport_parfume_data_to_annual_procurement_plan, transport_unit_data_to_annual_procurement_plan, transport_supplies_data_to_annual_procurement_plan
 # Артикульный анализ
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 # Условный расчет
@@ -39,7 +39,9 @@ def smart_run(func: Callable):
 # --- РЕЕСТР ЗАДАЧ ---
 # Формат: "команда_в_консоли": (функция, "текст_описания")
 TASKS: Dict[str, Dict[str, Any]] = {
+    # ===
     # Раздел: Реклама WB
+    # ===
     "advert_info": {
         "func": smart_run(advert_info),
         "desc": "🚀 Запуск обновления данных о рекламных кампаниях"
@@ -49,7 +51,9 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "desc": "💵 Запуск получения данных о рекламных затратах"
     },
 
+    # ===
     # Раздел: Отчеты и Документы WB
+    # ===
     "orders_report_today": {
         "func": smart_run(orders_report_today),
         "desc": "🛒 Запуск обновления отчета о заказах за сегодня"
@@ -59,7 +63,9 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "desc": "📑 Запуск получения данных по документам бухгалтерии"
     },
 
+    # ===   
     # Раздел: Google Sheets (Закупки и Аналитика)
+    # ===
     "update_penalties_in_gs_purchase_russia": {
         "func": smart_run(update_penalties_in_gs_purchase_russia),
         "desc": "📊 Запуск обновления данных о штрафах и остатках в Google Sheets"
@@ -72,9 +78,16 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_week_n_redeem),
         "desc": "🔁 Запуск обновления данных в ОТЧЕТ за 2023-2024"
     },
+    # ===
+    # Годовой план закупа 2026
+    # ===
     "transport_data_to_annual_procurement_plan": {
         "func": smart_run(transport_data_to_annual_procurement_plan),
         "desc": "🔁 Запуск обновления в Годовой план закупа 2026"
+    },
+    "transport_parfume_data_to_annual_procurement_plan": {
+        "func": smart_run(transport_parfume_data_to_annual_procurement_plan),
+        "desc": "🔁 Запуск обновления данных парфюма в Годовой план закупа 2026"
     },
     "transport_unit_data_to_annual_procurement_plan": {
         "func": smart_run(transport_unit_data_to_annual_procurement_plan),
@@ -84,13 +97,16 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(transport_supplies_data_to_annual_procurement_plan),
         "desc": "🔁 Запуск обновления данных поставок в Годовой план закупа 2026"
     },
+    # ===
     # Артикульный анализ
+    # ===
     "orders_article_analyze_run": {
         "func": smart_run(orders_article_analyze_run),
         "desc": "📉 Запуск артикульного анализа заказов"
     },
-
+    # ===
     # Условный расчет
+    # ===
     "conditional_calculation_to_db_run": {
         "func": smart_run(conditional_calculation_to_db_run),
         "desc": "🧪 Запуск условного расчета и загрузки в БД"
@@ -99,7 +115,9 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_conditional_calculations_to_gs),
         "desc": "📤 Выгрузка условного расчета в Google Sheets"
     },
+    # ===
     # Таблица в гугл Анализ_фин_отчетов_Вектор
+    # ===
     "update_monthly_report": {
         "func": smart_run(update_monthly_report),
         "desc": "💵 Выгрузка сводных данных фин отчета за месяц в отчет_по_месяцам"
@@ -128,12 +146,16 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_stock_analyze),
         "desc": "📦 Выгрузка данных об остатках из арт анализа"
     }, 
+    # ===
     # Раздел: Склад
+    # ===
     "wms_stocks_run": {
         "func": smart_run(wms_stocks_run),
         "desc": "📦 Выгрузка данных об остатках из сервиса WMS"
     },
+    # ===
     # Таблица юнит-экономики
+    # ===
     "update_adv_participants_to_gs": {
         "func": smart_run(update_adv_participants_to_gs),
         "desc": "🚗 Выгрузка данных об участии артикулов в рекламных кампаниях в таблице Юнит-экономики"
@@ -144,6 +166,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
     },
     # === Получение данных с WB===
     # python main.py collect_and_store_measurements > output.txt 2>&1 - для запуска из консоли и сохранения логов в файл
+    # ===
     "collect_and_store_measurements": {
         "func": smart_run(collect_and_store_measurements),
         "desc": "📥 Сбор и сохранение данных о замерах в БД"
@@ -152,12 +175,16 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(set_measurements_to_google),
         "desc": "📤 Запись данных о замерах в таблице Дизайн по новинкам"
     },
+    # ===
     # Расчет закупки Россия
+    # ===
     "set_orders_quantity": {
         "func": smart_run(set_orders_quantity),
         "desc": "📤 Запись данных о количестве заказов в таблицу Расчет закупки Россия"
     },
+    # ===
     # Панель Управления
+    # ===
     "update_individual_info": {
         "func": smart_run(update_individual_info),
         "desc": "🚩 Обновление данных об индивидуальных условиях в ПУ на листе ИУ_ИНФО"
