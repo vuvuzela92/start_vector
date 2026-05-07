@@ -23,7 +23,7 @@ from src_oop.jobs.wms_stocks.run import wms_stocks_run
 # Финансовые отчеты
 from src_oop.jobs.fin_reports_analyze.run import update_monthly_report, update_weekly_profit_report, update_outcomes_detalize, update_fin_deductions_mv, update_deductions_by_month, update_cash_flow_writeoffs, update_stock_analyze
 # Таблица Расчет закупки Россия
-from src_oop.jobs.calculation_of_purchases_russia.run import set_orders_quantity
+from src_oop.jobs.calculation_of_purchases_russia.run import set_orders_quantity, transport_orders_and_supply
 # Таблица Панель Управления
 from src_oop.jobs.autopilot.run import update_individual_info
 
@@ -64,7 +64,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
     },
 
     # ===   
-    # Раздел: Google Sheets (Закупки и Аналитика)
+    # Для бухгалтерии
     # ===
     "update_penalties_in_gs_purchase_russia": {
         "func": smart_run(update_penalties_in_gs_purchase_russia),
@@ -182,6 +182,11 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(set_orders_quantity),
         "desc": "📤 Запись данных о количестве заказов в таблицу Расчет закупки Россия"
     },
+    "transport_orders_and_supply": {
+        "func": smart_run(transport_orders_and_supply),
+        "desc": "📤 Запись данных о заказах и фактических поступлениях товаров"
+    },
+    
     # ===
     # Панель Управления
     # ===

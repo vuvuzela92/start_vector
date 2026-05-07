@@ -53,7 +53,7 @@ class ArticleAnalyzeRepository:
                 
                 COALESCE(o.order_count, 0) * ( 
                     COALESCE(o.avg_price, ord.price_with_disc, 0) - (
-                        (COALESCE(o.avg_price, ord.price_with_disc, 0) / 100.0 * (6 + 
+                        (COALESCE(o.avg_price, ord.price_with_disc, 0) / 100.0 * (8 + 
                             CASE 
                                 WHEN b.date >= '2026-01-01' THEN ic_2026.fbo_individual_conditions 
                                 WHEN b.date BETWEEN '2025-01-01' AND '2025-12-31' THEN ic_2025.fbo_individual_conditions 
