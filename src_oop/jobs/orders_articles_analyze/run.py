@@ -7,7 +7,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-def orders_article_analyze_run(days_ago_total: int = 28, days_to: int = 1):
+def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1):
     """Запуск Артикульного анализа по дням (для экономии памяти БД)"""
     logger.info(f"Запуск артикульного анализа за период с {days_ago_total} до {days_to} дней назад")
     

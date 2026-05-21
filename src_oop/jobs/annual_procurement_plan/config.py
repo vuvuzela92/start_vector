@@ -20,6 +20,7 @@ delivery_calculation_china = {
 annual_procurement_plan = {
                         "title": "Годовой план закупа 2026",
                         "orders_sheet": "БД_ЗАКАЗЫ",
+                        "quarter_sheet": "Поквартально",
                         "unit_sheet": "Данные_Юнитки",
                         "supply_sheet": "Данные_Поставки",
                         "parfume_sheet": "Данные_Парфюм"
