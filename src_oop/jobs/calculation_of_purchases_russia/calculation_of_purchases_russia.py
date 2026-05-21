@@ -1,6 +1,7 @@
 from src_oop.core.my_gspread import GoogleTabs
 from src_oop.core.database import Database
-from src_oop.jobs.calculation_of_purchases_russia.config import query, google_table, query_orders_and_supply
+from src_oop.jobs.calculation_of_purchases_russia.config import google_table, query_orders_and_supply
+import pandas as pd
 
 class Calculation_of_purchases_russia:
     def __init__(self):
