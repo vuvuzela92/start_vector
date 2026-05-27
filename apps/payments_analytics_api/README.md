@@ -46,7 +46,7 @@ Copy-Item .env.example .env
 ```env
 GOOGLE_SHEETS_WEBHOOK_TOKEN=change_me
 PAYMENTS_ANALYZE_PROJECT_DIR=/app/project
-PAYMENTS_ANALYZE_COMMAND=python main.py update_orders_white_balance_analytics
+PAYMENTS_ANALYZE_COMMAND=python -c "from src_oop.jobs.calculation_of_purchases_china.orders_white_balance_analytics import OrdersWhiteBalanceAnalyticsService; OrdersWhiteBalanceAnalyticsService().run()"
 PAYMENTS_ANALYZE_TIMEOUT_SECONDS=900
 API_HOST=0.0.0.0
 API_PORT=8000
