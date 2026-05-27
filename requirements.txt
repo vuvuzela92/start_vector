@@ -18,6 +18,7 @@ decorator==5.2.1
 dotenv==0.9.9
 et_xmlfile==2.0.0
 executing==2.2.1
+fastapi
 frozenlist==1.8.0
 google-auth==2.41.1
 google-auth-oauthlib==1.2.2
@@ -72,8 +73,9 @@ typing_extensions==4.15.0
 tzdata==2025.2
 tzlocal==5.3.1
 urllib3==2.5.0
+uvicorn
 wcwidth==0.2.14
 yarl==1.22.0
 openai
 pymupdf
-pip install pdfplumber
+pdfplumber

@@ -12,7 +12,10 @@ from src.modules.GOOGLE_SHEETS.week_n_redeem import update_week_n_redeem
 from src_oop.jobs.unit.update_adv_participants import update_adv_participants_to_gs
 # Годовой план закупа 2026
 from src_oop.jobs.annual_procurement_plan.run import transport_data_to_annual_procurement_plan, transport_parfume_data_to_annual_procurement_plan, transport_unit_data_to_annual_procurement_plan, transport_supplies_data_to_annual_procurement_plan
-from src_oop.jobs.calculation_of_purchases_china.run import transport_quarterly_plan_to_pivot
+from src_oop.jobs.calculation_of_purchases_china.run import (
+    transport_quarterly_plan_to_pivot,
+    update_orders_white_balance_analytics,
+)
 # Артикульный анализ
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 # Условный расчет
@@ -103,9 +106,13 @@ TASKS: Dict[str, Dict[str, Any]] = {
     # ===
     # Расчет закупки по обороту Китай
     # ===
-        "transport_quarterly_plan_to_pivot": {
+    "transport_quarterly_plan_to_pivot": {
         "func": smart_run(transport_quarterly_plan_to_pivot),
         "desc": "Перенос поквартального плана в свод по поставщикам"
+    },
+    "update_orders_white_balance_analytics": {
+        "func": smart_run(update_orders_white_balance_analytics),
+        "desc": "Выгрузка аналитики платежей по белым заказам на лист "
     },
     # ===
 
