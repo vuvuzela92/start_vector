@@ -1,78 +1,78 @@
 # Payments Analytics API
 
-Минимальное FastAPI-приложение для запуска обновления аналитики платежей.
+Отдельное FastAPI-приложение для запуска обновления аналитики платежей через webhook.
 
-Приложение не импортирует production-логику напрямую. Оно запускает существующую команду основного проекта через `subprocess` из рабочей директории, заданной переменной `PAYMENTS_ANALYZE_PROJECT_DIR`.
+API запускает существующую job командой из `PAYMENTS_ANALYZE_COMMAND` в директории `PAYMENTS_ANALYZE_PROJECT_DIR`.
+
+## Структура
+
+```text
+apps/payments_analytics_api/
+  app/
+    __init__.py
+    main.py
+    runner.py
+    settings.py
+  requirements.txt
+  Dockerfile
+  docker-compose.yml
+  .env.example
+  README.md
+```
 
 ## Endpoint-ы
 
-Проверка API:
-
 ```text
-GET /health
-```
-
-Запуск обновления аналитики:
-
-```text
+GET  /health
 POST /jobs/calculation-of-purchases-china/payments-analyze/run
 ```
 
-Protected endpoint принимает токен:
+## Подготовка
 
-```text
-Authorization: Bearer <token>
+```bash
+cd apps/payments_analytics_api
+cp .env.example .env
 ```
 
-## Настройки
-
-Создай `.env` рядом с этим README:
+В PowerShell:
 
 ```powershell
+cd apps\payments_analytics_api
 Copy-Item .env.example .env
 ```
 
-Минимальные переменные:
+Заполни `.env` минимумом:
 
 ```env
-GOOGLE_SHEETS_WEBHOOK_TOKEN=your_secret_token
+GOOGLE_SHEETS_WEBHOOK_TOKEN=change_me
 PAYMENTS_ANALYZE_PROJECT_DIR=/app/project
-PAYMENTS_ANALYZE_COMMAND=python -c "from src_oop.jobs.calculation_of_purchases_china.run import update_orders_white_balance_analytics; update_orders_white_balance_analytics()"
+PAYMENTS_ANALYZE_COMMAND=python main.py update_orders_white_balance_analytics
 PAYMENTS_ANALYZE_TIMEOUT_SECONDS=900
+API_HOST=0.0.0.0
+API_PORT=8000
 ```
 
-`PAYMENTS_ANALYZE_PROJECT_DIR` - путь к основному проекту внутри контейнера.
+## Docker запуск
 
-`PAYMENTS_ANALYZE_COMMAND` - команда запуска существующей job. По умолчанию используется прямой запуск нужной функции, без импорта полного `tasks_registry`.
+```bash
+cd apps/payments_analytics_api
+docker compose config
+docker compose build --no-cache
+docker compose up -d
+docker compose ps
+docker compose logs -f payments-analytics-api
+```
 
-## Docker volume
-
-`docker-compose.yml` монтирует корень основного проекта в контейнер:
+`docker-compose.yml` монтирует основной проект в контейнер:
 
 ```yaml
 volumes:
   - ../../:/app/project
 ```
 
-Так как `docker-compose.yml` находится в `apps/payments_analytics_api`, путь `../../` указывает на корень основного проекта.
+## Проверка API
 
-## Сборка и запуск
-
-Из директории `apps/payments_analytics_api`:
-
-```bash
-docker compose down
-docker compose build --no-cache
-docker compose up -d
-```
-
-Проверить логи:
-
-```bash
-docker compose logs -f
-```
-
-## Проверка health endpoint-а
+Проверка health:
 
 ```bash
 curl http://127.0.0.1:8000/health
@@ -84,75 +84,59 @@ curl http://127.0.0.1:8000/health
 {"status":"ok"}
 ```
 
-## Проверка запуска job
+Проверка protected endpoint без токена:
 
-Внимание: POST-запрос запускает реальное обновление листа `payments_analyze_sheet`.
-
-```powershell
-$token = "your_secret_token"
-
-Invoke-RestMethod `
-  -Method Post `
-  -Uri "http://127.0.0.1:8000/jobs/calculation-of-purchases-china/payments-analyze/run" `
-  -Headers @{ Authorization = "Bearer $token" }
+```bash
+curl -X POST http://127.0.0.1:8000/jobs/calculation-of-purchases-china/payments-analyze/run
 ```
 
-## Диагностика IndexError на Path.parents
+Ожидаемо: `401 Unauthorized`.
 
-Если контейнер падает с ошибкой вида:
+Проверка protected endpoint с токеном:
 
-```text
-IndexError: 3
+```bash
+curl -X POST http://127.0.0.1:8000/jobs/calculation-of-purchases-china/payments-analyze/run \
+  -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
-и в traceback есть строка:
+## Диагностика
 
-```python
-Path(__file__).resolve().parents[...]
-```
+### Ошибка `IndexError: 3`
 
-значит код ошибочно пытается вычислить путь к основному проекту относительно файла приложения.
+Причина:
+код пытается вычислить корень проекта через `Path(__file__).resolve().parents[...]`.
 
-В Docker этого делать не нужно. Основной проект должен задаваться явно:
+Решение:
+использовать `PAYMENTS_ANALYZE_PROJECT_DIR=/app/project`.
 
-```env
-PAYMENTS_ANALYZE_PROJECT_DIR=/app/project
-```
+### Ошибка `ModuleNotFoundError`
 
-А `docker-compose.yml` должен монтировать проект:
+Причина:
+в контейнере нет зависимости, которая нужна основной job.
 
-```yaml
-volumes:
-  - ../../:/app/project
-```
+Решение:
+добавить недостающую зависимость в `requirements.txt` этого приложения
+или изменить способ запуска job.
 
-## Google Apps Script
+### Ошибка `401`
 
-Apps Script не сможет обратиться к `localhost` или `127.0.0.1`, потому что выполняется на серверах Google.
+Причина:
+неверный или отсутствующий токен.
 
-Для запуска из Google Sheets нужен публичный HTTPS URL:
+Решение:
+проверить `GOOGLE_SHEETS_WEBHOOK_TOKEN` в `.env` и заголовок
+`Authorization: Bearer ...`.
 
-```text
-https://your-domain.example/jobs/calculation-of-purchases-china/payments-analyze/run
-```
+### Ошибка `500`
 
-Пример:
+Причина:
+FastAPI доступен, но упала основная job.
 
-```javascript
-function runPaymentsAnalytics() {
-  const url = 'https://your-domain.example/jobs/calculation-of-purchases-china/payments-analyze/run';
-  const token = PropertiesService
-    .getScriptProperties()
-    .getProperty('PAYMENTS_ANALYTICS_WEBHOOK_TOKEN');
+Решение:
 
-  const response = UrlFetchApp.fetch(url, {
-    method: 'post',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-    muteHttpExceptions: true,
-  });
-
-  SpreadsheetApp.getUi().alert(response.getContentText());
-}
+```bash
+docker compose logs -f payments-analytics-api
+docker compose exec payments-analytics-api bash
+cd /app/project
+python main.py update_orders_white_balance_analytics
 ```

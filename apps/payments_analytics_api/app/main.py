@@ -1,4 +1,5 @@
 import logging
+import os
 import secrets
 import subprocess
 from datetime import datetime
@@ -8,7 +9,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.runner import run_payments_analyze_command
-from app.settings import GOOGLE_SHEETS_WEBHOOK_TOKEN
+from app.settings import API_HOST, API_PORT, GOOGLE_SHEETS_WEBHOOK_TOKEN
 
 logger = logging.getLogger(__name__)
 
@@ -78,20 +79,23 @@ def run_payments_analyze_job(
     started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     try:
-        run_payments_analyze_command()
-    except subprocess.CalledProcessError as error:
-        finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logger.exception("Payments analytics command failed.")
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "status": "error",
-                "message": error.stderr or error.stdout or str(error),
-                "rows_uploaded": None,
-                "started_at": started_at,
-                "finished_at": finished_at,
-            },
-        )
+        result = run_payments_analyze_command()
+        if result.returncode != 0:
+            finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            logger.error(
+                "Payments analytics command failed with return code %s.",
+                result.returncode,
+            )
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={
+                    "status": "error",
+                    "message": result.stderr or result.stdout or "Payments analytics command failed",
+                    "rows_uploaded": None,
+                    "started_at": started_at,
+                    "finished_at": finished_at,
+                },
+            )
     except subprocess.TimeoutExpired as error:
         finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         logger.exception("Payments analytics command timed out.")
@@ -100,6 +104,19 @@ def run_payments_analyze_job(
             content={
                 "status": "error",
                 "message": f"Payments analytics command timed out: {error}",
+                "rows_uploaded": None,
+                "started_at": started_at,
+                "finished_at": finished_at,
+            },
+        )
+    except NotADirectoryError as error:
+        finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logger.exception("Invalid project directory for payments analytics.")
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "status": "error",
+                "message": str(error),
                 "rows_uploaded": None,
                 "started_at": started_at,
                 "finished_at": finished_at,
@@ -134,7 +151,7 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "app.main:app",
-        host="localhost",
-        port=8018,
+        host=os.getenv("API_HOST", API_HOST),
+        port=int(os.getenv("API_PORT", str(API_PORT))),
         reload=False,
     )

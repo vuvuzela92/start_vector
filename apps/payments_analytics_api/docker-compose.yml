@@ -1,8 +1,8 @@
 services:
   payments-analytics-api:
     build:
-      context: ../..
-      dockerfile: apps/payments_analytics_api/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     container_name: payments-analytics-api
     env_file:
       - .env

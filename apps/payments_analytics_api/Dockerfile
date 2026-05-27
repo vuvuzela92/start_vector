@@ -5,12 +5,16 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-COPY apps/payments_analytics_api/requirements.txt .
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bash \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /app/requirements.txt
 
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+    && pip install --no-cache-dir -r /app/requirements.txt
 
-COPY apps/payments_analytics_api/app ./app
+COPY app /app/app
 
 EXPOSE 8000
 
