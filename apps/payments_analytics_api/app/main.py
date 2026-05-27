@@ -13,14 +13,16 @@ from src_oop.jobs.calculation_of_purchases_china.orders_white_balance_analytics 
     OrdersWhiteBalanceAnalyticsService,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+APP_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+load_dotenv(APP_ROOT / ".env")
 load_dotenv(PROJECT_ROOT / ".env")
 
 logger = logging.getLogger(__name__)
 
 WEBHOOK_TOKEN_ENV = "GOOGLE_SHEETS_WEBHOOK_TOKEN"
 
-app = FastAPI(title="Start Vector Jobs API")
+app = FastAPI(title="Payments Analytics API")
 
 
 class JobRunResponse(BaseModel):
@@ -84,8 +86,7 @@ def run_payments_analyze_job(
         x_webhook_token=x_webhook_token,
     )
 
-    started_at_dt = datetime.now()
-    started_at = started_at_dt.strftime("%Y-%m-%d %H:%M:%S")
+    started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     try:
         service = OrdersWhiteBalanceAnalyticsService()

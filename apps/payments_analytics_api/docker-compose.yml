@@ -1,0 +1,13 @@
+services:
+  payments-analytics-api:
+    build:
+      context: ../..
+      dockerfile: apps/payments_analytics_api/Dockerfile
+    container_name: payments-analytics-api
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../../creds:/app/creds:ro
+    restart: unless-stopped
