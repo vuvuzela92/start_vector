@@ -52,6 +52,14 @@ API_HOST=0.0.0.0
 API_PORT=8000
 ```
 
+Для локального запуска на Windows вне Docker можно указать:
+
+```env
+PAYMENTS_ANALYZE_PROJECT_DIR=C:\Users\123\Desktop\start_vector
+```
+
+Если оставить контейнерный путь `/app/project`, приложение попробует автоматически найти корень локального проекта (где есть `main.py` и `src_oop`).
+
 ## Docker запуск
 
 ```bash
