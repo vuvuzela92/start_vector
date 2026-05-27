@@ -1,12 +1,8 @@
 # Payments Analytics API
 
-Минимальное FastAPI-приложение для запуска обновления аналитики платежей из Google Sheets.
+Минимальное FastAPI-приложение для запуска обновления аналитики платежей.
 
-Приложение не содержит расчетную бизнес-логику. Оно вызывает существующий service:
-
-```text
-src_oop/jobs/calculation_of_purchases_china/orders_white_balance_analytics.py
-```
+Приложение не импортирует production-логику напрямую. Оно запускает существующую команду основного проекта через `subprocess` из рабочей директории, заданной переменной `PAYMENTS_ANALYZE_PROJECT_DIR`.
 
 ## Endpoint-ы
 
@@ -22,109 +18,75 @@ GET /health
 POST /jobs/calculation-of-purchases-china/payments-analyze/run
 ```
 
-Protected endpoint принимает токен в заголовке:
+Protected endpoint принимает токен:
 
 ```text
 Authorization: Bearer <token>
 ```
 
-## Состав Docker image
+## Настройки
 
-Dockerfile копирует в image только:
-
-- `apps/payments_analytics_api/app`
-- `src_oop/core/my_gspread.py`
-- `src_oop/core/utils_general.py`
-- `src_oop/jobs/calculation_of_purchases_china/config.py`
-- `src_oop/jobs/calculation_of_purchases_china/orders_white_balance_analytics.py`
-
-Остальные папки проекта в image не копируются.
-
-## Подготовка .env
-
-Из директории `apps/payments_analytics_api`:
+Создай `.env` рядом с этим README:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Заполни `.env`:
+Минимальные переменные:
 
 ```env
 GOOGLE_SHEETS_WEBHOOK_TOKEN=your_secret_token
-CREDS_DIR=creds
-TOKENS_FILE=tokens.json
+PAYMENTS_ANALYZE_PROJECT_DIR=/app/project
+PAYMENTS_ANALYZE_COMMAND=python -c "from src_oop.jobs.calculation_of_purchases_china.run import update_orders_white_balance_analytics; update_orders_white_balance_analytics()"
+PAYMENTS_ANALYZE_TIMEOUT_SECONDS=900
 ```
 
-Токен можно сгенерировать:
+`PAYMENTS_ANALYZE_PROJECT_DIR` - путь к основному проекту внутри контейнера.
 
-```bash
-python -c "import secrets; print(secrets.token_urlsafe(48))"
-```
+`PAYMENTS_ANALYZE_COMMAND` - команда запуска существующей job. По умолчанию используется прямой запуск нужной функции, без импорта полного `tasks_registry`.
 
-Не коммить `.env` и файлы из `creds`.
+## Docker volume
 
-## Google credentials
-
-В корне проекта должен быть файл:
-
-```text
-creds/creds.json
-```
-
-`docker-compose.yml` пробрасывает папку `creds` в контейнер только на чтение:
+`docker-compose.yml` монтирует корень основного проекта в контейнер:
 
 ```yaml
 volumes:
-  - ../../creds:/app/creds:ro
+  - ../../:/app/project
 ```
 
-## Запуск через Docker Compose
+Так как `docker-compose.yml` находится в `apps/payments_analytics_api`, путь `../../` указывает на корень основного проекта.
+
+## Сборка и запуск
 
 Из директории `apps/payments_analytics_api`:
 
 ```bash
-docker compose build
+docker compose down
+docker compose build --no-cache
 docker compose up -d
 ```
 
 Проверить логи:
 
 ```bash
-docker compose logs -f payments-analytics-api
+docker compose logs -f
 ```
 
-Остановить:
+## Проверка health endpoint-а
 
 ```bash
-docker compose down
+curl http://127.0.0.1:8000/health
 ```
 
-## Локальный запуск без Docker
+Ожидаемый ответ:
 
-Из корня проекта:
-
-```bash
-pip install -r apps/payments_analytics_api/requirements.txt
-python -m uvicorn apps.payments_analytics_api.app.main:app --host 0.0.0.0 --port 8000
+```json
+{"status":"ok"}
 ```
 
-Или из директории `apps/payments_analytics_api`:
+## Проверка запуска job
 
-```bash
-pip install -r requirements.txt
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-## Проверка
-
-Health check:
-
-```powershell
-Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8000/health"
-```
-
-Запуск job:
+Внимание: POST-запрос запускает реальное обновление листа `payments_analyze_sheet`.
 
 ```powershell
 $token = "your_secret_token"
@@ -135,7 +97,34 @@ Invoke-RestMethod `
   -Headers @{ Authorization = "Bearer $token" }
 ```
 
-Внимание: POST-запрос запускает реальное обновление листа `payments_analyze_sheet`.
+## Диагностика IndexError на Path.parents
+
+Если контейнер падает с ошибкой вида:
+
+```text
+IndexError: 3
+```
+
+и в traceback есть строка:
+
+```python
+Path(__file__).resolve().parents[...]
+```
+
+значит код ошибочно пытается вычислить путь к основному проекту относительно файла приложения.
+
+В Docker этого делать не нужно. Основной проект должен задаваться явно:
+
+```env
+PAYMENTS_ANALYZE_PROJECT_DIR=/app/project
+```
+
+А `docker-compose.yml` должен монтировать проект:
+
+```yaml
+volumes:
+  - ../../:/app/project
+```
 
 ## Google Apps Script
 

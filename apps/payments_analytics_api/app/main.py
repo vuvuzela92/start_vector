@@ -1,26 +1,16 @@
 import logging
-import os
 import secrets
+import subprocess
 from datetime import datetime
-from pathlib import Path
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from src_oop.jobs.calculation_of_purchases_china.orders_white_balance_analytics import (
-    OrdersWhiteBalanceAnalyticsService,
-)
-
-APP_ROOT = Path(__file__).resolve().parents[1]
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-load_dotenv(APP_ROOT / ".env")
-load_dotenv(PROJECT_ROOT / ".env")
+from app.runner import run_payments_analyze_command
+from app.settings import GOOGLE_SHEETS_WEBHOOK_TOKEN
 
 logger = logging.getLogger(__name__)
-
-WEBHOOK_TOKEN_ENV = "GOOGLE_SHEETS_WEBHOOK_TOKEN"
 
 app = FastAPI(title="Payments Analytics API")
 
@@ -34,14 +24,13 @@ class JobRunResponse(BaseModel):
 
 
 def _get_expected_token() -> str:
-    token = os.getenv(WEBHOOK_TOKEN_ENV)
-    if not token:
-        logger.error("Environment variable %s is not configured.", WEBHOOK_TOKEN_ENV)
+    if not GOOGLE_SHEETS_WEBHOOK_TOKEN:
+        logger.error("Environment variable GOOGLE_SHEETS_WEBHOOK_TOKEN is not configured.")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Webhook token is not configured",
         )
-    return token
+    return GOOGLE_SHEETS_WEBHOOK_TOKEN
 
 
 def _extract_bearer_token(authorization: str | None) -> str | None:
@@ -89,8 +78,33 @@ def run_payments_analyze_job(
     started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     try:
-        service = OrdersWhiteBalanceAnalyticsService()
-        df_balance = service.run()
+        run_payments_analyze_command()
+    except subprocess.CalledProcessError as error:
+        finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logger.exception("Payments analytics command failed.")
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "status": "error",
+                "message": error.stderr or error.stdout or str(error),
+                "rows_uploaded": None,
+                "started_at": started_at,
+                "finished_at": finished_at,
+            },
+        )
+    except subprocess.TimeoutExpired as error:
+        finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logger.exception("Payments analytics command timed out.")
+        return JSONResponse(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            content={
+                "status": "error",
+                "message": f"Payments analytics command timed out: {error}",
+                "rows_uploaded": None,
+                "started_at": started_at,
+                "finished_at": finished_at,
+            },
+        )
     except Exception as error:
         finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         logger.exception("Payments analytics job failed.")
@@ -109,7 +123,18 @@ def run_payments_analyze_job(
     return JobRunResponse(
         status="success",
         message="Аналитика платежей успешно обновлена",
-        rows_uploaded=len(df_balance),
+        rows_uploaded=None,
         started_at=started_at,
         finished_at=finished_at,
+    )
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "app.main:app",
+        host="localhost",
+        port=8018,
+        reload=False,
     )
