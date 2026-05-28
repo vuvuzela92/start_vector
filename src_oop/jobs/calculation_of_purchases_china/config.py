@@ -128,7 +128,7 @@ ORDERS_WHITE_BALANCE_TWO_COLS = [
     "Сумма баланса, RMB 2 🤖",
 ]
 
-ORDERS_WHITE_CANCELED_STATUSES = ["Отмена", "в Планах", " "]
+ORDERS_WHITE_CANCELED_STATUSES = ["отмена", "в планах", " "]
 
 ORDERS_WHITE_DIGIT_COLS = [
     "Кол-во к заказу",
