@@ -2,8 +2,10 @@ import re
 import os
 import time
 import logging
+import math
 import gspread
 import pandas as pd
+import numpy as np
 from datetime import datetime
 from gspread_dataframe import set_with_dataframe
 from datetime import datetime
@@ -15,6 +17,21 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+def _json_safe_cell(value):
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return value
+
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_cell(item) for item in value]
+
+    if isinstance(value, dict):
+        return {key: _json_safe_cell(item) for key, item in value.items()}
+
+    return value
 
 
 class GoogleTabs():
@@ -174,8 +191,10 @@ class GoogleTabs():
             df = df.copy()
 
             # сохраняем типы
+            df = df.replace([np.inf, -np.inf], None)
             df = df.where(pd.notnull(df), None)
             values = [df.columns.tolist()] + df.values.tolist()
+            values = [[_json_safe_cell(cell) for cell in row] for row in values]
 
             # Определяем конечный диапазон для обновления (например, A1:Z1000)
             rows = len(values) # Количество строк, включая заголовок
@@ -197,7 +216,10 @@ class GoogleTabs():
 
         except gspread.exceptions.SpreadsheetNotFound:
             print(f"Не найдена таблица {self.table_title}")
+            raise
         except gspread.exceptions.WorksheetNotFound:
             print(f"Не найден лист {self.sheet_title.title}")
+            raise
         except Exception as e:
             print(f"Ошибка: {e}")
+            raise
