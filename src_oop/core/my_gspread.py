@@ -1,18 +1,14 @@
-import re
-import os
-import time
 import logging
 import math
-import gspread
-import pandas as pd
-import numpy as np
+import time
 from datetime import datetime
-from gspread_dataframe import set_with_dataframe
-from datetime import datetime
-from gspread.utils import rowcol_to_a1
-
 from pathlib import Path
+
+import gspread
+import numpy as np
+import pandas as pd
 from dotenv import load_dotenv
+from gspread.utils import rowcol_to_a1
 
 load_dotenv()
 
@@ -34,184 +30,181 @@ def _json_safe_cell(value):
     return value
 
 
-class GoogleTabs():
-    """Класс для работы с гугл таблицами"""
+def _sheet_update_cell(value):
+    if value is None:
+        return ""
+
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return ""
+        return value
+
+    return "" if pd.isna(value) else value
+
+
+class GoogleTabs:
+    """Класс для работы с Google Таблицами."""
+
     def __init__(self, table_title: str, sheet_title: str):
-        """ Инициализируем класс для работы с гугл-таблицами.
-        spreadsheet_title: Название гугл-таблицы
-        worksheet_title: Название страницы"""
-        self.creds_file = Path(__file__).resolve().parents[2]/'creds/creds.json' # Доступы к таблицам
-        self.table_title = table_title # Названия таблиц
-        self.table = None  # ← Открытая таблица
+        self.creds_file = Path(__file__).resolve().parents[2] / "creds/creds.json"
+        self.table_title = table_title
+        self.table = None
         self.sheet_title = sheet_title
-        self._safe_connect()  # ← Подключаемся сразу
+        self._safe_connect()
 
-    def _safe_connect(self, retries=5, delay=2):        
-            """
-            Пытается открыть таблицу и лист с повторными попытками.
-            """
-            self.gc = gspread.service_account(filename=self.creds_file)
-            
-            for attempt in range(1, retries + 1):
-                try:
-                    # 1. Открываем саму таблицу
-                    table = self.gc.open(self.table_title)
-                    self.table = table # Сохраняем в атрибут класса
-                    
-                    # 2. Открываем конкретный лист 
-                    self.sheet_title = table.worksheet(self.sheet_title) 
-                    
-                    print(f"✅ Успешное подключение к {self.table_title} -> {self.sheet_title.title}")
-                    return # Выходим из функции, всё готово
-                    
-                except gspread.exceptions.APIError as e:
-                    if "503" in str(e):
-                        print(f"[Попытка {attempt}/{retries}] APIError 503 — повтор через {delay} сек.")
-                        time.sleep(delay)
-                    else:
-                        raise 
-                except gspread.exceptions.WorksheetNotFound:
-                    raise RuntimeError(f"Ошибка: Лист '{self.sheet_title}' не найден в таблице '{self.table_title}'")
+    def _safe_connect(self, retries=5, delay=2):
+        """
+        Пытается открыть таблицу и лист с повторными попытками.
+        """
+        self.gc = gspread.service_account(filename=self.creds_file)
 
-            raise RuntimeError(f"Не удалось открыть таблицу '{self.table_title}' после {retries} попыток.")
+        for attempt in range(1, retries + 1):
+            try:
+                table = self.gc.open(self.table_title)
+                self.table = table
+                self.sheet_title = table.worksheet(self.sheet_title)
+
+                print(f"Успешное подключение к {self.table_title} -> {self.sheet_title.title}")
+                return
+
+            except gspread.exceptions.APIError as error:
+                if "503" in str(error):
+                    print(f"[Попытка {attempt}/{retries}] APIError 503, повтор через {delay} сек.")
+                    time.sleep(delay)
+                else:
+                    raise
+            except gspread.exceptions.WorksheetNotFound:
+                raise RuntimeError(
+                    f"Ошибка: Лист '{self.sheet_title}' не найден в таблице '{self.table_title}'"
+                )
+
+        raise RuntimeError(
+            f"Не удалось открыть таблицу '{self.table_title}' после {retries} попыток."
+        )
 
     def _update_df_in_google(self, df: pd.DataFrame, sheet):
         """
-        Перезаписывает данные DataFrame на указанный лист Google Таблицы.
-        Также добавляет дату и время последнего обновления в первую строку последней колонки.
-        
-        Параметры:
-        df (DataFrame): DataFrame, который нужно отправить.
-        sheet (gspread.models.Worksheet): Объект листа, на который будут записаны данные.
-
-        Возвращаемое значение:
-        None
+        Полностью перезаписывает рабочую область листа одним вызовом update.
         """
         try:
-            # Обрабатываем NaN значения в DataFrame (заменяем на пустые строки)
-            df = df.fillna('')
+            old_values = sheet.get_all_values()
+            old_rows = len(old_values)
+            old_cols = max((len(row) for row in old_values), default=0)
 
-            # Очищаем лист перед записью новых данных
-            sheet.clear()
+            df_to_upload = df.copy()
+            df_to_upload = df_to_upload.replace([np.inf, -np.inf], "")
+            df_to_upload = df_to_upload.astype(object)
+            df_to_upload = df_to_upload.where(pd.notnull(df_to_upload), "")
 
-            # Подготовка данных для записи
-            df_data_to_append = [df.columns.values.tolist()] + df.values.tolist()
+            data_values = []
+            if len(df_to_upload.columns) > 0:
+                data_values = [
+                    df_to_upload.columns.astype(str).tolist(),
+                    *df_to_upload.values.tolist(),
+                ]
 
-            # Запись данных на лист
-            sheet.append_rows(df_data_to_append, value_input_option='USER_ENTERED')
-            print("Данные успешно перезаписаны на лист.")
+            new_rows = len(data_values)
+            new_cols = len(data_values[0]) if data_values else 0
 
-        except Exception as e:
-            print(f"Произошла ошибка: {e}")
-            # Проверяем на ошибку, связанную с лимитом ячеек
-            if "APIError: [400]: This action would increase the number of cells in the workbook" in str(e):
-                print("Превышен лимит ячеек Google Таблицы. Создание резервной копии в Excel...")
+            target_rows = max(old_rows, new_rows)
+            target_cols = max(old_cols, new_cols)
+
+            if target_rows == 0 or target_cols == 0:
+                logger.info("Google Sheet update skipped: no old data and no new data.")
+                return
+
+            values = [["" for _ in range(target_cols)] for _ in range(target_rows)]
+
+            for row_idx, row in enumerate(data_values):
+                for col_idx, value in enumerate(row):
+                    values[row_idx][col_idx] = _sheet_update_cell(value)
+
+            target_range = f"A1:{rowcol_to_a1(target_rows, target_cols)}"
+            sheet.update(
+                target_range,
+                values,
+                value_input_option="USER_ENTERED",
+            )
+            logger.info("Google Sheet data fully overwritten in range %s", target_range)
+
+        except Exception as error:
+            logger.exception("Failed to update Google Sheet: %s", error)
+            if "APIError: [400]: This action would increase the number of cells in the workbook" in str(error):
+                logger.error("Google Sheets cell limit exceeded during overwrite.")
+            raise
 
     def _send_df_to_google(self, df, sheet):
         """
         Отправляет DataFrame на указанный лист Google Таблицы.
-
-        Параметры:
-        df (DataFrame): DataFrame, который нужно отправить.
-        sheet (gspread.models.Worksheet): Объект листа, на который будут добавлены данные.
-
-        Возвращаемое значение:
-        None
         """
         try:
-            # Данные, которые нужно добавить
             df_data_to_append = [df.columns.values.tolist()] + df.values.tolist()
-            
-            # Проверка существующих данных на листе
             existing_data = sheet.get_all_values()
-            
-            if len(existing_data) <= 1:  # Если данных нет
+
+            if len(existing_data) <= 1:
                 print("Добавляем заголовки и данные")
-                sheet.append_rows(df_data_to_append, value_input_option='USER_ENTERED')
+                sheet.append_rows(df_data_to_append, value_input_option="USER_ENTERED")
             else:
                 print("Добавляем только данные")
-                sheet.append_rows(df_data_to_append[1:], value_input_option='USER_ENTERED')
-                
-        except Exception as e:
-            print(f"An error occurred: {e}")
+                sheet.append_rows(df_data_to_append[1:], value_input_option="USER_ENTERED")
+
+        except Exception as error:
+            print(f"An error occurred: {error}")
 
     def update_column_by_name(self, column_name: str, data_to_write: list):
-            """
-            Находит колонку по названию и обновляет её содержимое, начиная со 2-й строки.
-            data_to_write: плоский список значений ['реклама', '', 'реклама'...]
-            """
-            try:
-                # 1. Получаем все заголовки из первой строки
-                headers = self.sheet_title.row_values(1)
-                
-                if column_name not in headers:
-                    raise ValueError(f"Колонка '{column_name}' не найдена в таблице!")
+        """
+        Находит колонку по названию и обновляет её содержимое, начиная со 2-й строки.
+        """
+        try:
+            headers = self.sheet_title.row_values(1)
 
-                # 2. Определяем индекс колонки (в gspread нумерация с 1)
-                col_idx = headers.index(column_name) + 1
-                
-                # 3. Готовим данные: gspread ожидает список списков для диапазона
-                # Пример: [['реклама'], [''], ['реклама']]
-                vertical_values = [[val] for val in data_to_write]
-                
-                # 4. Определяем диапазон. Например, если col_idx=3, то это будет "C2:C100"
-                from gspread.utils import rowcol_to_a1
-                start_cell = rowcol_to_a1(2, col_idx) # Строка 2, нужная колонка
-                end_cell = rowcol_to_a1(len(data_to_write) + 1, col_idx)
-                range_label = f"{start_cell}:{end_cell}"
+            if column_name not in headers:
+                raise ValueError(f"Колонка '{column_name}' не найдена в таблице!")
 
-                # 5. Обновляем данные одной командой
-                self.sheet_title.update(range_label, vertical_values)
-                print(f"✅ Данные успешно записаны в колонку '{column_name}' (диапазон {range_label})")
+            col_idx = headers.index(column_name) + 1
+            vertical_values = [[val] for val in data_to_write]
 
-            except Exception as e:
-                print(f"❌ Ошибка при динамическом обновлении: {e}")
+            start_cell = rowcol_to_a1(2, col_idx)
+            end_cell = rowcol_to_a1(len(data_to_write) + 1, col_idx)
+            range_label = f"{start_cell}:{end_cell}"
+
+            self.sheet_title.update(range_label, vertical_values)
+            print(f"Данные успешно записаны в колонку '{column_name}' (диапазон {range_label})")
+
+        except Exception as error:
+            print(f"Ошибка при динамическом обновлении: {error}")
 
     def set_df_to_google(self, df: pd.DataFrame):
+        df["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        df['updated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        date_columns = [
+            "date",
+            "updated_at",
+            "created_at",
+            "date_from",
+            "date_to",
+            "dt",
+            "start_date",
+            "end_date",
+            "month",
+            "supply_date",
+            "Дата создания документа",
+            "Дата поставки",
+            "Ожидаемая дата прихода",
+        ]
 
-        date_columns = ['date', 'updated_at', 'created_at', 'date_from', 'date_to', 'dt', 'start_date', 'end_date', 'month', 'supply_date', 'Дата создания документа', 'Дата поставки', 'Ожидаемая дата прихода']
-        # Преобразуем все колонки с датами в строковый формат, если они есть в DataFrame
         for col in date_columns:
-            if col in df.columns:  
+            if col in df.columns:
                 df[col] = df[col].astype(str)
-            else:
-                continue
 
         try:
             google_connect = GoogleTabs(
                 table_title=self.table_title,
-                sheet_title=self.sheet_title.title
+                sheet_title=self.sheet_title.title,
             )
 
             ws = google_connect.sheet_title
-
-            # --- 1. Подготовка данных ---
-            df = df.copy()
-
-            # сохраняем типы
-            df = df.replace([np.inf, -np.inf], None)
-            df = df.where(pd.notnull(df), None)
-            values = [df.columns.tolist()] + df.values.tolist()
-            values = [[_json_safe_cell(cell) for cell in row] for row in values]
-
-            # Определяем конечный диапазон для обновления (например, A1:Z1000)
-            rows = len(values) # Количество строк, включая заголовок
-            cols = len(values[0]) # Количество столбцов
-
-            end_range = rowcol_to_a1(rows, cols) # Конвертируем в формат A1 (например, Z1000)
-
-            # --- 2. Перезапись данных ---
-            ws.update(
-                        f"A1:{end_range}",
-                        values,
-                        value_input_option="USER_ENTERED"
-                    )
-
-            # --- 3. если таблица была больше раньше ---
-            ws.batch_clear([f"{end_range}:Z"])
-
+            self._update_df_in_google(df=df, sheet=ws)
             print("Таблица полностью обновлена")
 
         except gspread.exceptions.SpreadsheetNotFound:
@@ -220,6 +213,6 @@ class GoogleTabs():
         except gspread.exceptions.WorksheetNotFound:
             print(f"Не найден лист {self.sheet_title.title}")
             raise
-        except Exception as e:
-            print(f"Ошибка: {e}")
+        except Exception as error:
+            print(f"Ошибка: {error}")
             raise
