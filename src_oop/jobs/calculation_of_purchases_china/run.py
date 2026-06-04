@@ -2,7 +2,6 @@ import logging
 
 import pandas as pd
 
-from src_oop.jobs.calculation_of_purchases_china.calculation_by_china_suppliers import CalculationByChinaSuppliers
 from src_oop.jobs.calculation_of_purchases_china.config import delivery_calculation_china
 from src_oop.jobs.calculation_of_purchases_china.orders_white_balance_analytics import (
     OrdersWhiteBalanceAnalyticsService,
@@ -71,6 +70,10 @@ def _build_combined_balance_with_ved() -> tuple[pd.DataFrame, VedBalanceAnalytic
 
 def transport_quarterly_plan_to_pivot() -> None:
     """Переносит поквартальный план в сводную таблицу по поставщикам."""
+    from src_oop.jobs.calculation_of_purchases_china.calculation_by_china_suppliers import (
+        CalculationByChinaSuppliers,
+    )
+
     calculation = CalculationByChinaSuppliers()
     df_quarterly = calculation.get_quarterly_plan_data()
 
