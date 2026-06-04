@@ -72,7 +72,7 @@ class VedBalanceAnalyticsService:
     На каком этапе pipeline используется:
     - после расчета `balance_df` для белых заказов;
     - перед объединением VED-данных с уже существующей аналитикой;
-    - перед тестовой выгрузкой только в `delivery_calculation_china / test_sheet`.
+    - перед выгрузкой объединенного результата в тестовый или production-лист.
 
     Почему нужен отдельно, а не встроен в существующую логику:
     - `VED_PAYMENT_CONFIGS` и `ORDERS_WHITE_PAYMENT_CONFIGS` похожи только внешне,
@@ -143,11 +143,11 @@ class VedBalanceAnalyticsService:
 
     def __init__(self) -> None:
         """
-        Подготавливает параметры подключения к исходной и тестовой таблицам.
+        Подготавливает параметры подключения к исходному отчетному листу и целевой таблице.
 
         Метод ничего не загружает из Google Sheets сразу.
         Он только сохраняет:
-        - откуда читать VED-данные;
+        - откуда читать VED-данные (`report_sheet`);
         - куда писать тестовый объединенный результат.
 
         Такой ленивый подход полезен для отладки:
@@ -155,7 +155,7 @@ class VedBalanceAnalyticsService:
         только в момент, когда оно действительно понадобится.
         """
         self._table_name = logistics_ved.get("title")
-        self._source_sheet_name = logistics_ved.get("test_sheet")
+        self._source_sheet_name = logistics_ved.get("report_sheet")
         self._target_table_name = delivery_calculation_china.get("title")
         self._target_sheet_name = delivery_calculation_china.get("test_sheet")
 
