@@ -12,14 +12,21 @@ from app.settings import (
 
 logger = logging.getLogger(__name__)
 MAX_OUTPUT_LEN = 5000
-DEFAULT_MAIN_COMMAND = "python main.py update_orders_white_balance_analytics"
+DEFAULT_MAIN_COMMAND = "python main.py update_payments_analyze_with_ved"
+PRODUCTION_DIRECT_JOB_COMMAND = (
+    "python -c "
+    "\"from src_oop.jobs.calculation_of_purchases_china.run import "
+    "update_payments_analyze_with_ved; "
+    "update_payments_analyze_with_ved()\""
+)
+LEGACY_MAIN_COMMAND = "python main.py update_orders_white_balance_analytics"
 LEGACY_DIRECT_JOB_COMMAND = (
     "python -c "
     "\"from src_oop.jobs.calculation_of_purchases_china.run import "
     "update_orders_white_balance_analytics; "
     "update_orders_white_balance_analytics()\""
 )
-DIRECT_SERVICE_COMMAND = (
+LEGACY_DIRECT_SERVICE_COMMAND = (
     "python -c "
     "\"from src_oop.jobs.calculation_of_purchases_china.orders_white_balance_analytics "
     "import OrdersWhiteBalanceAnalyticsService; "
@@ -58,8 +65,10 @@ def _resolve_project_dir() -> Path:
 
 def run_payments_analyze_command() -> subprocess.CompletedProcess[str]:
     command_to_run = PAYMENTS_ANALYZE_COMMAND.strip()
-    if command_to_run in {DEFAULT_MAIN_COMMAND, LEGACY_DIRECT_JOB_COMMAND}:
-        command_to_run = DIRECT_SERVICE_COMMAND
+    if command_to_run == DEFAULT_MAIN_COMMAND:
+        command_to_run = PRODUCTION_DIRECT_JOB_COMMAND
+    elif command_to_run in {LEGACY_MAIN_COMMAND, LEGACY_DIRECT_JOB_COMMAND}:
+        command_to_run = LEGACY_DIRECT_SERVICE_COMMAND
 
     command = shlex.split(command_to_run, posix=True)
     project_dir = _resolve_project_dir()

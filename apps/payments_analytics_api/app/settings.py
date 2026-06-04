@@ -16,7 +16,7 @@ PAYMENTS_ANALYZE_PROJECT_DIR = Path(
 
 PAYMENTS_ANALYZE_COMMAND = os.getenv(
     "PAYMENTS_ANALYZE_COMMAND",
-    "python main.py update_orders_white_balance_analytics",
+    "python main.py update_payments_analyze_with_ved",
 )
 
 PAYMENTS_ANALYZE_TIMEOUT_SECONDS = int(

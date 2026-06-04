@@ -3,6 +3,7 @@
 Отдельное FastAPI-приложение для запуска обновления аналитики платежей через webhook.
 
 API запускает существующую job командой из `PAYMENTS_ANALYZE_COMMAND` в директории `PAYMENTS_ANALYZE_PROJECT_DIR`.
+Текущий production webhook должен обновлять combined white + VED аналитику и писать ее в `payments_analyze_sheet`.
 
 ## Структура
 
@@ -46,7 +47,7 @@ Copy-Item .env.example .env
 ```env
 GOOGLE_SHEETS_WEBHOOK_TOKEN=change_me
 PAYMENTS_ANALYZE_PROJECT_DIR=/app/project
-PAYMENTS_ANALYZE_COMMAND=python -c "from src_oop.jobs.calculation_of_purchases_china.orders_white_balance_analytics import OrdersWhiteBalanceAnalyticsService; OrdersWhiteBalanceAnalyticsService().run()"
+PAYMENTS_ANALYZE_COMMAND=python main.py update_payments_analyze_with_ved
 PAYMENTS_ANALYZE_TIMEOUT_SECONDS=900
 API_HOST=0.0.0.0
 API_PORT=8000
@@ -146,5 +147,49 @@ FastAPI доступен, но упала основная job.
 docker compose logs -f payments-analytics-api
 docker compose exec payments-analytics-api bash
 cd /app/project
+python main.py update_payments_analyze_with_ved
+```
+
+## Режимы запуска аналитики
+
+### Production combined mode
+
+Webhook теперь должен запускать production combined сценарий:
+
+```bash
+python main.py update_payments_analyze_with_ved
+```
+
+Результат выгружается в:
+
+```text
+payments_analyze_sheet
+```
+
+### Test combined mode
+
+Для тестовой combined выгрузки остается отдельная команда:
+
+```bash
+python main.py update_test_balance_with_ved
+```
+
+Результат выгружается в:
+
+```text
+test_sheet
+```
+
+### White-only legacy mode
+
+Старый white-only сценарий сохранен как диагностический режим:
+
+```bash
 python main.py update_orders_white_balance_analytics
 ```
+
+## Что обновить на сервере
+
+- обновить реальный `.env`, чтобы `PAYMENTS_ANALYZE_COMMAND` указывал на `python main.py update_payments_analyze_with_ved`
+- endpoint path менять не нужно
+- после изменения Python-файлов контейнер webhook-приложения нужно пересобрать

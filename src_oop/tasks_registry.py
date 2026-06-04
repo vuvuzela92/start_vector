@@ -14,7 +14,9 @@ from src_oop.jobs.unit.update_adv_participants import update_adv_participants_to
 from src_oop.jobs.annual_procurement_plan.run import transport_data_to_annual_procurement_plan, transport_parfume_data_to_annual_procurement_plan, transport_unit_data_to_annual_procurement_plan, transport_supplies_data_to_annual_procurement_plan
 from src_oop.jobs.calculation_of_purchases_china.run import (
     transport_quarterly_plan_to_pivot,
+    update_payments_analyze_with_ved,
     update_orders_white_balance_analytics,
+    update_test_balance_with_ved,
 )
 # Артикульный анализ
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
@@ -80,7 +82,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
     },
     "update_week_n_redeem": {
         "func": smart_run(update_week_n_redeem),
-        "desc": "🔁 Запуск обновления данных в ОТЧЕТ за 2023-2024"
+        "desc": "🔁 Запуск обновления данных в ОТЧЕТ за 2026 пров v.2.0"
     },
     
     # ===
@@ -113,6 +115,14 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "update_orders_white_balance_analytics": {
         "func": smart_run(update_orders_white_balance_analytics),
         "desc": "Выгрузка аналитики платежей по белым заказам на лист "
+    },
+    "update_test_balance_with_ved": {
+        "func": smart_run(update_test_balance_with_ved),
+        "desc": "Тестовая выгрузка объединенного balance_df и ved_balance_df в test_sheet"
+    },
+    "update_payments_analyze_with_ved": {
+        "func": smart_run(update_payments_analyze_with_ved),
+        "desc": "Production-выгрузка объединенного balance_df и ved_balance_df в payments_analyze_sheet"
     },
     # ===
 

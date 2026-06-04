@@ -3,13 +3,11 @@ import re
 from datetime import datetime
 
 import pandas as pd
+from pandas.api.types import is_numeric_dtype
 
 from src_oop.core.my_gspread import GoogleTabs
 from src_oop.core.utils_general import clean_currency_value
 from src_oop.jobs.calculation_of_purchases_china.config import (
-    ORDERS_WHITE_AVANS_COLS,
-    ORDERS_WHITE_BALANCE_ONE_COLS,
-    ORDERS_WHITE_BALANCE_TWO_COLS,
     ORDERS_WHITE_CANCELED_STATUSES,
     ORDERS_WHITE_DIGIT_COLS,
     ORDERS_WHITE_PAYMENT_CONFIGS,
@@ -19,6 +17,16 @@ from src_oop.jobs.calculation_of_purchases_china.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+PAYMENT_UNIFIED_COLUMNS = [
+    "Статус_по_этапу",
+    "Дата_аванса_по_годовому_плану",
+    "Дата_план",
+    "Дата_платеж_календарь",
+    "Дата_факт",
+    "%_оплаты",
+    "Сумма_оплаты",
+]
 
 
 class OrdersWhiteBalanceAnalyticsService:
@@ -102,17 +110,35 @@ class OrdersWhiteBalanceAnalyticsService:
         return df_orders[~df_orders["Статус"].isin(ORDERS_WHITE_CANCELED_STATUSES)]
 
     @staticmethod
-    def get_order_id_columns() -> list[str]:
-        payment_columns = (
-            ORDERS_WHITE_AVANS_COLS
-            + ORDERS_WHITE_BALANCE_ONE_COLS
-            + ORDERS_WHITE_BALANCE_TWO_COLS
-        )
+    def get_payment_source_columns() -> set[str]:
+        return {
+            source_column
+            for payment_config in ORDERS_WHITE_PAYMENT_CONFIGS
+            for source_column in payment_config["columns"].values()
+        }
+
+    @classmethod
+    def get_order_id_columns(cls) -> list[str]:
+        payment_columns = cls.get_payment_source_columns()
         return [
             column
             for column in ORDERS_WHITE_REQUIRED_COLUMNS
             if column not in payment_columns
         ]
+
+    @staticmethod
+    def _is_not_empty_payment_value(series: pd.Series) -> pd.Series:
+        if is_numeric_dtype(series):
+            return series.notna()
+
+        normalized = series.fillna("").astype(str).str.strip()
+        return normalized.ne("") & normalized.ne("nan")
+
+    @classmethod
+    def get_non_empty_payment_mask(cls, df_balance: pd.DataFrame) -> pd.Series:
+        amount_not_empty = cls._is_not_empty_payment_value(df_balance["Сумма_оплаты"])
+        calendar_not_empty = cls._is_not_empty_payment_value(df_balance["Дата_платеж_календарь"])
+        return amount_not_empty | calendar_not_empty
 
     def build_payment_dataframe(
         self,
@@ -128,8 +154,13 @@ class OrdersWhiteBalanceAnalyticsService:
         df_payment["Этап платежа"] = payment_config["Этап платежа"]
         df_payment["Номер этапа платежа"] = payment_config["Номер этапа платежа"]
 
-        for target_column, source_column in payment_columns.items():
-            df_payment[target_column] = df[source_column].to_numpy()
+        for unified_column in PAYMENT_UNIFIED_COLUMNS:
+            source_column = payment_columns.get(unified_column)
+            if source_column is None:
+                df_payment[unified_column] = pd.NA
+                continue
+
+            df_payment[unified_column] = df[source_column].to_numpy()
 
         return df_payment
 
@@ -145,9 +176,7 @@ class OrdersWhiteBalanceAnalyticsService:
         ]
 
         df_balance = pd.concat(payment_frames, ignore_index=True)
-        df_balance = df_balance[
-            df_balance["Статус_по_этапу"].notna()
-        ].copy()
+        df_balance = df_balance[self.get_non_empty_payment_mask(df_balance)].copy()
 
         return df_balance.sort_values(
             by=["Номер заказа 1С", "_Порядок исходной строки", "Номер этапа платежа"],
@@ -157,8 +186,15 @@ class OrdersWhiteBalanceAnalyticsService:
     @staticmethod
     def add_payment_status_amounts(df_balance: pd.DataFrame) -> pd.DataFrame:
         df_result = df_balance.copy()
-        paid_mask = df_result["Статус_по_этапу"].eq("оплачено")
-        payment_amount = df_result["Сумма_оплаты"].fillna(0)
+        paid_mask = (
+            df_result["Статус_по_этапу"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .eq("оплачено")
+        )
+        payment_amount = pd.to_numeric(df_result["Сумма_оплаты"], errors="coerce").fillna(0)
 
         df_result["Оплачено"] = payment_amount.where(paid_mask, 0)
         df_result["Не_оплачено"] = payment_amount.where(~paid_mask, 0)
@@ -178,11 +214,12 @@ class OrdersWhiteBalanceAnalyticsService:
         self.target_connect.set_df_to_google(df_upload)
         logger.info("df_orders_white_balance выгружен на лист %s.", self._target_sheet_name)
 
-    def run(self) -> pd.DataFrame:
+    def run(self, upload: bool = True) -> pd.DataFrame:
         df_source = self.load_source_data()
         df_orders = self.prepare_orders_dataframe(df_source)
         df_balance = self.build_balance_dataframe(df_orders)
         df_balance = self.add_payment_status_amounts(df_balance)
         df_upload = self.prepare_dataframe_for_upload(df_balance)
-        self.upload_to_google_sheet(df_upload)
+        if upload:
+            self.upload_to_google_sheet(df_upload)
         return df_balance
