@@ -625,17 +625,23 @@ class VedBalanceAnalyticsService:
     @staticmethod
     def prepare_dataframe_for_upload(df_balance: pd.DataFrame) -> pd.DataFrame:
         """
-        Добавляет служебную колонку времени перед выгрузкой в Google Sheets.
+        Добавляет служебные колонки перед выгрузкой в Google Sheets.
 
         Параметры:
             df_balance:
                 DataFrame, который уже готов к выгрузке.
 
         Возвращает:
-            Копию исходного DataFrame с колонкой `updated_at`.
+            Копию исходного DataFrame с колонками `Месяц` и `updated_at`.
         """
         df_upload = df_balance.copy()
-        df_upload["Месяц"] = pd.to_datetime(df_upload["Дата_платеж_календарь"], errors="coerce").dt.to_period("M").astype(str)
+        payment_calendar_dates = pd.to_datetime(
+            df_upload["Дата_платеж_календарь"],
+            errors="coerce",
+            dayfirst=True,
+            format="mixed",
+        )
+        df_upload["Месяц"] = payment_calendar_dates.dt.strftime("%m-%Y").fillna("")
         df_upload[ORDERS_WHITE_UPDATED_AT_COLUMN] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return df_upload
 
