@@ -338,3 +338,8 @@ VED_PAYMENT_CONFIGS = [
         },
     }
 ]
+# Платежный календарь
+payments_calendar = {
+    "title": "Платежный календарь",
+    "analytic_sheet": "Аналитика_платежей",
+    }

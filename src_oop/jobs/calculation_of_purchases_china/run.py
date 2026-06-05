@@ -2,7 +2,10 @@ import logging
 
 import pandas as pd
 
-from src_oop.jobs.calculation_of_purchases_china.config import delivery_calculation_china
+from src_oop.jobs.calculation_of_purchases_china.config import (
+    delivery_calculation_china,
+    payments_calendar,
+)
 from src_oop.jobs.calculation_of_purchases_china.orders_white_balance_analytics import (
     OrdersWhiteBalanceAnalyticsService,
 )
@@ -131,7 +134,7 @@ def update_payments_analyze_with_ved() -> None:
     - отдельно считает VED-часть;
     - выравнивает VED по структуре white-аналитики;
     - объединяет обе части в один итоговый DataFrame;
-    - пишет combined результат в `delivery_calculation_china / payments_analyze_sheet`.
+    - пишет combined результат в `payments_calendar / Аналитика_платежей`.
 
     Ограничение:
         Функция не меняет white-only сценарий и не трогает тестовую combined-выгрузку.
@@ -141,5 +144,6 @@ def update_payments_analyze_with_ved() -> None:
     df_upload = ved_service.prepare_dataframe_for_upload(combined_balance_df)
     ved_service.upload_to_sheet(
         df_upload=df_upload,
-        target_sheet_name=delivery_calculation_china["payments_analyze_sheet"],
+        target_table_name=payments_calendar["title"],
+        target_sheet_name=payments_calendar["analytic_sheet"],
     )

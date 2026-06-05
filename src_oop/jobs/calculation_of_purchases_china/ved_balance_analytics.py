@@ -160,7 +160,7 @@ class VedBalanceAnalyticsService:
         self._target_sheet_name = delivery_calculation_china.get("test_sheet")
 
         self._source_conn: GoogleTabs | None = None
-        self._target_connections: dict[str, GoogleTabs] = {}
+        self._target_connections: dict[tuple[str, str], GoogleTabs] = {}
 
     @property
     def source_connect(self) -> GoogleTabs:
@@ -193,30 +193,36 @@ class VedBalanceAnalyticsService:
             В рамках VED-отладки мы не трогаем production-листы.
             Любая тестовая выгрузка должна идти только в `test_sheet`.
         """
-        return self.get_target_connect(self._target_sheet_name)
+        return self.get_target_connect(
+            target_table_name=self._target_table_name,
+            target_sheet_name=self._target_sheet_name,
+        )
 
-    def get_target_connect(self, target_sheet_name: str) -> GoogleTabs:
+    def get_target_connect(self, target_table_name: str, target_sheet_name: str) -> GoogleTabs:
         """
-        Возвращает подключение к целевому листу таблицы `delivery_calculation_china`.
+        Возвращает подключение к целевой таблице и листу для выгрузки результата.
 
         Параметры:
+            target_table_name:
+                Название целевой таблицы Google Sheets.
             target_sheet_name:
                 Название листа, в который нужно выгрузить подготовленный DataFrame.
 
         Возвращает:
-            Объект `GoogleTabs`, настроенный на переданный лист целевой таблицы.
+            Объект `GoogleTabs`, настроенный на переданные таблицу и лист.
 
         Зачем это нужно:
             VED-сервис по-прежнему отвечает только за свою часть данных, но теперь его нужно
             безопасно использовать и для тестовой, и для production-выгрузки без дублирования
             кода подключения.
         """
-        if target_sheet_name not in self._target_connections:
-            self._target_connections[target_sheet_name] = GoogleTabs(
-                table_title=self._target_table_name,
+        connection_key = (target_table_name, target_sheet_name)
+        if connection_key not in self._target_connections:
+            self._target_connections[connection_key] = GoogleTabs(
+                table_title=target_table_name,
                 sheet_title=target_sheet_name,
             )
-        return self._target_connections[target_sheet_name]
+        return self._target_connections[connection_key]
 
     @staticmethod
     def normalize_column_name(column_name: object) -> str:
@@ -662,18 +668,26 @@ class VedBalanceAnalyticsService:
         """
         self.upload_to_sheet(
             df_upload=df_upload,
+            target_table_name=self._target_table_name,
             target_sheet_name=self._target_sheet_name,
         )
 
-    def upload_to_sheet(self, df_upload: pd.DataFrame, target_sheet_name: str) -> None:
+    def upload_to_sheet(
+        self,
+        df_upload: pd.DataFrame,
+        target_table_name: str,
+        target_sheet_name: str,
+    ) -> None:
         """
-        Выгружает подготовленный DataFrame в указанный лист таблицы `delivery_calculation_china`.
+        Выгружает подготовленный DataFrame в указанную таблицу и лист Google Sheets.
 
         Параметры:
             df_upload:
                 DataFrame, уже готовый к записи в Google Sheets.
+            target_table_name:
+                Название целевой таблицы Google Sheets.
             target_sheet_name:
-                Название целевого листа в таблице `delivery_calculation_china`.
+                Название целевого листа в Google Sheets.
 
         Возвращает:
             Ничего.
@@ -689,8 +703,15 @@ class VedBalanceAnalyticsService:
             )
             return
 
-        self.get_target_connect(target_sheet_name).set_df_to_google(df_upload)
-        logger.info("combined_balance_df выгружен на лист %s.", target_sheet_name)
+        self.get_target_connect(
+            target_table_name=target_table_name,
+            target_sheet_name=target_sheet_name,
+        ).set_df_to_google(df_upload)
+        logger.info(
+            "combined_balance_df выгружен в таблицу %s на лист %s.",
+            target_table_name,
+            target_sheet_name,
+        )
 
     def run(self) -> pd.DataFrame:
         """
