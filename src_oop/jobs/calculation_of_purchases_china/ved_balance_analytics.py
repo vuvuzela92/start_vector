@@ -713,6 +713,17 @@ class VedBalanceAnalyticsService:
         df_upload["Признак_просрочки"] = (
             VedBalanceAnalyticsService._build_overdue_bucket_series(overdue_days)
         )
+
+        custom_supplier_by_stage = {
+            "Таможня прогноз": "Таможня",
+            "Логистика прогноз": "Логистика",
+        }
+        stage_normalized = df_upload["Этап платежа"].fillna("").astype(str).str.strip()
+        custom_supplier_mask = stage_normalized.isin(custom_supplier_by_stage)
+        df_upload.loc[custom_supplier_mask, "Поставщик"] = (
+            stage_normalized[custom_supplier_mask].map(custom_supplier_by_stage)
+        )
+
         df_upload[ORDERS_WHITE_UPDATED_AT_COLUMN] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         service_columns = [
