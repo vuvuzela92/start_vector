@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 def _build_combined_balance_with_ved() -> tuple[pd.DataFrame, VedBalanceAnalyticsService]:
     """
-    Собирает объединенный DataFrame по белым заказам и VED без записи в Google Sheets.
+    Собирает объединенный DataFrame по white- и VED-части без записи в Google Sheets.
 
     Возвращает:
         Кортеж из объединенного DataFrame и экземпляра `VedBalanceAnalyticsService`,
@@ -105,22 +105,25 @@ def update_test_balance_with_ved() -> None:
     - отдельно считает `ved_balance_df` по таблице ВЭД;
     - приводит VED-часть к структуре `balance_df`;
     - объединяет оба результата через `pd.concat`;
+    - подготавливает служебные колонки итоговой аналитики;
     - пишет объединенный DataFrame только в `delivery_calculation_china / test_sheet`.
 
     Почему функция нужна отдельно:
     - это изолированная точка запуска для отладки VED-логики;
     - она не меняет поведение штатного `update_orders_white_balance_analytics`;
-    - ее удобно вызывать из CLI, не включая VED в production-поток раньше времени.
+    - ее удобно вызывать из CLI, не затрагивая production-выгрузку.
 
     Что считается нормальным результатом:
     - `balance_df` строится как раньше;
     - `ved_balance_df` успешно приводится к той же структуре;
+    - в VED-части остаются только этапы с реальной `Сумма_оплаты > 0`;
     - в логах нет критических ошибок валидации;
     - тестовая выгрузка происходит только в `test_sheet`.
     """
     combined_balance_df, ved_service = _build_combined_balance_with_ved()
 
-    # Финальная запись идет только в тестовый лист, чтобы безопасно проверить результат.
+    # Финальная запись идет только в тестовый лист, чтобы безопасно проверить
+    # объединенную логику без влияния на production-таблицу.
     df_upload = ved_service.prepare_dataframe_for_upload(combined_balance_df)
     ved_service.upload_to_test_sheet(df_upload)
 
@@ -134,6 +137,7 @@ def update_payments_analyze_with_ved() -> None:
     - отдельно считает VED-часть;
     - выравнивает VED по структуре white-аналитики;
     - объединяет обе части в один итоговый DataFrame;
+    - подготавливает служебные колонки итоговой аналитики;
     - пишет combined результат в `payments_calendar / Аналитика_платежей`.
 
     Ограничение:

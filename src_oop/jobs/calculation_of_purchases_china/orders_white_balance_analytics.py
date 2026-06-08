@@ -30,7 +30,13 @@ PAYMENT_UNIFIED_COLUMNS = [
 
 
 class OrdersWhiteBalanceAnalyticsService:
-    """Формирует и выгружает аналитику платежей по листу заказов белых."""
+    """
+    Формирует и выгружает аналитику платежей по листу белых заказов.
+
+    Сервис читает исходный лист заказов, разворачивает платежные этапы
+    по конфигурации `ORDERS_WHITE_PAYMENT_CONFIGS`, рассчитывает статусные
+    суммы и готовит результат к выгрузке в платежную аналитику.
+    """
 
     def __init__(self) -> None:
         self._table_name = delivery_calculation_china.get("title")
@@ -185,14 +191,22 @@ class OrdersWhiteBalanceAnalyticsService:
 
     @staticmethod
     def add_payment_status_amounts(df_balance: pd.DataFrame) -> pd.DataFrame:
+        """
+        Разделяет сумму этапа на колонки `Оплачено` и `Не_оплачено`.
+
+        Для white-этапов оплаченной считается строка со статусом
+        `оплачено` или `оплачен` после нормализации регистра и пробелов.
+        """
         df_result = df_balance.copy()
+        # В таблицах статусы встречаются в двух равнозначных формах:
+        # "оплачено" и "оплачен". Для аналитики их считаем одним состоянием.
         paid_mask = (
             df_result["Статус_по_этапу"]
             .fillna("")
             .astype(str)
             .str.strip()
             .str.lower()
-            .eq("оплачено")
+            .isin({"оплачено", "оплачен"})
         )
         payment_amount = pd.to_numeric(df_result["Сумма_оплаты"], errors="coerce").fillna(0)
 
@@ -202,6 +216,7 @@ class OrdersWhiteBalanceAnalyticsService:
 
     @staticmethod
     def prepare_dataframe_for_upload(df_balance: pd.DataFrame) -> pd.DataFrame:
+        """Добавляет к результату метку времени обновления перед выгрузкой."""
         df_upload = df_balance.copy()
         df_upload[ORDERS_WHITE_UPDATED_AT_COLUMN] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return df_upload
@@ -215,6 +230,13 @@ class OrdersWhiteBalanceAnalyticsService:
         logger.info("df_orders_white_balance выгружен на лист %s.", self._target_sheet_name)
 
     def run(self, upload: bool = True) -> pd.DataFrame:
+        """
+        Выполняет полный pipeline white-аналитики.
+
+        Если `upload=True`, результат дополнительно выгружается в целевой лист.
+        Возвращается DataFrame без служебной post-upload модификации, чтобы
+        его можно было безопасно переиспользовать в combined-сценариях.
+        """
         df_source = self.load_source_data()
         df_orders = self.prepare_orders_dataframe(df_source)
         df_balance = self.build_balance_dataframe(df_orders)

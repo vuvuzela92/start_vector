@@ -40,12 +40,17 @@ class VedAlignmentResult:
 
 class VedBalanceAnalyticsService:
     """
-    Формирует платежную аналитику по таблице ВЭД и готовит ее к объединению
-    с аналитикой по белым заказам.
+    Формирует платежную аналитику по листу ВЭД и подготавливает ее
+    к объединению с аналитикой по белым заказам.
 
-    Сервис читает исходный лист, подготавливает базовый DataFrame,
-    разворачивает этапы платежей, выравнивает структуру и готовит результат
-    к тестовой или production-выгрузке.
+    Сервис:
+    - читает лист `Логистика ВЭД 2026 / ОТЧЁТ`;
+    - нормализует заголовки и приводит денежные колонки к числам;
+    - разворачивает каждую строку источника в набор платежных этапов
+      по `VED_PAYMENT_CONFIGS`;
+    - исключает VED-этапы без реальной суммы оплаты;
+    - рассчитывает `Оплачено` / `Не_оплачено`;
+    - готовит объединенный результат к тестовой или production-выгрузке.
     """
 
     BASE_COLUMNS_MAP = {
@@ -157,7 +162,14 @@ class VedBalanceAnalyticsService:
             )
 
     def load_source_data(self) -> pd.DataFrame:
-        """Загружает исходный лист ВЭД в DataFrame с нормализованными заголовками."""
+        """
+        Загружает исходный лист ВЭД и приводит его к рабочему виду.
+
+        В листе заголовки находятся на третьей строке, поэтому при чтении
+        используется отдельная логика выбора строки заголовков. Числовые
+        колонки очищаются сразу после загрузки, чтобы дальше VED-пайплайн
+        работал уже с числами, а не со строками из Google Sheets.
+        """
         # В листе ВЭД заголовки находятся на третьей строке, а данные идут ниже.
         values = self.source_connect.sheet_title.get_all_values()
         if len(values) < 3:
@@ -177,7 +189,14 @@ class VedBalanceAnalyticsService:
         return df
 
     def prepare_source_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Готовит базовый VED-DataFrame и переименовывает общие колонки под общий формат."""
+        """
+        Готовит базовый VED-DataFrame и приводит общие колонки к общему формату.
+
+        На этом этапе сохраняются только нужные для VED-аналитики исходные
+        колонки. Общие идентификационные поля переименовываются так, чтобы
+        их можно было затем без дополнительных преобразований объединить
+        с white-аналитикой.
+        """
         self.validate_required_columns(df, LOGISTICS_VED_REQUIRED_COLUMNS)
         self.validate_required_columns(df, list(self.BASE_COLUMNS_MAP.keys()))
 
@@ -198,17 +217,31 @@ class VedBalanceAnalyticsService:
         df_base: pd.DataFrame,
         payment_config: dict[str, object],
     ) -> pd.DataFrame:
-        """Разворачивает данные одного VED-этапа в строки платежного DataFrame."""
+        """
+        Разворачивает один VED-этап в строки платежного DataFrame.
+
+        Для каждой исходной строки создается отдельная строка этапа оплаты.
+        Заполняются только те унифицированные поля, которые явно описаны
+        в конфигурации текущего этапа. Остальные платежные поля остаются
+        пустыми, чтобы итоговая структура оставалась совместимой с white-
+        аналитикой, но не создавала фиктивных значений.
+        """
         payment_columns = payment_config["columns"]
         self.validate_required_columns(df_source, list(payment_columns.values()))
 
         df_payment = df_base.copy()
         df_payment["_Порядок исходной строки"] = range(len(df_payment))
-        df_payment["Этап платежа"] = payment_config["Этап платежа"]
+        stage_name = str(payment_config["Этап платежа"]).strip()
+        df_payment["Этап платежа"] = stage_name
         df_payment["Номер этапа платежа"] = payment_config["Номер этапа платежа"]
 
         for target_column, source_column in payment_columns.items():
             df_payment[target_column] = df_source[source_column].to_numpy()
+
+        # Для этапа брокерского оформления в аналитике важен не общий
+        # поставщик перевозки, а конкретный таможенный брокер из источника.
+        if stage_name == "Брокерское оформление":
+            df_payment["Поставщик"] = df_source["ТАМОЖЕННЫЙ БРОКЕР"].to_numpy()
 
         if "Сумма_оплаты" not in df_payment.columns:
             df_payment["Сумма_оплаты"] = pd.NA
@@ -225,7 +258,14 @@ class VedBalanceAnalyticsService:
         return df_payment
 
     def build_balance_dataframe(self, df_source: pd.DataFrame) -> pd.DataFrame:
-        """Собирает итоговый `ved_balance_df` по всем этапам платежей VED."""
+        """
+        Собирает итоговый `ved_balance_df` по всем этапам платежей VED.
+
+        После разворота этапов сервис оставляет только строки с реальной
+        `Сумма_оплаты > 0`. Для VED это важное бизнес-правило: этапы с пустой
+        или нулевой суммой не должны попадать в итоговую платежную аналитику,
+        даже если у них заполнены дата или статус.
+        """
         df_base = self.prepare_source_dataframe(df_source)
 
         payment_frames = [
@@ -238,14 +278,18 @@ class VedBalanceAnalyticsService:
         ]
 
         df_balance = pd.concat(payment_frames, ignore_index=True)
+        payment_amount = pd.to_numeric(df_balance["Сумма_оплаты"], errors="coerce")
+        rows_before_amount_filter = len(df_balance)
+        positive_amount_mask = payment_amount.notna() & payment_amount.gt(0)
+        df_balance = df_balance.loc[positive_amount_mask].copy()
+        df_balance["Сумма_оплаты"] = payment_amount.loc[positive_amount_mask].to_numpy()
 
-        # Оставляем только осмысленные этапы: с суммой, датой календаря или статусом.
-        meaningful_mask = (
-            df_balance["Сумма_оплаты"].notna()
-            | df_balance["Дата_платеж_календарь"].notna()
-            | df_balance["Статус_по_этапу"].fillna("").astype(str).str.strip().ne("")
+        logger.info(
+            "VED rows before amount filter: %s; after amount filter: %s; removed: %s",
+            rows_before_amount_filter,
+            len(df_balance),
+            rows_before_amount_filter - len(df_balance),
         )
-        df_balance = df_balance[meaningful_mask].copy()
 
         return df_balance.sort_values(
             by=[
@@ -258,15 +302,23 @@ class VedBalanceAnalyticsService:
 
     @staticmethod
     def add_payment_status_amounts(df_balance: pd.DataFrame) -> pd.DataFrame:
-        """Разделяет сумму этапа на колонки `Оплачено` и `Не_оплачено` по статусу."""
+        """
+        Разделяет сумму этапа на колонки `Оплачено` и `Не_оплачено`.
+
+        Этап считается оплаченным, если нормализованный статус равен
+        `оплачено` или `оплачен`. Проверка не чувствительна к регистру,
+        лишним пробелам и безопасна для пустых значений.
+        """
         df_result = df_balance.copy()
+        # В исходных таблицах встречаются обе формы статуса: "оплачено"
+        # и "оплачен". Для аналитики они считаются эквивалентными.
         paid_mask = (
             df_result["Статус_по_этапу"]
             .fillna("")
             .astype(str)
             .str.strip()
             .str.lower()
-            .eq("оплачено")
+            .isin({"оплачено", "оплачен"})
         )
         payment_amount = pd.to_numeric(df_result["Сумма_оплаты"], errors="coerce").fillna(0)
 
@@ -378,8 +430,13 @@ class VedBalanceAnalyticsService:
         """
         Добавляет служебные колонки перед выгрузкой в Google Sheets.
 
-        Здесь рассчитываются месяцы по календарной и плановой датам,
-        дни просрочки, бакет просрочки и метка времени обновления.
+        На этом этапе:
+        - рассчитываются месяцы по календарной и плановой датам в формате
+          `MM-YYYY`;
+        - считается количество дней просрочки и бакет просрочки;
+        - для прогнозных этапов корректируется поле `Поставщик`, чтобы в
+          сводных таблицах они не выглядели как товарные поставщики;
+        - добавляется метка времени обновления.
         """
         df_upload = df_balance.copy()
         payment_calendar_dates = VedBalanceAnalyticsService._parse_date_series(
@@ -401,6 +458,8 @@ class VedBalanceAnalyticsService:
             VedBalanceAnalyticsService._build_overdue_bucket_series(overdue_days)
         )
 
+        # Прогнозные этапы не относятся к реальному поставщику товара, поэтому
+        # для аналитики им задаются отдельные технические значения поставщика.
         custom_supplier_by_stage = {
             "Таможня прогноз": "Таможня",
             "Логистика прогноз": "Логистика",
@@ -461,7 +520,12 @@ class VedBalanceAnalyticsService:
         )
 
     def run(self) -> pd.DataFrame:
-        """Выполняет полный pipeline VED-аналитики и возвращает итоговый DataFrame."""
+        """
+        Выполняет полный VED-пайплайн и возвращает итоговый DataFrame.
+
+        Метод не выполняет выгрузку сам по себе: это позволяет безопасно
+        использовать результат и в test-, и в production-сценариях объединения.
+        """
         df_source = self.load_source_data()
         df_balance = self.build_balance_dataframe(df_source)
         return self.add_payment_status_amounts(df_balance)
