@@ -1,83 +1,84 @@
-"""
-Модуль настройки логирования для всего приложения
-"""
-import os
-import sys
+"""Модуль настройки логирования для приложения на базе src_oop."""
+
+from pathlib import Path
 import logging
+import sys
 from logging.handlers import RotatingFileHandler
+
 from loguru import logger
 
-from src.config import LOG_DIR, LOG_FILE
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+LOG_DIR = PROJECT_ROOT / "logs"
+LOG_FILE = "app.log"
 
 
 class InterceptHandler(logging.Handler):
-    """Обработчик для перенаправления стандартных логов Python в loguru"""
-    def emit(self, record):
-        # Получаем соответствующий уровень логирования loguru
+    """Перенаправляет стандартные логи Python в loguru."""
+
+    def emit(self, record: logging.LogRecord) -> None:
         try:
             level = logger.level(record.levelname).name
         except ValueError:
             level = record.levelno
 
-        # Находим вызывающий файл и строку
         frame, depth = logging.currentframe(), 2
-        while frame.f_code.co_filename == logging.__file__:
+        while frame and frame.f_code.co_filename == logging.__file__:
             frame = frame.f_back
             depth += 1
 
-        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
+        logger.opt(depth=depth, exception=record.exc_info).log(
+            level,
+            record.getMessage(),
+        )
 
 
 def setup_logger():
     """
-    Настраивает и возвращает настроенный логгер
-    
-    Настройки логирования:
-    - Логи в консоль (INFO и выше)
-    - Логи в файл с ротацией (максимальный размер файла 10 МБ)
-    - При превышении размера файла старые записи перезаписываются
+    Настраивает и возвращает логгер приложения.
+
+    Если отдельного конфига для логов нет, используются дефолты:
+    - директория: <корень проекта>/logs
+    - файл: app.log
     """
-    # Создаем директорию для логов, если она не существует
-    os.makedirs(LOG_DIR, exist_ok=True)
-    
-    log_file_path = os.path.join(LOG_DIR, LOG_FILE)
-    
-    # Удаляем все обработчики loguru
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_file_path = LOG_DIR / LOG_FILE
+
     logger.remove()
-    
-    # Добавляем вывод в консоль
     logger.add(
-        sys.stdout, 
-        level="INFO", 
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>"
+        sys.stdout,
+        level="INFO",
+        format=(
+            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+            "<level>{level: <8}</level> | <level>{message}</level>"
+        ),
     )
-    
-    # Настраиваем RotatingFileHandler с максимальным размером 10 МБ и одним файлом бэкапа
-    # Это обеспечит, что будет использоваться только один файл, который не превысит 10 МБ
+
     file_handler = RotatingFileHandler(
-        log_file_path, 
-        maxBytes=10*1024*1024,  # 10 МБ
-        backupCount=0,  # Не создавать дополнительные файлы для бэкапа
-        encoding='utf-8'
+        log_file_path,
+        maxBytes=10 * 1024 * 1024,
+        backupCount=0,
+        encoding="utf-8",
     )
-    
-    # Настраиваем формат логов
-    log_format = logging.Formatter(
-        "{asctime} | {levelname:<8} | {message}", 
-        "%Y-%m-%d %H:%M:%S", 
-        style="{"
+    file_handler.setFormatter(
+        logging.Formatter(
+            "{asctime} | {levelname:<8} | {message}",
+            "%Y-%m-%d %H:%M:%S",
+            style="{",
+        )
     )
-    file_handler.setFormatter(log_format)
-    file_handler.setLevel(logging.ERROR)
-    
-    # Настраиваем корневой логгер стандартной библиотеки Python
+    file_handler.setLevel(logging.INFO)
+
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.ERROR)
+    root_logger.setLevel(logging.INFO)
+    root_logger.handlers = [
+        handler
+        for handler in root_logger.handlers
+        if not isinstance(handler, (RotatingFileHandler, InterceptHandler))
+    ]
     root_logger.addHandler(file_handler)
-    
-    # Перехват сообщений стандартного логгера Python в loguru
     root_logger.addHandler(InterceptHandler())
-    
-    logger.info(f"Логгер настроен, файл: {log_file_path} (макс. 10 МБ)")
-    
+
+    logger.info("Логгер настроен, файл: {} (макс. 10 МБ)", log_file_path)
     return logger
