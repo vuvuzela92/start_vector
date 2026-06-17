@@ -1,4 +1,4 @@
-"""Модуль настройки логирования для приложения на базе src_oop."""
+"""Настройка логирования для модулей на базе src_oop."""
 
 from pathlib import Path
 import logging
@@ -14,7 +14,7 @@ LOG_FILE = "app.log"
 
 
 class InterceptHandler(logging.Handler):
-    """Перенаправляет стандартные логи Python в loguru."""
+    """Перенаправляет сообщения стандартного logging в loguru."""
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -37,9 +37,9 @@ def setup_logger():
     """
     Настраивает и возвращает логгер приложения.
 
-    Если отдельного конфига для логов нет, используются дефолты:
-    - директория: <корень проекта>/logs
-    - файл: app.log
+    Если отдельной конфигурации для логов нет, используются значения по умолчанию:
+    - директория логов: <корень проекта>/logs
+    - файл логов: app.log
     """
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)

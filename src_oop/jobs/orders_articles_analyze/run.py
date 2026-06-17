@@ -21,8 +21,13 @@ def _safe_records_preview(
     preview_columns: list[str],
     max_rows: int = 50,
 ) -> list[dict[str, object]]:
+    """Возвращает безопасный preview строк для логов и диагностических сообщений."""
     available_columns = [column for column in preview_columns if column in df.columns]
-    preview_df = df.loc[:, available_columns].head(max_rows).copy() if available_columns else df.head(max_rows).copy()
+    preview_df = (
+        df.loc[:, available_columns].head(max_rows).copy()
+        if available_columns
+        else df.head(max_rows).copy()
+    )
 
     for column in preview_df.columns:
         if pd.api.types.is_datetime64_any_dtype(preview_df[column]):
@@ -35,9 +40,15 @@ def _filter_invalid_article_id_before_upsert(
     df: pd.DataFrame,
     task_name: str,
 ) -> pd.DataFrame:
+    """
+    Удаляет строки с невалидным article_id перед upsert.
+
+    Функция не меняет исходный DataFrame inplace, а возвращает очищенную копию.
+    Если колонка article_id отсутствует, выбрасывается ValueError.
+    """
     if "article_id" not in df.columns:
         raise ValueError(
-            "Required column 'article_id' is missing before PostgreSQL upsert."
+            "Перед записью в PostgreSQL отсутствует обязательная колонка article_id."
         )
 
     result_df = df.copy()
@@ -69,7 +80,7 @@ def _filter_invalid_article_id_before_upsert(
     ]
 
     logger.info(
-        "Invalid article_id filter started | task=%s | total_rows_before=%s | invalid_count=%s",
+        "Начата фильтрация невалидных article_id | task=%s | total_rows_before=%s | invalid_count=%s",
         task_name,
         total_rows_before,
         invalid_count,
@@ -77,7 +88,7 @@ def _filter_invalid_article_id_before_upsert(
 
     if invalid_rows.empty:
         logger.info(
-            "No invalid article_id rows found before PostgreSQL upsert | task=%s | total_rows_after=%s",
+            "Невалидные article_id перед записью в PostgreSQL не найдены | task=%s | total_rows_after=%s",
             task_name,
             total_rows_before,
         )
@@ -92,16 +103,20 @@ def _filter_invalid_article_id_before_upsert(
     invalid_rows.to_csv(diagnostics_path, index=False, encoding="utf-8-sig")
 
     logger.warning(
-        "Invalid article_id rows found before PostgreSQL upsert | task=%s | total_rows_before=%s | invalid_count=%s | diagnostics_csv=%s",
+        "Найдены строки с невалидным article_id перед записью в PostgreSQL | task=%s | total_rows_before=%s | invalid_count=%s | diagnostics_csv=%s",
         task_name,
         total_rows_before,
         invalid_count,
         diagnostics_path,
     )
     logger.warning(
-        "Invalid article_id rows preview before PostgreSQL upsert | task=%s | preview_rows=%s",
+        "Предпросмотр строк с невалидным article_id | task=%s | preview_rows=%s",
         task_name,
-        _safe_records_preview(invalid_rows, preview_columns=preview_columns, max_rows=50),
+        _safe_records_preview(
+            invalid_rows,
+            preview_columns=preview_columns,
+            max_rows=50,
+        ),
     )
 
     filtered_df = result_df.loc[~invalid_mask].copy()
@@ -110,7 +125,7 @@ def _filter_invalid_article_id_before_upsert(
         errors="raise",
     ).astype("int64")
     logger.info(
-        "Invalid article_id filter finished | task=%s | total_rows_after=%s | removed_rows=%s",
+        "Фильтрация невалидных article_id завершена | task=%s | total_rows_after=%s | removed_rows=%s",
         task_name,
         len(filtered_df.index),
         invalid_count,
@@ -123,10 +138,16 @@ def _log_duplicate_keys_before_upsert(
     unique_keys: list[str],
     task_name: str,
 ) -> None:
+    """
+    Проверяет DataFrame на дубли по unique_keys перед upsert.
+
+    Если найдены дубли, функция логирует подробности, сохраняет диагностический CSV
+    и выбрасывает ValueError.
+    """
     missing_keys = [column for column in unique_keys if column not in df.columns]
     if missing_keys:
         raise ValueError(
-            f"Unique key columns {missing_keys} are missing in DataFrame before PostgreSQL upsert."
+            f"Перед записью в PostgreSQL отсутствуют колонки уникального ключа: {missing_keys}."
         )
 
     total_rows = len(df.index)
@@ -143,7 +164,7 @@ def _log_duplicate_keys_before_upsert(
     duplicate_key_count = len(duplicate_key_counts.index)
 
     logger.info(
-        "Pre-upsert duplicate check | task=%s | total_rows=%s | unique_key_count=%s | duplicate_row_count=%s | duplicate_key_count=%s | unique_keys=%s",
+        "Выполнена проверка дублей перед upsert | task=%s | total_rows=%s | unique_key_count=%s | duplicate_row_count=%s | duplicate_key_count=%s | unique_keys=%s",
         task_name,
         total_rows,
         unique_key_count,
@@ -154,7 +175,7 @@ def _log_duplicate_keys_before_upsert(
 
     if duplicate_rows.empty:
         logger.info(
-            "No duplicates found before PostgreSQL upsert | task=%s | unique_keys=%s",
+            "Дубли перед записью в PostgreSQL не найдены | task=%s | unique_keys=%s",
             task_name,
             unique_keys,
         )
@@ -170,7 +191,7 @@ def _log_duplicate_keys_before_upsert(
 
     top_conflicts = duplicate_key_counts.head(20).to_dict(orient="records")
     logger.warning(
-        "Duplicate rows found before PostgreSQL upsert | task=%s | total_rows=%s | unique_key_count=%s | duplicate_row_count=%s | duplicate_key_count=%s | diagnostics_csv=%s",
+        "Найдены дубли перед записью в PostgreSQL | task=%s | total_rows=%s | unique_key_count=%s | duplicate_row_count=%s | duplicate_key_count=%s | diagnostics_csv=%s",
         task_name,
         total_rows,
         unique_key_count,
@@ -179,7 +200,7 @@ def _log_duplicate_keys_before_upsert(
         diagnostics_path,
     )
     logger.warning(
-        "Top duplicate keys before PostgreSQL upsert | task=%s | top_conflicts=%s",
+        "Топ конфликтующих ключей перед upsert | task=%s | top_conflicts=%s",
         task_name,
         top_conflicts,
     )
@@ -202,7 +223,7 @@ def _log_duplicate_keys_before_upsert(
         how="inner",
     )
     logger.warning(
-        "Duplicate rows preview before PostgreSQL upsert | task=%s | preview_rows=%s",
+        "Предпросмотр дублей перед записью в PostgreSQL | task=%s | preview_rows=%s",
         task_name,
         _safe_records_preview(
             duplicate_preview,
@@ -212,17 +233,17 @@ def _log_duplicate_keys_before_upsert(
     )
 
     raise ValueError(
-        "Duplicate rows by unique keys ['date', 'article_id'] found before PostgreSQL upsert. "
-        "See diagnostics CSV in logs/diagnostics."
+        "Перед записью в PostgreSQL найдены дубли по уникальному ключу. "
+        "Подробности сохранены в диагностический CSV-файл."
     )
 
 
 def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> None:
-    """Запуск артикульного анализа по дням."""
+    """Запускает построение артикульного анализа по дням."""
 
     current_stage = "initialization"
     logger.info(
-        "orders_article_analyze_run started | days_ago_total=%s | days_to=%s",
+        "Запущена задача orders_article_analyze_run | days_ago_total=%s | days_to=%s",
         days_ago_total,
         days_to,
     )
@@ -231,7 +252,7 @@ def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> Non
         repo = ArticleAnalyzeRepository()
         processor = ProcessArticleAnalyze(repo)
         logger.info(
-            "Execution path | step=initialized_components | repository=%s | processor=%s",
+            "Подготовлены компоненты выполнения | step=initialized_components | repository=%s | processor=%s",
             repo.__class__.__name__,
             processor.__class__.__name__,
         )
@@ -239,7 +260,7 @@ def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> Non
         for day in range(days_ago_total, days_to - 1, -1):
             current_stage = f"day_{day}_start"
             logger.info(
-                "Day processing started | day=%s | days_ago=%s | days_to=%s",
+                "Начата обработка дня | day=%s | days_ago=%s | days_to=%s",
                 day,
                 day,
                 day,
@@ -247,17 +268,17 @@ def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> Non
             print(f"--- 🗓️ Обработка данных за {day} дн. назад ---")
 
             current_stage = f"day_{day}_build_dataset"
-            logger.info("Execution path | step=build_dataset | day=%s", day)
+            logger.info("Начата сборка DataFrame для дня | step=build_dataset | day=%s", day)
             df = processor.build_dataset(days_ago=day, days_to=day)
             logger.info(
-                "Dataset built | day=%s | rows=%s | columns=%s",
+                "DataFrame для дня собран | day=%s | rows=%s | columns=%s",
                 day,
                 len(df.index),
                 list(df.columns),
             )
 
             if df.empty:
-                logger.warning("Нет данных за %s дн. назад, пропускаем...", day)
+                logger.warning("Нет данных за %s дн. назад, день пропускается", day)
                 continue
 
             current_stage = f"day_{day}_filter_invalid_article_id_before_upsert"
@@ -270,7 +291,7 @@ def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> Non
             table = orders_articles_analyze_table.get("title")
             unique_keys = orders_articles_analyze_table.get("unique_keys")
             logger.info(
-                "Prepared DB sync metadata | day=%s | table=%s | unique_keys=%s | schema_columns=%s",
+                "Подготовлены параметры записи в PostgreSQL | day=%s | table=%s | unique_keys=%s | schema_columns=%s",
                 day,
                 table,
                 unique_keys,
@@ -279,7 +300,7 @@ def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> Non
 
             current_stage = f"day_{day}_check_duplicates_before_upsert"
             logger.info(
-                "Duplicate check started before DB sync | day=%s | table=%s | unique_keys=%s",
+                "Начата проверка дублей перед записью в PostgreSQL | day=%s | table=%s | unique_keys=%s",
                 day,
                 table,
                 unique_keys,
@@ -294,7 +315,7 @@ def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> Non
 
             current_stage = f"day_{day}_sync_data_to_postgres"
             logger.info(
-                "DB sync started | day=%s | table=%s | rows=%s",
+                "Начата синхронизация с PostgreSQL | day=%s | table=%s | rows=%s",
                 day,
                 table,
                 len(df.index),
@@ -306,18 +327,18 @@ def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> Non
                 unique_keys=unique_keys,
             )
             logger.info(
-                "DB sync finished | day=%s | table=%s | rows=%s",
+                "Синхронизация с PostgreSQL завершена | day=%s | table=%s | rows=%s",
                 day,
                 table,
                 len(df.index),
             )
-            logger.info("Day processing finished | day=%s", day)
+            logger.info("Обработка дня завершена | day=%s", day)
 
-        logger.info("orders_article_analyze_run finished successfully")
+        logger.info("Задача orders_article_analyze_run завершена успешно")
         print("🏁 Артикульный анализ успешно завершен")
     except Exception as error:
         logger.exception(
-            "orders_article_analyze_run failed | current_stage=%s | error_type=%s | error=%s",
+            "Задача orders_article_analyze_run завершилась с ошибкой | current_stage=%s | error_type=%s | error=%s",
             current_stage,
             type(error).__name__,
             error,

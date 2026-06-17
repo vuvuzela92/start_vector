@@ -11,14 +11,14 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
+    """Запускает задачу из реестра по имени, переданному через CLI."""
     setup_logger()
 
-    parser = argparse.ArgumentParser(description="Регулировщик запуска задач")
-
+    parser = argparse.ArgumentParser(description="Запуск задач проекта")
     parser.add_argument(
         "task",
         choices=list(TASKS.keys()),
-        help="Укажите задачу для запуска",
+        help="Укажите имя задачи для запуска",
     )
 
     if len(sys.argv) == 1:
@@ -27,14 +27,14 @@ def main() -> None:
 
     args = parser.parse_args()
     logger.info(
-        "CLI task requested | task=%s | argv=%s",
+        "Получен запрос на запуск задачи из CLI | task=%s | argv=%s",
         args.task,
         sys.argv[1:],
     )
 
     task_data = TASKS[args.task]
     logger.info(
-        "Task resolved from registry | task=%s | callable=%s",
+        "Задача найдена в реестре | task=%s | callable=%s",
         args.task,
         getattr(task_data["func"], "__name__", repr(task_data["func"])),
     )
@@ -44,13 +44,13 @@ def main() -> None:
     print(f"{'=' * 50}\n")
 
     try:
-        logger.info("Task execution started | task=%s", args.task)
+        logger.info("Начато выполнение задачи | task=%s", args.task)
         task_data["func"]()
-        logger.info("Task execution finished successfully | task=%s", args.task)
+        logger.info("Задача завершилась успешно | task=%s", args.task)
         print(f"\n✅ Задача '{args.task}' успешно завершена.")
     except Exception as error:
         logger.exception(
-            "Task execution failed | task=%s | error_type=%s | error=%s",
+            "Ошибка при выполнении задачи | task=%s | error_type=%s | error=%s",
             args.task,
             type(error).__name__,
             error,

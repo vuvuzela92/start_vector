@@ -9,15 +9,16 @@ logger = logging.getLogger(__name__)
 
 
 class ArticleAnalyzeRepository:
-    """Класс для хранения запросов по артикульному анализу."""
+    """Содержит SQL-запросы для формирования артикульного анализа."""
 
     def __init__(self, days_ago: int = 2, days_to: int = 1):
         self.days_ago = days_ago
         self.days_to = days_to
 
     def get_general_stat(self, days_ago: int, days_to: int):
+        """Возвращает общую статистику по артикулам за указанный период."""
         logger.info(
-            "Repository query started | method=get_general_stat | days_ago=%s | days_to=%s",
+            "Начато выполнение запроса общей статистики | method=get_general_stat | days_ago=%s | days_to=%s",
             days_ago,
             days_to,
         )
@@ -116,16 +117,16 @@ class ArticleAnalyzeRepository:
             LEFT JOIN funnel_daily o ON o.nm_id = b.article_id AND o."date" = b."date"
             LEFT JOIN (
                 SELECT ord."date", ord.article_id, ROUND(AVG(ord.spp)) AS spp, ROUND(AVG(ord.price_with_disc)) AS price_with_disc,
-                    SUM(CASE WHEN ord.oblast_okrug_name = 'Центральный федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS central_fo_orders,
-                    SUM(CASE WHEN ord.oblast_okrug_name = 'Южный федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS south_fo_orders,
-                    SUM(CASE WHEN ord.oblast_okrug_name = 'Приволжский федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS privolzhskiy_fo_orders,
-                    SUM(CASE WHEN ord.oblast_okrug_name = 'Северо-Кавказский федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS north_caucase_fo_orders,
-                    SUM(CASE WHEN ord.oblast_okrug_name = 'Дальневосточный федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS far_eastern_fo_orders,
-                    SUM(CASE WHEN ord.oblast_okrug_name = 'Уральский федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS ural_fo_orders,
-                    SUM(CASE WHEN ord.oblast_okrug_name = 'Северо-Западный федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS north_west_fo_orders,
-                    SUM(CASE WHEN ord.oblast_okrug_name = 'Сибирский федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS syberian_fo_orders,
-                    SUM(CASE WHEN ord.warehouse_type = 'Склад продавца' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS fbs_orders,
-                    SUM(CASE WHEN ord.warehouse_type = 'Склад WB' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS fbo_orders
+                    SUM(CASE WHEN ord.oblast_okrug_name = 'Р¦РµРЅС‚СЂР°Р»СЊРЅС‹Р№ С„РµРґРµСЂР°Р»СЊРЅС‹Р№ РѕРєСЂСѓРі' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS central_fo_orders,
+                    SUM(CASE WHEN ord.oblast_okrug_name = 'Р®Р¶РЅС‹Р№ С„РµРґРµСЂР°Р»СЊРЅС‹Р№ РѕРєСЂСѓРі' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS south_fo_orders,
+                    SUM(CASE WHEN ord.oblast_okrug_name = 'РџСЂРёРІРѕР»Р¶СЃРєРёР№ С„РµРґРµСЂР°Р»СЊРЅС‹Р№ РѕРєСЂСѓРі' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS privolzhskiy_fo_orders,
+                    SUM(CASE WHEN ord.oblast_okrug_name = 'РЎРµРІРµСЂРѕ-РљР°РІРєР°Р·СЃРєРёР№ С„РµРґРµСЂР°Р»СЊРЅС‹Р№ РѕРєСЂСѓРі' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS north_caucase_fo_orders,
+                    SUM(CASE WHEN ord.oblast_okrug_name = 'Р”Р°Р»СЊРЅРµРІРѕСЃС‚РѕС‡РЅС‹Р№ С„РµРґРµСЂР°Р»СЊРЅС‹Р№ РѕРєСЂСѓРі' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS far_eastern_fo_orders,
+                    SUM(CASE WHEN ord.oblast_okrug_name = 'РЈСЂР°Р»СЊСЃРєРёР№ С„РµРґРµСЂР°Р»СЊРЅС‹Р№ РѕРєСЂСѓРі' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS ural_fo_orders,
+                    SUM(CASE WHEN ord.oblast_okrug_name = 'РЎРµРІРµСЂРѕ-Р—Р°РїР°РґРЅС‹Р№ С„РµРґРµСЂР°Р»СЊРЅС‹Р№ РѕРєСЂСѓРі' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS north_west_fo_orders,
+                    SUM(CASE WHEN ord.oblast_okrug_name = 'РЎРёР±РёСЂСЃРєРёР№ С„РµРґРµСЂР°Р»СЊРЅС‹Р№ РѕРєСЂСѓРі' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS syberian_fo_orders,
+                    SUM(CASE WHEN ord.warehouse_type = 'РЎРєР»Р°Рґ РїСЂРѕРґР°РІС†Р°' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS fbs_orders,
+                    SUM(CASE WHEN ord.warehouse_type = 'РЎРєР»Р°Рґ WB' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS fbo_orders
                 FROM orders ord
                 WHERE ord.date BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days' AND CURRENT_DATE - INTERVAL '{days_to} days'
                 GROUP BY ord.article_id, ord."date"
@@ -155,10 +156,10 @@ class ArticleAnalyzeRepository:
             ) pami ON pami.nm_id = b.article_id AND pami."date" = b."date"
             LEFT JOIN (
                 SELECT itr.article_id, itr.date,
-                    SUM(CASE WHEN itr.federal_district = 'Центральный' THEN quantity ELSE 0 END) AS central,
-                    SUM(CASE WHEN itr.federal_district = 'Южный' THEN quantity ELSE 0 END) AS south,
-                    SUM(CASE WHEN itr.federal_district = 'Приволжский' THEN quantity ELSE 0 END) AS privolzhskiy,
-                    SUM(CASE WHEN itr.federal_district = 'Северо-Кавказский' THEN quantity ELSE 0 END) AS north_caucase,
+                    SUM(CASE WHEN itr.federal_district = 'Р¦РµРЅС‚СЂР°Р»СЊРЅС‹Р№' THEN quantity ELSE 0 END) AS central,
+                    SUM(CASE WHEN itr.federal_district = 'Р®Р¶РЅС‹Р№' THEN quantity ELSE 0 END) AS south,
+                    SUM(CASE WHEN itr.federal_district = 'РџСЂРёРІРѕР»Р¶СЃРєРёР№' THEN quantity ELSE 0 END) AS privolzhskiy,
+                    SUM(CASE WHEN itr.federal_district = 'РЎРµРІРµСЂРѕ-РљР°РІРєР°Р·СЃРєРёР№' THEN quantity ELSE 0 END) AS north_caucase,
                     SUM(quantity) AS total_quantity
                 FROM inventory_turnover_by_reg AS itr
                 WHERE itr.date BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days' AND CURRENT_DATE - INTERVAL '{days_to} days'
@@ -200,25 +201,25 @@ class ArticleAnalyzeRepository:
             ) hs ON hs.wild = a.local_vendor_code AND hs.transaction_date = b.date
             LEFT JOIN (
                 SELECT fin.nm_id, DATE(fin.date_from) AS date_from,
-                    SUM(CASE WHEN fin.supplier_oper_name = 'Продажа' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
-                    SUM(CASE WHEN fin.supplier_oper_name = 'Возврат' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
-                    SUM(CASE WHEN fin.supplier_oper_name = 'Коррекция возвратов' THEN fin.retail_price_withdisc_rub ELSE 0 END) +
-                    SUM(CASE WHEN fin.supplier_oper_name = 'Коррекция продаж' THEN fin.retail_price_withdisc_rub ELSE 0 END) AS sales_revenue_rep,
-                    SUM(CASE WHEN fin.supplier_oper_name = 'Продажа' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
-                    SUM(CASE WHEN fin.supplier_oper_name = 'Возврат' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
+                    SUM(CASE WHEN fin.supplier_oper_name = 'РџСЂРѕРґР°Р¶Р°' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
+                    SUM(CASE WHEN fin.supplier_oper_name = 'Р’РѕР·РІСЂР°С‚' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
+                    SUM(CASE WHEN fin.supplier_oper_name = 'РљРѕСЂСЂРµРєС†РёСЏ РІРѕР·РІСЂР°С‚РѕРІ' THEN fin.retail_price_withdisc_rub ELSE 0 END) +
+                    SUM(CASE WHEN fin.supplier_oper_name = 'РљРѕСЂСЂРµРєС†РёСЏ РїСЂРѕРґР°Р¶' THEN fin.retail_price_withdisc_rub ELSE 0 END) AS sales_revenue_rep,
+                    SUM(CASE WHEN fin.supplier_oper_name = 'РџСЂРѕРґР°Р¶Р°' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
+                    SUM(CASE WHEN fin.supplier_oper_name = 'Р’РѕР·РІСЂР°С‚' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
                     (
-                        SUM(CASE WHEN fin.supplier_oper_name = 'Продажа' THEN fin.ppvz_for_pay ELSE 0 END) -
-                        SUM(CASE WHEN fin.supplier_oper_name = 'Коррекция продаж' THEN fin.ppvz_for_pay ELSE 0 END) +
-                        SUM(CASE WHEN fin.supplier_oper_name = 'Добровольная компенсация при возврате' THEN fin.ppvz_for_pay ELSE 0 END) +
-                        SUM(CASE WHEN fin.supplier_oper_name = 'Коррекция возвратов' THEN fin.ppvz_for_pay ELSE 0 END) -
-                        SUM(CASE WHEN fin.supplier_oper_name = 'Возврат' THEN fin.ppvz_for_pay ELSE 0 END) +
-                        SUM(CASE WHEN fin.supplier_oper_name = 'Компенсация ущерба' THEN fin.ppvz_for_pay ELSE 0 END) +
-                        SUM(CASE WHEN fin.supplier_oper_name = 'Корректировка эквайринга' THEN fin.ppvz_for_pay ELSE 0 END)
+                        SUM(CASE WHEN fin.supplier_oper_name = 'РџСЂРѕРґР°Р¶Р°' THEN fin.ppvz_for_pay ELSE 0 END) -
+                        SUM(CASE WHEN fin.supplier_oper_name = 'РљРѕСЂСЂРµРєС†РёСЏ РїСЂРѕРґР°Р¶' THEN fin.ppvz_for_pay ELSE 0 END) +
+                        SUM(CASE WHEN fin.supplier_oper_name = 'Р”РѕР±СЂРѕРІРѕР»СЊРЅР°СЏ РєРѕРјРїРµРЅСЃР°С†РёСЏ РїСЂРё РІРѕР·РІСЂР°С‚Рµ' THEN fin.ppvz_for_pay ELSE 0 END) +
+                        SUM(CASE WHEN fin.supplier_oper_name = 'РљРѕСЂСЂРµРєС†РёСЏ РІРѕР·РІСЂР°С‚РѕРІ' THEN fin.ppvz_for_pay ELSE 0 END) -
+                        SUM(CASE WHEN fin.supplier_oper_name = 'Р’РѕР·РІСЂР°С‚' THEN fin.ppvz_for_pay ELSE 0 END) +
+                        SUM(CASE WHEN fin.supplier_oper_name = 'РљРѕРјРїРµРЅСЃР°С†РёСЏ СѓС‰РµСЂР±Р°' THEN fin.ppvz_for_pay ELSE 0 END) +
+                        SUM(CASE WHEN fin.supplier_oper_name = 'РљРѕСЂСЂРµРєС‚РёСЂРѕРІРєР° СЌРєРІР°Р№СЂРёРЅРіР°' THEN fin.ppvz_for_pay ELSE 0 END)
                     ) AS wb_commission_rep,
-                    SUM(CASE WHEN fin.supplier_oper_name = 'Логистика' THEN fin.delivery_rub ELSE 0 END) +
-                    SUM(CASE WHEN fin.supplier_oper_name = 'Коррекция логистики' THEN fin.delivery_rub ELSE 0 END) AS logistics,
-                    SUM(CASE WHEN fin.doc_type_name = 'Продажа' THEN fin.quantity ELSE 0 END) AS sales_count_rep,
-                    SUM(CASE WHEN fin.doc_type_name = 'Возврат' THEN fin.quantity ELSE 0 END) AS returns_count_rep
+                    SUM(CASE WHEN fin.supplier_oper_name = 'Р›РѕРіРёСЃС‚РёРєР°' THEN fin.delivery_rub ELSE 0 END) +
+                    SUM(CASE WHEN fin.supplier_oper_name = 'РљРѕСЂСЂРµРєС†РёСЏ Р»РѕРіРёСЃС‚РёРєРё' THEN fin.delivery_rub ELSE 0 END) AS logistics,
+                    SUM(CASE WHEN fin.doc_type_name = 'РџСЂРѕРґР°Р¶Р°' THEN fin.quantity ELSE 0 END) AS sales_count_rep,
+                    SUM(CASE WHEN fin.doc_type_name = 'Р’РѕР·РІСЂР°С‚' THEN fin.quantity ELSE 0 END) AS returns_count_rep
                 FROM daily_fin_reports_full fin
                 WHERE DATE(fin.date_from) BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days' AND CURRENT_DATE - INTERVAL '{days_to} days'
                 GROUP BY fin.nm_id, DATE(fin.date_from)
@@ -226,15 +227,16 @@ class ArticleAnalyzeRepository:
             ORDER BY b."date" DESC, orders_sum_rub DESC;""")
         df = Database.read_sql_to_dataframe(query)
         logger.info(
-            "Repository query finished | method=get_general_stat | rows=%s | columns=%s",
+            "Запрос общей статистики выполнен | method=get_general_stat | rows=%s | columns=%s",
             len(df.index),
             list(df.columns),
         )
         return df
 
     def get_adv_stat(self, days_ago: int, days_to: int):
+        """Возвращает рекламную статистику по артикулам за указанный период."""
         logger.info(
-            "Repository query started | method=get_adv_stat | days_ago=%s | days_to=%s",
+            "Начато выполнение запроса рекламной статистики | method=get_adv_stat | days_ago=%s | days_to=%s",
             days_ago,
             days_to,
         )
@@ -243,7 +245,7 @@ class ArticleAnalyzeRepository:
                     advert_id,
                     date,
                     SUM(upd_sum) AS adv_spend,
-                    SUM(CASE WHEN payment_type IN ('Бонусы','Кэшбэк') THEN upd_sum END) AS bonuses
+                    SUM(CASE WHEN payment_type IN ('Р‘РѕРЅСѓСЃС‹','РљСЌС€Р±СЌРє') THEN upd_sum END) AS bonuses
                 FROM advert_spend
                 WHERE date BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days' AND CURRENT_DATE - INTERVAL '{days_to} days'
                 GROUP BY advert_id, date
@@ -265,14 +267,15 @@ class ArticleAnalyzeRepository:
             GROUP BY as3.article_id, as3.date;""")
         df = Database.read_sql_to_dataframe(query)
         logger.info(
-            "Repository query finished | method=get_adv_stat | rows=%s | columns=%s",
+            "Запрос рекламной статистики выполнен | method=get_adv_stat | rows=%s | columns=%s",
             len(df.index),
             list(df.columns),
         )
         return df
 
     def get_all_goods_directory(self):
-        logger.info("Repository query started | method=get_all_goods_directory")
+        """Возвращает полный справочник товаров без фильтрации по датам."""
+        logger.info("Начато получение полного справочника товаров | method=get_all_goods_directory")
         query = text("""
             SELECT DISTINCT a.nm_id AS article_id, a.account, a.local_vendor_code, cd.subject_name
             FROM article a
@@ -280,7 +283,7 @@ class ArticleAnalyzeRepository:
         """)
         df = Database.read_sql_to_dataframe(query)
         logger.info(
-            "Repository query finished | method=get_all_goods_directory | rows=%s | columns=%s",
+            "Справочник товаров получен | method=get_all_goods_directory | rows=%s | columns=%s",
             len(df.index),
             list(df.columns),
         )

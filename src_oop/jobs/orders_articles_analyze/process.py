@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 
 
 class ProcessArticleAnalyze:
+    """Собирает и подготавливает итоговый DataFrame для артикульного анализа."""
+
     def __init__(self, repo: ArticleAnalyzeRepository):
         self.repo = repo
 
@@ -19,6 +21,7 @@ class ProcessArticleAnalyze:
         rows: int = 3,
         max_columns: int = 12,
     ) -> list[dict[str, object]]:
+        """Возвращает безопасный preview DataFrame без чувствительных колонок."""
         if df.empty:
             return []
 
@@ -46,8 +49,9 @@ class ProcessArticleAnalyze:
         required_columns: list[str] | None = None,
         key_columns: list[str] | None = None,
     ) -> None:
+        """Логирует состояние DataFrame на текущем этапе обработки."""
         logger.info(
-            "DataFrame snapshot | stage=%s | shape=%s | rows=%s | columns=%s",
+            "Состояние DataFrame | stage=%s | shape=%s | rows=%s | columns=%s",
             stage,
             df.shape,
             len(df.index),
@@ -59,7 +63,7 @@ class ProcessArticleAnalyze:
                 column for column in required_columns if column not in df.columns
             ]
             logger.info(
-                "Required columns check | stage=%s | required=%s | missing=%s",
+                "Проверка обязательных колонок | stage=%s | required=%s | missing=%s",
                 stage,
                 required_columns,
                 missing_columns,
@@ -74,21 +78,22 @@ class ProcessArticleAnalyze:
                 for column in available_key_columns
             }
             logger.info(
-                "Key column null counts | stage=%s | null_counts=%s",
+                "Количество пустых значений в ключевых колонках | stage=%s | null_counts=%s",
                 stage,
                 null_counts,
             )
 
         logger.info(
-            "DataFrame preview | stage=%s | preview=%s",
+            "Предпросмотр DataFrame | stage=%s | preview=%s",
             stage,
             self._safe_preview(df),
         )
 
     def _log_article_id_quality(self, stage: str, df: pd.DataFrame) -> None:
+        """Логирует качество значений article_id на выбранном этапе."""
         if "article_id" not in df.columns:
             logger.warning(
-                "article_id diagnostics skipped | stage=%s | reason=missing_column",
+                "Диагностика article_id пропущена | stage=%s | reason=missing_column",
                 stage,
             )
             return
@@ -100,7 +105,12 @@ class ProcessArticleAnalyze:
         zero_string_mask = article_as_string.isin({"0", "0.0"})
         numeric_article = pd.to_numeric(article_series, errors="coerce")
         zero_numeric_mask = numeric_article.eq(0) & numeric_article.notna()
-        invalid_mask = null_mask | empty_string_mask | zero_string_mask | zero_numeric_mask
+        invalid_mask = (
+            null_mask
+            | empty_string_mask
+            | zero_string_mask
+            | zero_numeric_mask
+        )
 
         preview_columns_priority = [
             "date",
@@ -122,7 +132,7 @@ class ProcessArticleAnalyze:
         )
 
         logger.info(
-            "article_id diagnostics | stage=%s | total_rows=%s | null_count=%s | empty_string_count=%s | zero_string_count=%s | zero_numeric_count=%s | invalid_count=%s | invalid_preview=%s",
+            "Диагностика article_id | stage=%s | total_rows=%s | null_count=%s | empty_string_count=%s | zero_string_count=%s | zero_numeric_count=%s | invalid_count=%s | invalid_preview=%s",
             stage,
             len(df.index),
             int(null_mask.sum()),
@@ -130,13 +140,24 @@ class ProcessArticleAnalyze:
             int(zero_string_mask.sum()),
             int(zero_numeric_mask.sum()),
             int(invalid_mask.sum()),
-            self._safe_preview(invalid_preview, rows=20, max_columns=len(preview_columns) or 12),
+            self._safe_preview(
+                invalid_preview,
+                rows=20,
+                max_columns=len(preview_columns) or 12,
+            ),
         )
 
     def build_dataset(self, days_ago: int, days_to: int) -> pd.DataFrame:
+        """
+        Собирает итоговый DataFrame для артикульного анализа.
+
+        Принимает границы периода в днях, загружает данные из всех источников,
+        объединяет их и возвращает отсортированный DataFrame.
+        Если на любом этапе возникает ошибка, исключение пробрасывается выше.
+        """
         current_stage = "load_adv_stat"
         logger.info(
-            "build_dataset started | days_ago=%s | days_to=%s",
+            "Начата сборка итогового DataFrame | days_ago=%s | days_to=%s",
             days_ago,
             days_to,
         )
@@ -194,14 +215,14 @@ class ProcessArticleAnalyze:
 
             if df_gen.empty and df_adv.empty:
                 logger.warning(
-                    "Оба источника пусты | days_ago=%s | days_to=%s",
+                    "Оба источника данных пусты | days_ago=%s | days_to=%s",
                     days_ago,
                     days_to,
                 )
                 return pd.DataFrame()
 
             current_stage = "deduplicate_general_stat"
-            logger.info("Stage started | stage=%s", current_stage)
+            logger.info("Начат этап обработки | stage=%s", current_stage)
             if not df_gen.empty:
                 df_gen = df_gen.sort_values(
                     by=["date", "orders_sum_rub"],
@@ -219,10 +240,10 @@ class ProcessArticleAnalyze:
                 key_columns=["article_id", "date"],
             )
             self._log_article_id_quality(stage="general_stat_deduplicated", df=df_gen)
-            logger.info("Stage finished | stage=%s", current_stage)
+            logger.info("Этап обработки завершён | stage=%s", current_stage)
 
             current_stage = "merge_general_and_adv"
-            logger.info("Stage started | stage=%s", current_stage)
+            logger.info("Начат этап обработки | stage=%s", current_stage)
             df = pd.merge(df_gen, df_adv, on=["article_id", "date"], how="outer")
             self._log_dataframe_state(
                 stage="merged_general_and_adv",
@@ -237,13 +258,13 @@ class ProcessArticleAnalyze:
                 ],
             )
             self._log_article_id_quality(stage="merged_general_and_adv", df=df)
-            logger.info("Stage finished | stage=%s", current_stage)
+            logger.info("Этап обработки завершён | stage=%s", current_stage)
 
             del df_adv
             del df_gen
 
             current_stage = "restore_dates"
-            logger.info("Stage started | stage=%s", current_stage)
+            logger.info("Начат этап обработки | stage=%s", current_stage)
             df["date"] = pd.to_datetime(df["date"])
             df["week_num"] = df["week_num"].fillna(df["date"].dt.isocalendar().week)
             df["month_num"] = df["month_num"].fillna(df["date"].dt.month)
@@ -254,10 +275,10 @@ class ProcessArticleAnalyze:
                 key_columns=["article_id", "date", "week_num", "month_num"],
             )
             self._log_article_id_quality(stage="dates_restored", df=df)
-            logger.info("Stage finished | stage=%s", current_stage)
+            logger.info("Этап обработки завершён | stage=%s", current_stage)
 
             current_stage = "prepare_goods_directory"
-            logger.info("Stage started | stage=%s", current_stage)
+            logger.info("Начат этап обработки | stage=%s", current_stage)
             df_goods = df_all_goods.drop_duplicates(subset=["article_id"]).copy()
             del df_all_goods
             self._log_dataframe_state(
@@ -277,10 +298,10 @@ class ProcessArticleAnalyze:
                 ],
             )
             self._log_article_id_quality(stage="goods_directory_deduplicated", df=df_goods)
-            logger.info("Stage finished | stage=%s", current_stage)
+            logger.info("Этап обработки завершён | stage=%s", current_stage)
 
             current_stage = "enrich_from_goods_directory"
-            logger.info("Stage started | stage=%s", current_stage)
+            logger.info("Начат этап обработки | stage=%s", current_stage)
             cols_to_fill = ["account", "local_vendor_code", "subject_name"]
             for col in cols_to_fill:
                 missing_before = int(df[col].isna().sum()) if col in df.columns else None
@@ -288,7 +309,7 @@ class ProcessArticleAnalyze:
                 df[col] = df[col].fillna(df["article_id"].map(mapping_dict))
                 missing_after = int(df[col].isna().sum()) if col in df.columns else None
                 logger.info(
-                    "Column enrichment applied | column=%s | missing_before=%s | missing_after=%s",
+                    "Заполнена колонка из справочника товаров | column=%s | missing_before=%s | missing_after=%s",
                     col,
                     missing_before,
                     missing_after,
@@ -312,13 +333,13 @@ class ProcessArticleAnalyze:
                 ],
             )
             self._log_article_id_quality(stage="enriched_from_goods_directory", df=df)
-            logger.info("Stage finished | stage=%s", current_stage)
+            logger.info("Этап обработки завершён | stage=%s", current_stage)
 
             current_stage = "fill_numeric_nulls"
-            logger.info("Stage started | stage=%s", current_stage)
+            logger.info("Начат этап обработки | stage=%s", current_stage)
             numeric_cols = df.select_dtypes(include="number").columns
             logger.info(
-                "Numeric columns detected | stage=%s | columns=%s",
+                "Определены числовые колонки | stage=%s | columns=%s",
                 current_stage,
                 list(numeric_cols),
             )
@@ -336,22 +357,22 @@ class ProcessArticleAnalyze:
                 ],
             )
             self._log_article_id_quality(stage="numeric_nulls_filled_first_pass", df=df)
-            logger.info("Stage finished | stage=%s", current_stage)
+            logger.info("Этап обработки завершён | stage=%s", current_stage)
 
             current_stage = "replace_infinite_values"
-            logger.info("Stage started | stage=%s", current_stage)
+            logger.info("Начат этап обработки | stage=%s", current_stage)
             inf_count = int(np.isinf(df.select_dtypes(include="number").to_numpy()).sum())
             logger.info(
-                "Infinite numeric values before replace | stage=%s | count=%s",
+                "Подсчитаны бесконечные значения в числовых колонках | stage=%s | count=%s",
                 current_stage,
                 inf_count,
             )
             df = df.replace([np.inf, -np.inf], np.nan)
             self._log_article_id_quality(stage="replace_infinite_values", df=df)
-            logger.info("Stage finished | stage=%s", current_stage)
+            logger.info("Этап обработки завершён | stage=%s", current_stage)
 
             current_stage = "fill_numeric_nulls_second_pass"
-            logger.info("Stage started | stage=%s", current_stage)
+            logger.info("Начат этап обработки | stage=%s", current_stage)
             numeric_cols = df.select_dtypes(include="number").columns
             df.loc[:, numeric_cols] = df[numeric_cols].fillna(0)
             self._log_dataframe_state(
@@ -367,25 +388,25 @@ class ProcessArticleAnalyze:
                 ],
             )
             self._log_article_id_quality(stage="numeric_nulls_filled_second_pass", df=df)
-            logger.info("Stage finished | stage=%s", current_stage)
+            logger.info("Этап обработки завершён | stage=%s", current_stage)
 
             current_stage = "normalize_large_numeric_types"
-            logger.info("Stage started | stage=%s", current_stage)
+            logger.info("Начат этап обработки | stage=%s", current_stage)
             converted_columns: list[str] = []
             for col in numeric_cols:
                 if df[col].max() > 2147483647 or df[col].min() < -2147483648:
                     df[col] = df[col].astype(float)
                     converted_columns.append(col)
             logger.info(
-                "Large numeric normalization finished | stage=%s | converted_columns=%s",
+                "Завершена нормализация крупных числовых значений | stage=%s | converted_columns=%s",
                 current_stage,
                 converted_columns,
             )
             self._log_article_id_quality(stage="normalize_large_numeric_types", df=df)
-            logger.info("Stage finished | stage=%s", current_stage)
+            logger.info("Этап обработки завершён | stage=%s", current_stage)
 
             current_stage = "final_sort"
-            logger.info("Stage started | stage=%s", current_stage)
+            logger.info("Начат этап обработки | stage=%s", current_stage)
             result_df = df.sort_values(
                 by=["date", "orders_sum_rub"],
                 ascending=[False, False],
@@ -408,12 +429,12 @@ class ProcessArticleAnalyze:
                 ],
             )
             self._log_article_id_quality(stage="final_dataset", df=result_df)
-            logger.info("build_dataset finished | rows=%s", len(result_df.index))
-            print(f"ROWS RETURNED: {len(result_df)}")
+            logger.info("Сборка итогового DataFrame завершена | rows=%s", len(result_df.index))
+            print(f"Возвращено строк: {len(result_df)}")
             return result_df
         except Exception as error:
             logger.exception(
-                "build_dataset failed | current_stage=%s | days_ago=%s | days_to=%s | error_type=%s | error=%s",
+                "Ошибка при сборке итогового DataFrame | current_stage=%s | days_ago=%s | days_to=%s | error_type=%s | error=%s",
                 current_stage,
                 days_ago,
                 days_to,
