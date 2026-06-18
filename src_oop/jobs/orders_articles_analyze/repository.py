@@ -1,5 +1,6 @@
 import logging
 
+import pandas as pd
 from sqlalchemy import text
 
 from src_oop.core.database import Database
@@ -15,7 +16,137 @@ class ArticleAnalyzeRepository:
         self.days_ago = days_ago
         self.days_to = days_to
 
-    def get_general_stat(self, days_ago: int, days_to: int):
+    @staticmethod
+    def _safe_preview(
+        df: pd.DataFrame,
+        rows: int = 5,
+        columns: list[str] | None = None,
+    ) -> list[dict[str, object]]:
+        """Возвращает компактный preview DataFrame для диагностических логов."""
+        if df.empty:
+            return []
+
+        preview_df = df.copy()
+        if columns is not None:
+            available_columns = [column for column in columns if column in preview_df.columns]
+            if available_columns:
+                preview_df = preview_df.loc[:, available_columns]
+
+        preview_df = preview_df.head(rows).copy()
+        for column in preview_df.columns:
+            if pd.api.types.is_datetime64_any_dtype(preview_df[column]):
+                preview_df[column] = preview_df[column].astype(str)
+
+        return preview_df.where(pd.notna(preview_df), None).to_dict(orient="records")
+
+    def _log_fin_report_dataframe(
+        self,
+        df: pd.DataFrame,
+        *,
+        days_ago: int,
+        days_to: int,
+        sales_date_from: str,
+        sales_date_to: str,
+        expected_create_dt_from: str,
+        expected_create_dt_to: str,
+    ) -> None:
+        """Логирует диагностику по данным из daily_fin_reports_full."""
+        unique_accounts = (
+            int(df["account"].nunique(dropna=True))
+            if "account" in df.columns
+            else 0
+        )
+        sales_sum = (
+            float(pd.to_numeric(df["sales_revenue_rep"], errors="coerce").fillna(0).sum())
+            if "sales_revenue_rep" in df.columns
+            else 0.0
+        )
+        min_sales_date = (
+            str(df["date"].min()) if "date" in df.columns and not df.empty else None
+        )
+        max_sales_date = (
+            str(df["date"].max()) if "date" in df.columns and not df.empty else None
+        )
+        min_create_dt = (
+            str(df["create_dt"].min()) if "create_dt" in df.columns and not df.empty else None
+        )
+        max_create_dt = (
+            str(df["create_dt"].max()) if "create_dt" in df.columns and not df.empty else None
+        )
+        accounts_preview: list[str] = []
+        if "account" in df.columns:
+            unique_account_values = sorted(
+                str(account)
+                for account in df["account"].dropna().unique().tolist()
+            )
+            if len(unique_account_values) <= 20:
+                accounts_preview = unique_account_values
+
+        logger.info(
+            "Логика дат для daily_fin_reports_full подтверждена | "
+            "business_date_source=DATE(fin.date_from) | snapshot_date_source=DATE(fin.create_dt) | "
+            "business_date_meaning=дата_продаж | snapshot_date_meaning=дата_формирования_отчёта",
+        )
+
+        logger.info(
+            "Получены данные из daily_fin_reports_full | method=get_fin_report_stat | "
+            "days_ago=%s | days_to=%s | sales_date_from=%s | sales_date_to=%s | "
+            "expected_create_dt_from=%s | expected_create_dt_to=%s | shape=%s | rows=%s | "
+            "columns=%s | sales_revenue_rep_sum=%s | unique_accounts=%s | "
+            "min_sales_date=%s | max_sales_date=%s | min_create_dt=%s | max_create_dt=%s",
+            days_ago,
+            days_to,
+            sales_date_from,
+            sales_date_to,
+            expected_create_dt_from,
+            expected_create_dt_to,
+            df.shape,
+            len(df.index),
+            list(df.columns),
+            round(sales_sum, 2),
+            unique_accounts,
+            min_sales_date,
+            max_sales_date,
+            min_create_dt,
+            max_create_dt,
+        )
+
+        if accounts_preview:
+            logger.info(
+                "Список аккаунтов из daily_fin_reports_full | method=get_fin_report_stat | accounts=%s",
+            accounts_preview,
+        )
+
+        logger.info(
+            "Смысл дат в выборке daily_fin_reports_full | method=get_fin_report_stat | "
+            "date_column_source=DATE(fin.date_from) | create_dt_column_source=DATE(fin.create_dt) | "
+            "min_date_from=%s | max_date_from=%s | min_create_dt=%s | max_create_dt=%s",
+            min_sales_date,
+            max_sales_date,
+            min_create_dt,
+            max_create_dt,
+        )
+
+        logger.info(
+            "Предпросмотр данных из daily_fin_reports_full | method=get_fin_report_stat | preview=%s",
+            self._safe_preview(
+                df,
+                rows=5,
+                columns=[
+                    "account",
+                    "date",
+                    "create_dt",
+                    "article_id",
+                    "sales_revenue_rep",
+                    "wb_commission_rep",
+                    "logistics",
+                    "sales_count_rep",
+                    "returns_count_rep",
+                ],
+            ),
+        )
+
+    def get_general_stat(self, days_ago: int, days_to: int) -> pd.DataFrame:
         """Возвращает общую статистику по артикулам за указанный период."""
         logger.info(
             "Начато выполнение запроса общей статистики | method=get_general_stat | days_ago=%s | days_to=%s",
@@ -102,31 +233,23 @@ class ArticleAnalyzeRepository:
                     ELSE 19
                 END AS ind_comission_fbo,
                 pd.logistic_from_wb_wh_to_opp, ord.fbo_orders, ord.fbs_orders, cd.rating, hs.end_of_day_balance,
-                ws.in_way_to_client, ws.in_way_from_client,
-                COALESCE(fin.sales_revenue_rep, 0) AS sales_revenue_rep,
-                COALESCE(fin.sales_revenue_rep, 0) - COALESCE(fin.wb_commission_rep, 0) - COALESCE(fin.logistics, 0) - (COALESCE(cp.purchase_price, 0) * COALESCE(fin.sales_count_rep, 0)) AS sales_profit_cond_rep,
-                COALESCE(fin.wb_commission_rep, 0) AS wb_commission_rep,
-                COALESCE(fin.logistics, 0) AS logistics,
-                COALESCE(fin.sales_count_rep, 0) AS sales_count_rep,
-                COALESCE(fin.returns_count_rep, 0) AS returns_count_rep,
-                COALESCE(fin.sales_count_rep, 0) * COALESCE(cp.purchase_price, 0) AS cost_price_sales_fin_rep,
-                COALESCE(fin.returns_count_rep, 0) * COALESCE(cp.purchase_price, 0) AS cost_price_returns_fin_rep
+                ws.in_way_to_client, ws.in_way_from_client
             FROM base b
             LEFT JOIN article a ON a.nm_id = b.article_id
             LEFT JOIN card_data cd ON b.article_id = cd.article_id
             LEFT JOIN funnel_daily o ON o.nm_id = b.article_id AND o."date" = b."date"
             LEFT JOIN (
                 SELECT ord."date", ord.article_id, ROUND(AVG(ord.spp)) AS spp, ROUND(AVG(ord.price_with_disc)) AS price_with_disc,
-                    SUM(CASE WHEN ord.oblast_okrug_name = 'Р¦РµРЅС‚СЂР°Р»СЊРЅС‹Р№ С„РµРґРµСЂР°Р»СЊРЅС‹Р№ РѕРєСЂСѓРі' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS central_fo_orders,
-                    SUM(CASE WHEN ord.oblast_okrug_name = 'Р®Р¶РЅС‹Р№ С„РµРґРµСЂР°Р»СЊРЅС‹Р№ РѕРєСЂСѓРі' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS south_fo_orders,
-                    SUM(CASE WHEN ord.oblast_okrug_name = 'РџСЂРёРІРѕР»Р¶СЃРєРёР№ С„РµРґРµСЂР°Р»СЊРЅС‹Р№ РѕРєСЂСѓРі' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS privolzhskiy_fo_orders,
-                    SUM(CASE WHEN ord.oblast_okrug_name = 'РЎРµРІРµСЂРѕ-РљР°РІРєР°Р·СЃРєРёР№ С„РµРґРµСЂР°Р»СЊРЅС‹Р№ РѕРєСЂСѓРі' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS north_caucase_fo_orders,
-                    SUM(CASE WHEN ord.oblast_okrug_name = 'Р”Р°Р»СЊРЅРµРІРѕСЃС‚РѕС‡РЅС‹Р№ С„РµРґРµСЂР°Р»СЊРЅС‹Р№ РѕРєСЂСѓРі' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS far_eastern_fo_orders,
-                    SUM(CASE WHEN ord.oblast_okrug_name = 'РЈСЂР°Р»СЊСЃРєРёР№ С„РµРґРµСЂР°Р»СЊРЅС‹Р№ РѕРєСЂСѓРі' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS ural_fo_orders,
-                    SUM(CASE WHEN ord.oblast_okrug_name = 'РЎРµРІРµСЂРѕ-Р—Р°РїР°РґРЅС‹Р№ С„РµРґРµСЂР°Р»СЊРЅС‹Р№ РѕРєСЂСѓРі' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS north_west_fo_orders,
-                    SUM(CASE WHEN ord.oblast_okrug_name = 'РЎРёР±РёСЂСЃРєРёР№ С„РµРґРµСЂР°Р»СЊРЅС‹Р№ РѕРєСЂСѓРі' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS syberian_fo_orders,
-                    SUM(CASE WHEN ord.warehouse_type = 'РЎРєР»Р°Рґ РїСЂРѕРґР°РІС†Р°' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS fbs_orders,
-                    SUM(CASE WHEN ord.warehouse_type = 'РЎРєР»Р°Рґ WB' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS fbo_orders
+                    SUM(CASE WHEN ord.oblast_okrug_name = 'Центральный федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS central_fo_orders,
+                    SUM(CASE WHEN ord.oblast_okrug_name = 'Южный федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS south_fo_orders,
+                    SUM(CASE WHEN ord.oblast_okrug_name = 'Приволжский федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS privolzhskiy_fo_orders,
+                    SUM(CASE WHEN ord.oblast_okrug_name = 'Северо-Кавказский федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS north_caucase_fo_orders,
+                    SUM(CASE WHEN ord.oblast_okrug_name = 'Дальневосточный федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS far_eastern_fo_orders,
+                    SUM(CASE WHEN ord.oblast_okrug_name = 'Уральский федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS ural_fo_orders,
+                    SUM(CASE WHEN ord.oblast_okrug_name = 'Северо-Западный федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS north_west_fo_orders,
+                    SUM(CASE WHEN ord.oblast_okrug_name = 'Сибирский федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS syberian_fo_orders,
+                    SUM(CASE WHEN ord.warehouse_type = 'Склад продавца' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS fbs_orders,
+                    SUM(CASE WHEN ord.warehouse_type = 'Склад WB' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS fbo_orders
                 FROM orders ord
                 WHERE ord.date BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days' AND CURRENT_DATE - INTERVAL '{days_to} days'
                 GROUP BY ord.article_id, ord."date"
@@ -156,10 +279,10 @@ class ArticleAnalyzeRepository:
             ) pami ON pami.nm_id = b.article_id AND pami."date" = b."date"
             LEFT JOIN (
                 SELECT itr.article_id, itr.date,
-                    SUM(CASE WHEN itr.federal_district = 'Р¦РµРЅС‚СЂР°Р»СЊРЅС‹Р№' THEN quantity ELSE 0 END) AS central,
-                    SUM(CASE WHEN itr.federal_district = 'Р®Р¶РЅС‹Р№' THEN quantity ELSE 0 END) AS south,
-                    SUM(CASE WHEN itr.federal_district = 'РџСЂРёРІРѕР»Р¶СЃРєРёР№' THEN quantity ELSE 0 END) AS privolzhskiy,
-                    SUM(CASE WHEN itr.federal_district = 'РЎРµРІРµСЂРѕ-РљР°РІРєР°Р·СЃРєРёР№' THEN quantity ELSE 0 END) AS north_caucase,
+                    SUM(CASE WHEN itr.federal_district = 'Центральный' THEN quantity ELSE 0 END) AS central,
+                    SUM(CASE WHEN itr.federal_district = 'Южный' THEN quantity ELSE 0 END) AS south,
+                    SUM(CASE WHEN itr.federal_district = 'Приволжский' THEN quantity ELSE 0 END) AS privolzhskiy,
+                    SUM(CASE WHEN itr.federal_district = 'Северо-Кавказский' THEN quantity ELSE 0 END) AS north_caucase,
                     SUM(quantity) AS total_quantity
                 FROM inventory_turnover_by_reg AS itr
                 WHERE itr.date BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days' AND CURRENT_DATE - INTERVAL '{days_to} days'
@@ -199,31 +322,6 @@ class ArticleAnalyzeRepository:
                 FROM historical_stocks_fbs_service hs
                 WHERE DATE(hs.transaction_date) BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days' AND CURRENT_DATE - INTERVAL '{days_to} days'
             ) hs ON hs.wild = a.local_vendor_code AND hs.transaction_date = b.date
-            LEFT JOIN (
-                SELECT fin.nm_id, DATE(fin.date_from) AS date_from,
-                    SUM(CASE WHEN fin.supplier_oper_name = 'РџСЂРѕРґР°Р¶Р°' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
-                    SUM(CASE WHEN fin.supplier_oper_name = 'Р’РѕР·РІСЂР°С‚' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
-                    SUM(CASE WHEN fin.supplier_oper_name = 'РљРѕСЂСЂРµРєС†РёСЏ РІРѕР·РІСЂР°С‚РѕРІ' THEN fin.retail_price_withdisc_rub ELSE 0 END) +
-                    SUM(CASE WHEN fin.supplier_oper_name = 'РљРѕСЂСЂРµРєС†РёСЏ РїСЂРѕРґР°Р¶' THEN fin.retail_price_withdisc_rub ELSE 0 END) AS sales_revenue_rep,
-                    SUM(CASE WHEN fin.supplier_oper_name = 'РџСЂРѕРґР°Р¶Р°' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
-                    SUM(CASE WHEN fin.supplier_oper_name = 'Р’РѕР·РІСЂР°С‚' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
-                    (
-                        SUM(CASE WHEN fin.supplier_oper_name = 'РџСЂРѕРґР°Р¶Р°' THEN fin.ppvz_for_pay ELSE 0 END) -
-                        SUM(CASE WHEN fin.supplier_oper_name = 'РљРѕСЂСЂРµРєС†РёСЏ РїСЂРѕРґР°Р¶' THEN fin.ppvz_for_pay ELSE 0 END) +
-                        SUM(CASE WHEN fin.supplier_oper_name = 'Р”РѕР±СЂРѕРІРѕР»СЊРЅР°СЏ РєРѕРјРїРµРЅСЃР°С†РёСЏ РїСЂРё РІРѕР·РІСЂР°С‚Рµ' THEN fin.ppvz_for_pay ELSE 0 END) +
-                        SUM(CASE WHEN fin.supplier_oper_name = 'РљРѕСЂСЂРµРєС†РёСЏ РІРѕР·РІСЂР°С‚РѕРІ' THEN fin.ppvz_for_pay ELSE 0 END) -
-                        SUM(CASE WHEN fin.supplier_oper_name = 'Р’РѕР·РІСЂР°С‚' THEN fin.ppvz_for_pay ELSE 0 END) +
-                        SUM(CASE WHEN fin.supplier_oper_name = 'РљРѕРјРїРµРЅСЃР°С†РёСЏ СѓС‰РµСЂР±Р°' THEN fin.ppvz_for_pay ELSE 0 END) +
-                        SUM(CASE WHEN fin.supplier_oper_name = 'РљРѕСЂСЂРµРєС‚РёСЂРѕРІРєР° СЌРєРІР°Р№СЂРёРЅРіР°' THEN fin.ppvz_for_pay ELSE 0 END)
-                    ) AS wb_commission_rep,
-                    SUM(CASE WHEN fin.supplier_oper_name = 'Р›РѕРіРёСЃС‚РёРєР°' THEN fin.delivery_rub ELSE 0 END) +
-                    SUM(CASE WHEN fin.supplier_oper_name = 'РљРѕСЂСЂРµРєС†РёСЏ Р»РѕРіРёСЃС‚РёРєРё' THEN fin.delivery_rub ELSE 0 END) AS logistics,
-                    SUM(CASE WHEN fin.doc_type_name = 'РџСЂРѕРґР°Р¶Р°' THEN fin.quantity ELSE 0 END) AS sales_count_rep,
-                    SUM(CASE WHEN fin.doc_type_name = 'Р’РѕР·РІСЂР°С‚' THEN fin.quantity ELSE 0 END) AS returns_count_rep
-                FROM daily_fin_reports_full fin
-                WHERE DATE(fin.date_from) BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days' AND CURRENT_DATE - INTERVAL '{days_to} days'
-                GROUP BY fin.nm_id, DATE(fin.date_from)
-            ) fin ON fin.date_from = b.date AND fin.nm_id = b.article_id
             ORDER BY b."date" DESC, orders_sum_rub DESC;""")
         df = Database.read_sql_to_dataframe(query)
         logger.info(
@@ -233,7 +331,121 @@ class ArticleAnalyzeRepository:
         )
         return df
 
-    def get_adv_stat(self, days_ago: int, days_to: int):
+    def get_fin_report_stat(self, days_ago: int, days_to: int) -> pd.DataFrame:
+        """Возвращает финансовые метрики из daily_fin_reports_full на уровне article_id + date."""
+        sales_date_from = f"CURRENT_DATE - INTERVAL '{days_ago} days'"
+        sales_date_to = f"CURRENT_DATE - INTERVAL '{days_to} days'"
+        expected_create_dt_from = f"CURRENT_DATE - INTERVAL '{max(days_ago - 1, 0)} days'"
+        expected_create_dt_to = f"CURRENT_DATE - INTERVAL '{max(days_to - 1, 0)} days'"
+
+        logger.info(
+            "Начато получение данных из daily_fin_reports_full | method=get_fin_report_stat | "
+            "days_ago=%s | days_to=%s | sales_date_from=%s | sales_date_to=%s | "
+            "expected_create_dt_from=%s | expected_create_dt_to=%s",
+            days_ago,
+            days_to,
+            sales_date_from,
+            sales_date_to,
+            expected_create_dt_from,
+            expected_create_dt_to,
+        )
+        logger.info(
+            "Для daily_fin_reports_full дата продаж отбирается по DATE(fin.date_from), "
+            "а create_dt используется только для выбора последнего доступного snapshot отчёта."
+        )
+
+        query = text(f"""
+            WITH fin_filtered AS (
+                SELECT
+                    fin.account,
+                    fin.nm_id AS article_id,
+                    DATE(fin.date_from) AS date,
+                    DATE(fin.create_dt) AS create_dt,
+                    fin.supplier_oper_name,
+                    fin.doc_type_name,
+                    fin.bonus_type_name,
+                    fin.retail_price_withdisc_rub,
+                    fin.ppvz_for_pay,
+                    fin.delivery_rub,
+                    fin.quantity,
+                    fin.return_amount
+                FROM daily_fin_reports_full fin
+                WHERE DATE(fin.date_from) BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days'
+                    AND CURRENT_DATE - INTERVAL '{days_to} days'
+                    AND fin.nm_id IS NOT NULL
+            ),
+            fin_latest_snapshot AS (
+                SELECT
+                    account,
+                    article_id,
+                    date,
+                    MAX(create_dt) AS create_dt
+                FROM fin_filtered
+                GROUP BY account, article_id, date
+            )
+            SELECT
+                fin.account,
+                fin.date,
+                fin.article_id,
+                snapshot.create_dt,
+                SUM(CASE WHEN fin.supplier_oper_name = 'Продажа' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
+                SUM(CASE WHEN fin.supplier_oper_name = 'Возврат' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
+                SUM(CASE WHEN fin.supplier_oper_name = 'Коррекция возвратов' THEN fin.retail_price_withdisc_rub ELSE 0 END) +
+                SUM(CASE WHEN fin.supplier_oper_name = 'Коррекция продаж' THEN fin.retail_price_withdisc_rub ELSE 0 END) AS sales_revenue_rep,
+                SUM(CASE WHEN fin.supplier_oper_name = 'Продажа' THEN fin.ppvz_for_pay ELSE 0 END) -
+                SUM(CASE WHEN fin.supplier_oper_name = 'Возврат' THEN fin.ppvz_for_pay ELSE 0 END) -
+                (
+                    SUM(CASE WHEN fin.supplier_oper_name = 'Продажа' THEN fin.ppvz_for_pay ELSE 0 END) -
+                    SUM(CASE WHEN fin.supplier_oper_name = 'Коррекция продаж' THEN fin.ppvz_for_pay ELSE 0 END) +
+                    SUM(CASE WHEN fin.supplier_oper_name = 'Добровольная компенсация при возврате' THEN fin.ppvz_for_pay ELSE 0 END) +
+                    SUM(CASE WHEN fin.supplier_oper_name = 'Коррекция возвратов' THEN fin.ppvz_for_pay ELSE 0 END) -
+                    SUM(CASE WHEN fin.supplier_oper_name = 'Возврат' THEN fin.ppvz_for_pay ELSE 0 END) +
+                    SUM(CASE WHEN fin.supplier_oper_name = 'Компенсация ущерба' THEN fin.ppvz_for_pay ELSE 0 END) +
+                    SUM(CASE WHEN fin.supplier_oper_name = 'Корректировка эквайринга' THEN fin.ppvz_for_pay ELSE 0 END)
+                ) AS wb_commission_rep,
+                SUM(CASE WHEN fin.supplier_oper_name = 'Логистика' THEN fin.delivery_rub ELSE 0 END) +
+                SUM(CASE WHEN fin.supplier_oper_name = 'Коррекция логистики' THEN fin.delivery_rub ELSE 0 END) AS logistics,
+                SUM(CASE WHEN fin.doc_type_name = 'Продажа' THEN fin.quantity ELSE 0 END) AS sales_count_rep,
+                SUM(CASE WHEN fin.doc_type_name = 'Возврат' THEN fin.quantity ELSE 0 END) AS returns_count_rep
+            FROM fin_filtered fin
+            INNER JOIN fin_latest_snapshot snapshot
+                ON snapshot.account = fin.account
+                AND snapshot.article_id = fin.article_id
+                AND snapshot.date = fin.date
+                AND snapshot.create_dt = fin.create_dt
+            GROUP BY fin.account, fin.date, fin.article_id, snapshot.create_dt
+            ORDER BY fin.date DESC, sales_revenue_rep DESC;
+        """)
+
+        df = Database.read_sql_to_dataframe(query)
+
+        if df.empty:
+            df = pd.DataFrame(
+                columns=[
+                    "account",
+                    "date",
+                    "article_id",
+                    "create_dt",
+                    "sales_revenue_rep",
+                    "wb_commission_rep",
+                    "logistics",
+                    "sales_count_rep",
+                    "returns_count_rep",
+                ]
+            )
+
+        self._log_fin_report_dataframe(
+            df,
+            days_ago=days_ago,
+            days_to=days_to,
+            sales_date_from=sales_date_from,
+            sales_date_to=sales_date_to,
+            expected_create_dt_from=expected_create_dt_from,
+            expected_create_dt_to=expected_create_dt_to,
+        )
+        return df
+
+    def get_adv_stat(self, days_ago: int, days_to: int) -> pd.DataFrame:
         """Возвращает рекламную статистику по артикулам за указанный период."""
         logger.info(
             "Начато выполнение запроса рекламной статистики | method=get_adv_stat | days_ago=%s | days_to=%s",
@@ -245,7 +457,7 @@ class ArticleAnalyzeRepository:
                     advert_id,
                     date,
                     SUM(upd_sum) AS adv_spend,
-                    SUM(CASE WHEN payment_type IN ('Р‘РѕРЅСѓСЃС‹','РљСЌС€Р±СЌРє') THEN upd_sum END) AS bonuses
+                    SUM(CASE WHEN payment_type IN ('Бонусы','Кэшбэк') THEN upd_sum END) AS bonuses
                 FROM advert_spend
                 WHERE date BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days' AND CURRENT_DATE - INTERVAL '{days_to} days'
                 GROUP BY advert_id, date
@@ -273,7 +485,7 @@ class ArticleAnalyzeRepository:
         )
         return df
 
-    def get_all_goods_directory(self):
+    def get_all_goods_directory(self) -> pd.DataFrame:
         """Возвращает полный справочник товаров без фильтрации по датам."""
         logger.info("Начато получение полного справочника товаров | method=get_all_goods_directory")
         query = text("""

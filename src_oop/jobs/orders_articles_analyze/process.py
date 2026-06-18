@@ -147,6 +147,113 @@ class ProcessArticleAnalyze:
             ),
         )
 
+    def _ensure_unique_merge_keys(
+        self,
+        df: pd.DataFrame,
+        *,
+        stage: str,
+        key_columns: list[str],
+        dataset_name: str,
+    ) -> None:
+        """Проверяет уникальность ключей перед merge и выбрасывает ошибку при дублях."""
+        duplicated_mask = df.duplicated(subset=key_columns, keep=False)
+        if not duplicated_mask.any():
+            logger.info(
+                "Проверка ключей перед merge пройдена | stage=%s | dataset=%s | key_columns=%s | rows=%s",
+                stage,
+                dataset_name,
+                key_columns,
+                len(df.index),
+            )
+            return
+
+        duplicates_df = df.loc[duplicated_mask].copy()
+        preview_columns = [
+            column
+            for column in [
+                "account",
+                "date",
+                "create_dt",
+                "article_id",
+                "sales_revenue_rep",
+                "wb_commission_rep",
+                "logistics",
+            ]
+            if column in duplicates_df.columns
+        ]
+        logger.error(
+            "Перед merge найдены дубли по ключам | stage=%s | dataset=%s | key_columns=%s | duplicate_rows=%s | preview=%s",
+            stage,
+            dataset_name,
+            key_columns,
+            len(duplicates_df.index),
+            self._safe_preview(
+                duplicates_df.loc[:, preview_columns] if preview_columns else duplicates_df,
+                rows=10,
+                max_columns=len(preview_columns) or 12,
+            ),
+        )
+        raise ValueError(
+            f"Перед merge набора {dataset_name} найдены дубли по ключам {key_columns}. "
+            "Это может привести к размножению финансовых метрик."
+        )
+
+    def _log_sales_revenue_state(
+        self,
+        stage: str,
+        df: pd.DataFrame,
+    ) -> None:
+        """Логирует состояние метрики sales_revenue_rep на выбранном этапе."""
+        if "sales_revenue_rep" not in df.columns:
+            logger.warning(
+                "Диагностика sales_revenue_rep пропущена | stage=%s | reason=missing_column",
+                stage,
+            )
+            return
+
+        series = pd.to_numeric(df["sales_revenue_rep"], errors="coerce")
+        non_empty_mask = series.notna()
+        non_zero_mask = series.fillna(0).ne(0)
+        non_zero_preview_columns = [
+            column
+            for column in [
+                "date",
+                "article_id",
+                "account",
+                "local_vendor_code",
+                "sales_revenue_rep",
+                "sales_profit_cond_rep",
+                "wb_commission_rep",
+                "logistics",
+                "sales_count_rep",
+                "returns_count_rep",
+            ]
+            if column in df.columns
+        ]
+        non_zero_preview_df = df.loc[non_zero_mask, non_zero_preview_columns].head(5)
+
+        logger.info(
+            "Диагностика sales_revenue_rep | stage=%s | has_column=%s | non_empty_count=%s | non_zero_count=%s | sum=%s | min=%s | max=%s | preview=%s",
+            stage,
+            True,
+            int(non_empty_mask.sum()),
+            int(non_zero_mask.sum()),
+            round(float(series.fillna(0).sum()), 2),
+            None if series.dropna().empty else round(float(series.min()), 2),
+            None if series.dropna().empty else round(float(series.max()), 2),
+            self._safe_preview(
+                non_zero_preview_df,
+                rows=5,
+                max_columns=len(non_zero_preview_columns) or 12,
+            ),
+        )
+
+    @staticmethod
+    def _normalize_account_key(series: pd.Series) -> pd.Series:
+        """Возвращает нормализованный ключ аккаунта для безопасного merge."""
+        normalized = series.astype("string").str.strip().str.upper()
+        return normalized.fillna("")
+
     def build_dataset(self, days_ago: int, days_to: int) -> pd.DataFrame:
         """
         Собирает итоговый DataFrame для артикульного анализа.
@@ -193,6 +300,31 @@ class ProcessArticleAnalyze:
             )
             self._log_article_id_quality(stage="source_general_stat", df=df_gen)
 
+            current_stage = "load_fin_report_stat"
+            df_fin = self.repo.get_fin_report_stat(days_ago, days_to)
+            self._log_dataframe_state(
+                stage="source_daily_fin_reports_full",
+                df=df_fin,
+                required_columns=[
+                    "article_id",
+                    "date",
+                    "sales_revenue_rep",
+                    "sales_count_rep",
+                    "returns_count_rep",
+                ],
+                key_columns=["article_id", "date", "account", "create_dt"],
+            )
+            self._log_article_id_quality(stage="source_daily_fin_reports_full", df=df_fin)
+            self._log_sales_revenue_state(stage="source_daily_fin_reports_full", df=df_fin)
+            df_fin = df_fin.copy()
+            df_fin["merge_account_key"] = self._normalize_account_key(df_fin["account"])
+            self._ensure_unique_merge_keys(
+                df=df_fin,
+                stage="source_daily_fin_reports_full",
+                key_columns=["merge_account_key", "article_id", "date"],
+                dataset_name="daily_fin_reports_full",
+            )
+
             current_stage = "load_all_goods_directory"
             df_all_goods = self.repo.get_all_goods_directory()
             self._log_dataframe_state(
@@ -215,7 +347,7 @@ class ProcessArticleAnalyze:
 
             if df_gen.empty and df_adv.empty:
                 logger.warning(
-                    "Оба источника данных пусты | days_ago=%s | days_to=%s",
+                    "Оба основных источника данных пусты | days_ago=%s | days_to=%s",
                     days_ago,
                     days_to,
                 )
@@ -335,6 +467,123 @@ class ProcessArticleAnalyze:
             self._log_article_id_quality(stage="enriched_from_goods_directory", df=df)
             logger.info("Этап обработки завершён | stage=%s", current_stage)
 
+            current_stage = "merge_daily_fin_reports_full"
+            df = df.copy()
+            df["merge_account_key"] = self._normalize_account_key(df["account"])
+            if "date" in df_fin.columns:
+                df_fin = df_fin.copy()
+                # Финансовый отчёт может быть сформирован сегодня, но содержать продажи за вчера.
+                # Поэтому для merge используем бизнес-дату продаж из date_from, уже сохранённую в колонке date,
+                # а не create_dt. Перед merge дополнительно выравниваем тип date, иначе pandas не объединит
+                # datetime64[ns] из основного DataFrame и object/date из df_fin.
+                df_fin["date"] = pd.to_datetime(df_fin["date"], errors="coerce")
+            logger.info(
+                "Начат merge с данными daily_fin_reports_full | stage=%s | merge_keys=%s | base_rows=%s | fin_rows=%s",
+                current_stage,
+                ["merge_account_key", "article_id", "date"],
+                len(df.index),
+                len(df_fin.index),
+            )
+            logger.info(
+                "Правило merge для daily_fin_reports_full | stage=%s | "
+                "account_source=нормализованный_account | article_id_source=article_id | "
+                "date_source=DATE(fin.date_from) | create_dt_usage=только_snapshot_диагностика",
+                current_stage,
+            )
+            logger.info(
+                # Эта диагностика нужна, чтобы заранее увидеть несовместимые типы и пустые ключи:
+                # тогда проблема проявится в логах до merge и до записи итоговых данных в PostgreSQL.
+                "Типы ключей перед merge с daily_fin_reports_full | stage=%s | "
+                "base_date_dtype=%s | fin_date_dtype=%s | base_article_id_dtype=%s | fin_article_id_dtype=%s | "
+                "base_date_nulls=%s | fin_date_nulls=%s",
+                current_stage,
+                df["date"].dtype if "date" in df.columns else None,
+                df_fin["date"].dtype if "date" in df_fin.columns else None,
+                df["article_id"].dtype if "article_id" in df.columns else None,
+                df_fin["article_id"].dtype if "article_id" in df_fin.columns else None,
+                int(df["date"].isna().sum()) if "date" in df.columns else None,
+                int(df_fin["date"].isna().sum()) if "date" in df_fin.columns else None,
+            )
+            self._log_sales_revenue_state(stage="before_merge_daily_fin_reports_full", df=df_fin)
+            fin_columns_to_merge = [
+                "merge_account_key",
+                "article_id",
+                "date",
+                "sales_revenue_rep",
+                "sales_profit_cond_rep",
+                "wb_commission_rep",
+                "logistics",
+                "sales_count_rep",
+                "returns_count_rep",
+                "cost_price_sales_fin_rep",
+                "cost_price_returns_fin_rep",
+            ]
+            available_fin_columns = [
+                column for column in fin_columns_to_merge if column in df_fin.columns
+            ]
+            fin_metrics_sum_before_merge = (
+                round(
+                    float(
+                        pd.to_numeric(
+                            df_fin["sales_revenue_rep"],
+                            errors="coerce",
+                        ).fillna(0).sum()
+                    ),
+                    2,
+                )
+                if "sales_revenue_rep" in df_fin.columns
+                else 0.0
+            )
+            df = df.merge(
+                df_fin.loc[:, available_fin_columns],
+                on=["merge_account_key", "article_id", "date"],
+                how="left",
+                validate="m:1",
+            )
+            if {"purchase_price", "sales_count_rep"}.issubset(df.columns):
+                df["cost_price_sales_fin_rep"] = (
+                    pd.to_numeric(df["purchase_price"], errors="coerce").fillna(0)
+                    * pd.to_numeric(df["sales_count_rep"], errors="coerce").fillna(0)
+                )
+            if {"purchase_price", "returns_count_rep"}.issubset(df.columns):
+                df["cost_price_returns_fin_rep"] = (
+                    pd.to_numeric(df["purchase_price"], errors="coerce").fillna(0)
+                    * pd.to_numeric(df["returns_count_rep"], errors="coerce").fillna(0)
+                )
+            if {
+                "sales_revenue_rep",
+                "wb_commission_rep",
+                "logistics",
+                "cost_price_sales_fin_rep",
+            }.issubset(df.columns):
+                df["sales_profit_cond_rep"] = (
+                    pd.to_numeric(df["sales_revenue_rep"], errors="coerce").fillna(0)
+                    - pd.to_numeric(df["wb_commission_rep"], errors="coerce").fillna(0)
+                    - pd.to_numeric(df["logistics"], errors="coerce").fillna(0)
+                    - pd.to_numeric(df["cost_price_sales_fin_rep"], errors="coerce").fillna(0)
+                )
+            logger.info(
+                "Merge с данными daily_fin_reports_full завершён | stage=%s | merge_keys=%s | rows_after=%s | sales_revenue_rep_sum_before_merge=%s | non_empty_sales_revenue_rep_after_merge=%s",
+                current_stage,
+                ["merge_account_key", "article_id", "date"],
+                len(df.index),
+                fin_metrics_sum_before_merge,
+                int(pd.to_numeric(df["sales_revenue_rep"], errors="coerce").notna().sum())
+                if "sales_revenue_rep" in df.columns
+                else 0,
+            )
+            self._log_dataframe_state(
+                stage="merged_daily_fin_reports_full",
+                df=df,
+                required_columns=["article_id", "date", "sales_revenue_rep"],
+                key_columns=["article_id", "date", "account", "sales_revenue_rep"],
+            )
+            self._log_sales_revenue_state(stage="merged_daily_fin_reports_full", df=df)
+            if "merge_account_key" in df.columns:
+                df = df.drop(columns=["merge_account_key"])
+            logger.info("Этап обработки завершён | stage=%s", current_stage)
+            del df_fin
+
             current_stage = "fill_numeric_nulls"
             logger.info("Начат этап обработки | stage=%s", current_stage)
             numeric_cols = df.select_dtypes(include="number").columns
@@ -357,6 +606,7 @@ class ProcessArticleAnalyze:
                 ],
             )
             self._log_article_id_quality(stage="numeric_nulls_filled_first_pass", df=df)
+            self._log_sales_revenue_state(stage="numeric_nulls_filled_first_pass", df=df)
             logger.info("Этап обработки завершён | stage=%s", current_stage)
 
             current_stage = "replace_infinite_values"
@@ -369,6 +619,7 @@ class ProcessArticleAnalyze:
             )
             df = df.replace([np.inf, -np.inf], np.nan)
             self._log_article_id_quality(stage="replace_infinite_values", df=df)
+            self._log_sales_revenue_state(stage="replace_infinite_values", df=df)
             logger.info("Этап обработки завершён | stage=%s", current_stage)
 
             current_stage = "fill_numeric_nulls_second_pass"
@@ -388,6 +639,7 @@ class ProcessArticleAnalyze:
                 ],
             )
             self._log_article_id_quality(stage="numeric_nulls_filled_second_pass", df=df)
+            self._log_sales_revenue_state(stage="numeric_nulls_filled_second_pass", df=df)
             logger.info("Этап обработки завершён | stage=%s", current_stage)
 
             current_stage = "normalize_large_numeric_types"
@@ -403,6 +655,7 @@ class ProcessArticleAnalyze:
                 converted_columns,
             )
             self._log_article_id_quality(stage="normalize_large_numeric_types", df=df)
+            self._log_sales_revenue_state(stage="normalize_large_numeric_types", df=df)
             logger.info("Этап обработки завершён | stage=%s", current_stage)
 
             current_stage = "final_sort"
@@ -429,6 +682,7 @@ class ProcessArticleAnalyze:
                 ],
             )
             self._log_article_id_quality(stage="final_dataset", df=result_df)
+            self._log_sales_revenue_state(stage="final_dataset", df=result_df)
             logger.info("Сборка итогового DataFrame завершена | rows=%s", len(result_df.index))
             print(f"Возвращено строк: {len(result_df)}")
             return result_df
