@@ -119,9 +119,38 @@ query_orders_and_supply = text("""
                         AND s.supply_num = r.return_num;
     """)
 
-google_table = {"title": "Расчет закупки Россия",
-                "calculate_sheet": "Расчет закупки",
-                "orders_sheet": "БД_Заказы",
-                "statuses_sheet": "Статичный лист статусы",
-                "orders_buyers_sheet": "Заказы_и_поступления"
-                }
+query_penalties_and_virtual_stock = text("""
+    SELECT
+        sum(f.penalty) AS sum,
+        a.local_vendor_code
+    FROM daily_fin_reports_full f
+    LEFT JOIN article a
+        USING(nm_id)
+    WHERE f.create_dt BETWEEN CURRENT_DATE - INTERVAL '7 days'
+      AND CURRENT_DATE
+      AND f.penalty != 0
+      AND f.bonus_type_name ILIKE ANY (
+          ARRAY[
+              '%брак%',
+              '%невыполненный%',
+              '%подмена%'
+          ]
+      )
+    GROUP BY a.local_vendor_code;
+""")
+
+google_table = {
+    "title": "Расчет закупки Россия",
+    "calculate_sheet": "Расчет закупки",
+    "orders_sheet": "БД_Заказы",
+    "statuses_sheet": "Статичный лист статусы",
+    "orders_buyers_sheet": "Заказы_и_поступления",
+}
+
+unit_table = {
+    "title": "UNIT 2.0 (tested)",
+    "sheet_unit": "MAIN (tested)",
+}
+
+penalties_column_name = "Штраф (по основанию брак, невыполненный заказ и подмена)"
+virtual_stock_column_name = "Кол-во товара по виртуальным остаткам"

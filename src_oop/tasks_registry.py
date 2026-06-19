@@ -6,9 +6,9 @@ from typing import Callable, Dict, Any
 from src.modules.WB.advert.tasks import advert_info, advert_spend
 from src.modules.WB.reports.tasks import orders_report_today
 from src.modules.WB.docs.tasks import get_bukh_docs
-from src.modules.GOOGLE_SHEETS.calculation_of_purchases_russia import update_penalties_in_gs_purchase_russia
 from src.modules.GOOGLE_SHEETS.credit_analyze_vector import update_credit_data_vector
 from src.modules.GOOGLE_SHEETS.week_n_redeem import update_week_n_redeem
+from src_oop.jobs.advert.run import advert_stat
 from src_oop.jobs.unit.update_adv_participants import update_adv_participants_to_gs
 # Годовой план закупа 2026
 from src_oop.jobs.annual_procurement_plan.run import transport_data_to_annual_procurement_plan, transport_parfume_data_to_annual_procurement_plan, transport_unit_data_to_annual_procurement_plan, transport_supplies_data_to_annual_procurement_plan
@@ -29,7 +29,11 @@ from src_oop.jobs.wms_stocks.run import wms_stocks_run
 # Финансовые отчеты
 from src_oop.jobs.fin_reports_analyze.run import update_monthly_report, update_weekly_profit_report, update_outcomes_detalize, update_fin_deductions_mv, update_deductions_by_month, update_cash_flow_writeoffs, update_stock_analyze
 # Таблица Расчет закупки Россия
-from src_oop.jobs.calculation_of_purchases_russia.run import set_orders_quantity, transport_orders_and_supply
+from src_oop.jobs.calculation_of_purchases_russia.run import (
+    set_orders_quantity,
+    transport_orders_and_supply,
+    update_penalties_in_gs_purchase_russia,
+)
 # Таблица Панель Управления
 from src_oop.jobs.autopilot.run import update_individual_info
 
@@ -55,6 +59,11 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "advert_spend": {
         "func": smart_run(advert_spend),
         "desc": "💵 Запуск получения данных о рекламных затратах"
+    },
+
+    "advert_stat": {
+        "func": smart_run(advert_stat),
+        "desc": "📊 Запуск OOP-job получения и записи статистики рекламных кампаний WB"
     },
 
     # ===
