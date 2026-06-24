@@ -5,7 +5,7 @@ from typing import Callable, Dict, Any
 # --- ИМПОРТЫ ЗАДАЧ ---
 from src.modules.WB.advert.tasks import advert_info, advert_spend
 from src.modules.WB.reports.tasks import orders_report_today
-from src.modules.WB.docs.tasks import get_bukh_docs
+from src_oop.jobs.bukh_docs.run import get_bukh_docs_async
 from src.modules.GOOGLE_SHEETS.credit_analyze_vector import update_credit_data_vector
 from src.modules.GOOGLE_SHEETS.week_n_redeem import update_week_n_redeem
 from src_oop.jobs.advert.run import advert_stat
@@ -74,7 +74,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "desc": "🛒 Запуск обновления отчета о заказах за сегодня"
     },
     "get_bukh_docs": {
-        "func": smart_run(get_bukh_docs),
+        "func": smart_run(get_bukh_docs_async),
         "desc": "📑 Запуск получения данных по документам бухгалтерии"
     },
 
