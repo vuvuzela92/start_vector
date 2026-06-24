@@ -59,59 +59,6 @@ class JobRunResult:
 
 
 @dataclass(slots=True)
-class DocumentListingDiagnostic:
-    account: str
-    weekly_documents: int = 0
-    redeem_documents: int = 0
-    errors: list[str] = field(default_factory=list)
-
-
-@dataclass(slots=True)
-class DocumentListingRunResult:
-    status: RunStatus
-    date_from: date
-    date_to: date
-    accounts_total: int = 0
-    accounts_with_weekly: list[str] = field(default_factory=list)
-    accounts_with_redeem: list[str] = field(default_factory=list)
-    accounts_with_both: list[str] = field(default_factory=list)
-    accounts_with_redeem_only: list[str] = field(default_factory=list)
-    accounts_with_weekly_only: list[str] = field(default_factory=list)
-    accounts_without_documents: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-
-
-@dataclass(slots=True)
-class WeeklyProcessingDiagnostic:
-    account: str
-    weekly_documents: int = 0
-    redeem_documents: int = 0
-    downloaded: bool = False
-    extracted_weekly_files: int = 0
-    parsed_weekly_rows: int = 0
-    weekly_file_paths: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-
-
-@dataclass(slots=True)
-class WeeklyProcessingRunResult:
-    status: RunStatus
-    date_from: date
-    date_to: date
-    accounts_total: int = 0
-    accounts_with_weekly_documents: list[str] = field(default_factory=list)
-    accounts_with_downloaded_payload: list[str] = field(default_factory=list)
-    accounts_with_extracted_weekly_files: list[str] = field(default_factory=list)
-    accounts_with_parsed_weekly_rows: list[str] = field(default_factory=list)
-    accounts_with_weekly_but_no_extracted_files: list[str] = field(default_factory=list)
-    accounts_with_weekly_but_no_parsed_rows: list[str] = field(default_factory=list)
-    accounts_without_weekly_documents: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-
-
-@dataclass(slots=True)
 class WeekNRedeemRunResult:
     status: RunStatus
     sql_rows: int = 0
