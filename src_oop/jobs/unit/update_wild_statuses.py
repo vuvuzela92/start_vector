@@ -34,8 +34,7 @@ def _prepare_statuses_lookup(df_statuses: pd.DataFrame) -> tuple[pd.DataFrame, i
     )
     conflicting_wilds = status_variants[status_variants["status_count"] > 1][WILD_COLUMN].tolist()
 
-    # Для каждого wild берём последнее непустое значение статуса и не допускаем
-    # размножение строк при merge из-за нескольких вариантов статуса в источнике.
+    # Keep one final non-empty status per wild to prevent row multiplication on merge.
     prepared_statuses = prepared_statuses[prepared_statuses[STATUS_SOURCE_COLUMN] != ""].copy()
     prepared_statuses = prepared_statuses.drop_duplicates(subset=[WILD_COLUMN], keep="last")
 
@@ -50,7 +49,7 @@ def update_wild_statuses() -> None:
     status_rows = statuses_table[1:]
     df_statuses = pd.DataFrame(status_rows, columns=status_headers)
     logger.info(
-        "Источник статусов загружен: %s строк данных.",
+        "Statuses source loaded: %s rows.",
         len(df_statuses),
     )
 
@@ -62,7 +61,7 @@ def update_wild_statuses() -> None:
     df_unit_short = df_unit[[WILD_COLUMN, STATUS_TARGET_COLUMN]].copy()
     df_unit_short[WILD_COLUMN] = _normalize_series(df_unit_short[WILD_COLUMN])
     logger.info(
-        "Основной лист UNIT загружен: %s строк данных.",
+        "UNIT main sheet loaded: %s rows.",
         len(df_unit_short),
     )
 
@@ -70,8 +69,7 @@ def update_wild_statuses() -> None:
         _prepare_statuses_lookup(df_statuses)
     )
     logger.info(
-        "Подготовлен справочник статусов: %s уникальных wild, %s wild с несколькими статусами. "
-        "Примеры конфликтных wild: %s",
+        "Statuses lookup prepared: %s unique wild, %s conflicting wild. Examples: %s",
         len(wild_with_statuses),
         conflicting_wild_count,
         conflicting_wild_examples,
@@ -87,10 +85,10 @@ def update_wild_statuses() -> None:
 
     if result_row_count != source_row_count:
         raise ValueError(
-            "Нарушен инвариант при объединении статусов с UNIT: "
-            f"исходных строк={source_row_count}, после merge={result_row_count}, "
-            f"wild с несколькими статусами={conflicting_wild_count}, "
-            f"примеры проблемных wild={conflicting_wild_examples}"
+            "Merge invariant failed: "
+            f"source_rows={source_row_count}, merged_rows={result_row_count}, "
+            f"conflicting_wild={conflicting_wild_count}, "
+            f"examples={conflicting_wild_examples}"
         )
 
     result_df[STATUS_TARGET_COLUMN] = _normalize_series(result_df[STATUS_SOURCE_COLUMN])
@@ -98,24 +96,28 @@ def update_wild_statuses() -> None:
 
     if STATUS_TARGET_COLUMN not in result_df.columns:
         raise ValueError(
-            f"В обработанных данных отсутствует колонка '{STATUS_TARGET_COLUMN}'."
+            f"Missing target column: '{STATUS_TARGET_COLUMN}'."
         )
 
     results_list = result_df[STATUS_TARGET_COLUMN].astype(str).tolist()
-    logger.info("Подготовлено %s значений для записи в колонку '%s'.", len(results_list), STATUS_TARGET_COLUMN)
+    logger.info(
+        "Prepared %s values for column '%s'.",
+        len(results_list),
+        STATUS_TARGET_COLUMN,
+    )
 
     if len(results_list) != source_row_count:
         raise ValueError(
-            "Длина данных перед записью не совпадает с длиной основного листа: "
-            f"строк в UNIT={source_row_count}, значений к записи={len(results_list)}, "
-            f"wild с несколькими статусами={conflicting_wild_count}, "
-            f"примеры проблемных wild={conflicting_wild_examples}"
+            "Write invariant failed: "
+            f"unit_rows={source_row_count}, values_to_write={len(results_list)}, "
+            f"conflicting_wild={conflicting_wild_count}, "
+            f"examples={conflicting_wild_examples}"
         )
 
     logger.info(
-        "Проверка длины перед записью пройдена: %s значений на %s строк основного листа.",
+        "Write length check passed: %s values for %s UNIT rows.",
         len(results_list),
         source_row_count,
     )
     unit_economics.google_connect.update_column_by_name(STATUS_TARGET_COLUMN, results_list)
-    logger.info("Колонка '%s' успешно обновлена в Google Sheets.", STATUS_TARGET_COLUMN)
+    logger.info("Column '%s' updated in Google Sheets.", STATUS_TARGET_COLUMN)
