@@ -167,6 +167,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_stock_analyze),
         "desc": "Выгрузка данных об остатках из арт анализа",
     },
+    # === Выгрузка в таблицу отгрузка ФБО ===
     "logistic_ved_run": {
         "func": smart_run(logistic_ved_run),
         "desc": "Выгрузка заказов по округам из PostgreSQL в Google Sheets Отгрузка ФБО",
