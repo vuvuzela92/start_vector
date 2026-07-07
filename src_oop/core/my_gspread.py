@@ -45,8 +45,17 @@ def _sheet_update_cell(value):
 class GoogleTabs:
     """Класс для работы с Google Таблицами."""
 
-    def __init__(self, table_title: str, sheet_title: str):
-        self.creds_file = Path(__file__).resolve().parents[2] / "creds/creds.json"
+    def __init__(
+        self,
+        table_title: str,
+        sheet_title: str,
+        creds_file: str | Path | None = None,
+    ):
+        self.creds_file = (
+            Path(creds_file)
+            if creds_file is not None
+            else Path(__file__).resolve().parents[2] / "creds/creds.json"
+        )
         self.table_title = table_title
         self.table = None
         self.sheet_title = sheet_title
@@ -198,13 +207,7 @@ class GoogleTabs:
                 df[col] = df[col].astype(str)
 
         try:
-            google_connect = GoogleTabs(
-                table_title=self.table_title,
-                sheet_title=self.sheet_title.title,
-            )
-
-            ws = google_connect.sheet_title
-            self._update_df_in_google(df=df, sheet=ws)
+            self._update_df_in_google(df=df, sheet=self.sheet_title)
             print("Таблица полностью обновлена")
 
         except gspread.exceptions.SpreadsheetNotFound:

@@ -39,6 +39,7 @@ from src_oop.jobs.fin_reports_analyze.run import (
     update_stock_analyze,
     update_weekly_profit_report,
 )
+from src_oop.jobs.logistic_ved.run import logistic_ved_run
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 from src_oop.jobs.unit.update_adv_participants import update_adv_participants_to_gs
 from src_oop.jobs.unit.update_wild_statuses import update_wild_statuses
@@ -92,7 +93,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
     # === Гугл-таблица годовой план закупа ===
     "transport_data_to_annual_procurement_plan": {
         "func": smart_run(transport_data_to_annual_procurement_plan),
-        "desc": "Обновление годового плана закупа 2026",
+        "desc": "Обновление годового плана закупа 2026 во вкладке БД_ЗАКАЗЫ",
     },
     "transport_parfume_data_to_annual_procurement_plan": {
         "func": smart_run(transport_parfume_data_to_annual_procurement_plan),
@@ -165,6 +166,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "update_stock_analyze": {
         "func": smart_run(update_stock_analyze),
         "desc": "Выгрузка данных об остатках из арт анализа",
+    },
+    "logistic_ved_run": {
+        "func": smart_run(logistic_ved_run),
+        "desc": "Выгрузка заказов по округам из PostgreSQL в Google Sheets Отгрузка ФБО",
     },
     "wms_stocks_run": {
         "func": smart_run(wms_stocks_run),
