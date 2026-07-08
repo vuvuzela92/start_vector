@@ -41,6 +41,7 @@ from src_oop.jobs.fin_reports_analyze.run import (
 )
 from src_oop.jobs.logistic_ved.run import logistic_ved_run
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
+from src_oop.jobs.unit.competitors import update_competitors_prices
 from src_oop.jobs.unit.update_adv_participants import update_adv_participants_to_gs
 from src_oop.jobs.unit.update_wild_statuses import update_wild_statuses
 from src_oop.jobs.wb_api.measurements.run import (
@@ -184,6 +185,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "update_wild_statuses": {
         "func": smart_run(update_wild_statuses),
         "desc": "Обновление статусов вилдов в юнитке",
+    },
+    "update_competitors_prices": {
+        "func": smart_run(update_competitors_prices),
+        "desc": "Обновление колонок конкурентов и цен в UNIT-таблице",
     },
     # Данные о замерах габаритов товаров на ВБ ===
     "collect_and_store_measurements": {

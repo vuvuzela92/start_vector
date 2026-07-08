@@ -12,8 +12,8 @@ def update_adv_participants_to_gs():
     # Получаем данные о рекламных расходах по статьям за вчерашний день
     adv_spend = database.read_sql_to_dataframe(query_adv_spend)
     # Задаем параметры для работы с Google Sheets
-    table_title = unit_gs.get("title")
-    sheet_title = unit_gs.get("unit_sheet")
+    table_title = unit_gs.title
+    sheet_title = unit_gs.sheet
     # Инициализируем работу с Google Sheets
     google_tabs = GoogleTabs(table_title, sheet_title)
     # Получаем данные из Google Sheets и преобразуем их в DataFrame
