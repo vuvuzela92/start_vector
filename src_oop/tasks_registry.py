@@ -41,6 +41,7 @@ from src_oop.jobs.fin_reports_analyze.run import (
 )
 from src_oop.jobs.logistic_ved.run import logistic_ved_run
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
+from src_oop.jobs.purchase_price_update.run import purchase_price_update_run
 from src_oop.jobs.unit.competitors import update_competitors_prices
 from src_oop.jobs.unit.update_adv_participants import update_adv_participants_to_gs
 from src_oop.jobs.unit.update_wild_statuses import update_wild_statuses
@@ -58,6 +59,7 @@ def smart_run(func: Callable):
 
 
 TASKS: Dict[str, Dict[str, Any]] = {
+    # Маркетплейс WB: реклама и ежедневные оперативные отчеты.
     "advert_info": {
         "func": smart_run(advert_info),
         "desc": "Запуск обновления данных о рекламных кампаниях",
@@ -74,6 +76,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(orders_report_today),
         "desc": "Запуск обновления отчета о заказах за сегодня",
     },
+    # Старый контур Google Sheets и управленческих витрин.
     "update_penalties_in_gs_purchase_russia": {
         "func": smart_run(update_penalties_in_gs_purchase_russia),
         "desc": "Обновление данных о штрафах и остатках в Google Sheets",
@@ -90,10 +93,12 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_credit_data_vector),
         "desc": "Обновление данных для кредитного анализа Вектор",
     },
+    # Бухгалтерские и регламентные выгрузки.
     "update_week_n_redeem": {
         "func": smart_run(update_week_n_redeem),
         "desc": "Обновление данных в ОТЧЕТ за 2026 пров v.2.0",
     },
+    # Планирование закупок: годовой и квартальный контур.
     "transport_data_to_annual_procurement_plan": {
         "func": smart_run(transport_data_to_annual_procurement_plan),
         "desc": "Обновление годового плана закупа 2026 во вкладке БД_ЗАКАЗЫ",
@@ -126,10 +131,16 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_payments_analyze_with_ved),
         "desc": "Production-выгрузка объединенного balance_df и ved_balance_df",
     },
+    # Аналитика артикулов и закупочной цены.
     "orders_article_analyze_run": {
         "func": smart_run(orders_article_analyze_run),
         "desc": "Запуск артикульного анализа заказов",
     },
+    "purchase_price_update_run": {
+        "func": smart_run(purchase_price_update_run),
+        "desc": "Запуск обновления закупочных цен в UNIT по актуальным данным БД",
+    },
+    # Условные расчеты и их выгрузки.
     "conditional_calculation_to_db_run": {
         "func": smart_run(conditional_calculation_to_db_run),
         "desc": "Запуск условного расчета и загрузки в БД",
@@ -138,6 +149,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_conditional_calculations_to_gs),
         "desc": "Выгрузка условного расчета в Google Sheets",
     },
+    # Финансовая аналитика и управленческая отчетность.
     "update_monthly_report": {
         "func": smart_run(update_monthly_report),
         "desc": "Выгрузка сводных данных фин отчета за месяц",
@@ -166,6 +178,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_stock_analyze),
         "desc": "Выгрузка данных об остатках из арт анализа",
     },
+    # Логистика, склады и операционные остатки.
     "logistic_ved_run": {
         "func": smart_run(logistic_ved_run),
         "desc": "Выгрузка заказов по округам из PostgreSQL в Google Sheets Отгрузка ФБО",
@@ -174,6 +187,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(wms_stocks_run),
         "desc": "Выгрузка данных об остатках из WMS",
     },
+    # UNIT: сервисные обновления справочников, статусов и ценовых витрин.
     "update_adv_participants_to_gs": {
         "func": smart_run(update_adv_participants_to_gs),
         "desc": "Выгрузка участия артикулов в рекламных кампаниях",
@@ -186,6 +200,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_competitors_prices),
         "desc": "Обновление колонок конкурентов и цен в UNIT-таблице",
     },
+    # WB API: замеры и производные выгрузки.
     "collect_and_store_measurements": {
         "func": smart_run(collect_and_store_measurements),
         "desc": "Сбор и сохранение данных о замерах в БД",
@@ -194,6 +209,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(set_measurements_to_google),
         "desc": "Запись данных о замерах в гугл-таблицу Отгрузка ФБО",
     },
+    # Закупки Россия: расчетные и транспортные задачи.
     "set_orders_quantity": {
         "func": smart_run(set_orders_quantity),
         "desc": "Запись данных о количестве заказов в гугл-таблицу Расчет Закупки Россия",
@@ -202,6 +218,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(transport_orders_and_supply),
         "desc": "Запись данных о заказах и поступлениях товаров",
     },
+    # Автопилот и индивидуальные настройки.
     "update_individual_info": {
         "func": smart_run(update_individual_info),
         "desc": "Обновление данных об индивидуальных условиях",
