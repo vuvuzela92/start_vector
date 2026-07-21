@@ -8,7 +8,6 @@ import gspread
 import pandas as pd
 
 from src_oop.core.my_gspread import GoogleTabs
-from src_oop.jobs.logistic_ved.config import LOGISTIC_VED_CLEAR_RANGE
 
 logger = logging.getLogger(__name__)
 
@@ -84,12 +83,9 @@ class LogisticVedGoogleSheetsClient:
             sheet_title=self.sheet_title,
             creds_file=credentials_path,
         )
-        worksheet = google_tabs.sheet_title
         logger.info(
-            "Очистка целевого диапазона перед записью logistic_ved: %s",
-            LOGISTIC_VED_CLEAR_RANGE,
+            "Запись logistic_ved выполняется через GoogleTabs.set_df_to_google без предварительного batch_clear."
         )
-        worksheet.batch_clear([LOGISTIC_VED_CLEAR_RANGE])
         google_tabs.set_df_to_google(dataframe.copy())
         logger.info(
             "Данные logistic_ved записаны в Google Sheets: table=%s sheet=%s rows=%s",

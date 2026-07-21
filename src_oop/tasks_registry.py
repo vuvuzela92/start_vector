@@ -78,10 +78,13 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_penalties_in_gs_purchase_russia),
         "desc": "Обновление данных о штрафах и остатках в Google Sheets",
     },
-    # === Бухгалтерия ===
     "get_bukh_docs": {
         "func": smart_run(get_bukh_docs_async),
         "desc": "Запуск получения данных по бухгалтерским документам",
+    },
+    "get_bukh_docs_async": {
+        "func": smart_run(get_bukh_docs_async),
+        "desc": "Запуск получения данных по бухгалтерским документам (CLI-алиас)",
     },
     "update_credit_data_vector": {
         "func": smart_run(update_credit_data_vector),
@@ -91,7 +94,6 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_week_n_redeem),
         "desc": "Обновление данных в ОТЧЕТ за 2026 пров v.2.0",
     },
-    # === Гугл-таблица годовой план закупа ===
     "transport_data_to_annual_procurement_plan": {
         "func": smart_run(transport_data_to_annual_procurement_plan),
         "desc": "Обновление годового плана закупа 2026 во вкладке БД_ЗАКАЗЫ",
@@ -124,12 +126,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_payments_analyze_with_ved),
         "desc": "Production-выгрузка объединенного balance_df и ved_balance_df",
     },
-    # === Артикульный анализ === 
     "orders_article_analyze_run": {
         "func": smart_run(orders_article_analyze_run),
         "desc": "Запуск артикульного анализа заказов",
     },
-    # === Условный расчет ===
     "conditional_calculation_to_db_run": {
         "func": smart_run(conditional_calculation_to_db_run),
         "desc": "Запуск условного расчета и загрузки в БД",
@@ -138,7 +138,6 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_conditional_calculations_to_gs),
         "desc": "Выгрузка условного расчета в Google Sheets",
     },
-    # === Финаносвый отчет ===
     "update_monthly_report": {
         "func": smart_run(update_monthly_report),
         "desc": "Выгрузка сводных данных фин отчета за месяц",
@@ -163,12 +162,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_cash_flow_writeoffs),
         "desc": "Выгрузка данных по затратам из 1С",
     },
-    # === Данные об остатках ===
     "update_stock_analyze": {
         "func": smart_run(update_stock_analyze),
         "desc": "Выгрузка данных об остатках из арт анализа",
     },
-    # === Выгрузка в таблицу отгрузка ФБО ===
     "logistic_ved_run": {
         "func": smart_run(logistic_ved_run),
         "desc": "Выгрузка заказов по округам из PostgreSQL в Google Sheets Отгрузка ФБО",
@@ -177,7 +174,6 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(wms_stocks_run),
         "desc": "Выгрузка данных об остатках из WMS",
     },
-    # === Таблица Юнит-Экономики ===
     "update_adv_participants_to_gs": {
         "func": smart_run(update_adv_participants_to_gs),
         "desc": "Выгрузка участия артикулов в рекламных кампаниях",
@@ -190,7 +186,6 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_competitors_prices),
         "desc": "Обновление колонок конкурентов и цен в UNIT-таблице",
     },
-    # Данные о замерах габаритов товаров на ВБ ===
     "collect_and_store_measurements": {
         "func": smart_run(collect_and_store_measurements),
         "desc": "Сбор и сохранение данных о замерах в БД",
@@ -199,10 +194,9 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(set_measurements_to_google),
         "desc": "Запись данных о замерах в гугл-таблицу Отгрузка ФБО",
     },
-    # === Гугл-таблица Расчет Закупки Россия ===
     "set_orders_quantity": {
         "func": smart_run(set_orders_quantity),
-        "desc": "Запись данных о количестве заказов в гугл-таблицу Расчет закупки Россия",
+        "desc": "Запись данных о количестве заказов в гугл-таблицу Расчет Закупки Россия",
     },
     "transport_orders_and_supply": {
         "func": smart_run(transport_orders_and_supply),

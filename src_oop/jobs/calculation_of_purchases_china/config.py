@@ -9,6 +9,13 @@ delivery_calculation_china = {
                         "payments_analyze_sheet": "Аналитика_платежей",
                             }
 
+# Платежный календарь
+payments_calendar = {
+    "title": "Платежный календарь",
+    "analytic_sheet": "Аналитика_платежей",
+    }
+
+
 # Колонки для таблицы Годового закупа
 ANNUAL_PLAN_COLUMNS = [
     "Название фабрики",
@@ -337,8 +344,3 @@ VED_PAYMENT_CONFIGS = [
         },
     }
 ]
-# Платежный календарь
-payments_calendar = {
-    "title": "Платежный календарь",
-    "analytic_sheet": "Аналитика_платежей",
-    }
