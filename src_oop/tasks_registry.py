@@ -39,7 +39,7 @@ from src_oop.jobs.fin_reports_analyze.run import (
     update_stock_analyze,
     update_weekly_profit_report,
 )
-from src_oop.jobs.logistic_ved.run import logistic_ved_run
+from src_oop.jobs.fbo_supplies.run import fbo_supplies_run
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 from src_oop.jobs.purchase_price_update.run import purchase_price_update_run
 from src_oop.jobs.unit.competitors import update_competitors_prices
@@ -179,8 +179,8 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "desc": "Выгрузка данных об остатках из арт анализа",
     },
     # Логистика, склады и операционные остатки.
-    "logistic_ved_run": {
-        "func": smart_run(logistic_ved_run),
+    "fbo_supplies_run": {
+        "func": smart_run(fbo_supplies_run),
         "desc": "Выгрузка заказов по округам из PostgreSQL в Google Sheets Отгрузка ФБО",
     },
     "wms_stocks_run": {
