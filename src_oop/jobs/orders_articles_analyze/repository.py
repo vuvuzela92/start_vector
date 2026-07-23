@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class ArticleAnalyzeRepository:
     """Содержит SQL-запросы для формирования артикульного анализа."""
 
-    def __init__(self, days_ago: int = 2, days_to: int = 1):
+    def __init__(self, days_ago: int = 28, days_to: int = 1):
         self.days_ago = days_ago
         self.days_to = days_to
 
@@ -312,9 +312,9 @@ class ArticleAnalyzeRepository:
                 WHERE date BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days' AND CURRENT_DATE - INTERVAL '{days_to} days'
             ) pd ON pd.article_id = b.article_id AND pd."date" = b."date"
             LEFT JOIN (
-                SELECT DATE(ws.last_change_date) AS date, ws.nm_id, SUM(ws.in_way_to_client) AS in_way_to_client, SUM(ws.in_way_from_client) AS in_way_from_client, SUM(quantity) AS quantity
+                SELECT DATE(ws.created_at) AS date, ws.nm_id, SUM(ws.in_way_to_client) AS in_way_to_client, SUM(ws.in_way_from_client) AS in_way_from_client, SUM(quantity) AS quantity
                 FROM wb_stock ws
-                WHERE DATE(ws.last_change_date) BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days' AND CURRENT_DATE - INTERVAL '{days_to} days'
+                WHERE DATE(ws.created_at) BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days' AND CURRENT_DATE - INTERVAL '{days_to} days'
                 GROUP BY date, ws.nm_id
             ) ws ON ws.nm_id = b.article_id AND ws."date" = b."date"
             LEFT JOIN (
