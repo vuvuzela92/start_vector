@@ -216,7 +216,10 @@ class PurchasePriceUpdateService:
 
         updates: list[dict[str, object]] = []
         for row in processing_result.changed_rows.itertuples(index=False):
-            row_number = int(row.__row_number)
+            # Используем безопасное имя служебной колонки без двойного подчёркивания.
+            # Иначе Python внутри метода класса применяет name mangling, и доступ
+            # к полю namedtuple ломается уже на боевом обновлении строк.
+            row_number = int(row.sheet_row_number)
             cached_row = cached_values[row_number - 1] if row_number - 1 < len(cached_values) else []
             actual_article = ""
             if article_column_index - 1 < len(cached_row):

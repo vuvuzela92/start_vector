@@ -69,7 +69,7 @@ def build_legacy_changed_rows(
             "unit_price",
             "price_diff_rub",
             "price_diff_percent",
-            "__row_number",
+            "sheet_row_number",
         ]
     ].reset_index(drop=True)
 
@@ -154,7 +154,7 @@ def _normalize_for_comparison(changed_rows: pd.DataFrame) -> pd.DataFrame:
             "unit_price",
             "price_diff_rub",
             "price_diff_percent",
-            "__row_number",
+            "sheet_row_number",
         ]
     ].reset_index(drop=True)
 
@@ -175,7 +175,7 @@ def _build_price_mismatches(
     ) | (
         merged["unit_price_legacy"] != merged["unit_price_new"]
     ) | (
-        merged["__row_number_legacy"] != merged["__row_number_new"]
+        merged["sheet_row_number_legacy"] != merged["sheet_row_number_new"]
     )
 
     mismatch_columns = [
@@ -184,7 +184,7 @@ def _build_price_mismatches(
         "price_per_item_new",
         "unit_price_legacy",
         "unit_price_new",
-        "__row_number_legacy",
-        "__row_number_new",
+        "sheet_row_number_legacy",
+        "sheet_row_number_new",
     ]
     return merged.loc[mismatch_mask, mismatch_columns].reset_index(drop=True)

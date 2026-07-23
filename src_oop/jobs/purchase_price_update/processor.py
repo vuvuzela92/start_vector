@@ -76,17 +76,17 @@ def build_unit_sheet_dataframe(
     `data_row_index` — индекс первой строки с данными.
 
     Возвращаемый результат:
-    `pandas.DataFrame` со строками листа и дополнительной колонкой `__row_number`.
+    `pandas.DataFrame` со строками листа и дополнительной колонкой `sheet_row_number`.
 
     Возможные исключения:
     `MissingRequiredColumnsError`, если лист пустой или не содержит заголовков.
     `DuplicateBusinessKeyError`, если заголовки продублированы.
 
     Особенности поведения:
-    колонка `__row_number` сохраняет исходный номер строки в листе, чтобы
+    колонка `sheet_row_number` сохраняет исходный номер строки в листе, чтобы
     запись обратно в Google Sheets была привязана к фактической строке.
 
-    Дополнительно добавляет служебную колонку `__row_number`.
+    Дополнительно добавляет служебную колонку `sheet_row_number`.
     Она нужна, чтобы потом обновлять ровно те строки, которые были прочитаны,
     а не рассчитывать позицию товара заново уже после преобразований.
     """
@@ -111,7 +111,12 @@ def build_unit_sheet_dataframe(
 
     rows = values[data_row_index:] if len(values) > data_row_index else []
     dataframe = pd.DataFrame(rows, columns=headers)
-    dataframe["__row_number"] = list(range(data_row_index + 1, data_row_index + 1 + len(rows)))
+    # Сохраняем фактический номер строки Google Sheets в отдельной колонке.
+    # Это позволяет обновлять цену адресно и не зависеть от того, как строки
+    # могли быть переставлены или отфильтрованы на промежуточных шагах обработки.
+    dataframe["sheet_row_number"] = list(
+        range(data_row_index + 1, data_row_index + 1 + len(rows))
+    )
     return dataframe
 
 
@@ -169,7 +174,7 @@ def prepare_unit_state(dataframe: pd.DataFrame) -> pd.DataFrame:
 
     return prepared[
         [
-            "__row_number",
+            "sheet_row_number",
             ARTICLE_COLUMN,
             PURCHASE_PRICE_COLUMN,
             "is_locked_price",
