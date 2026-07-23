@@ -73,40 +73,49 @@ PURCHASE_PRICE_UPDATE_QUERY = text(
           AND supply_date >= CURRENT_DATE - (:days_count * INTERVAL '1 day')
           AND supply_date < CURRENT_DATE
         ORDER BY local_vendor_code, supply_date DESC
+    ),
+    prepared_purchase_price AS (
+        SELECT
+            lpp.*,
+            CASE
+                WHEN
+                    (
+                        lpp.currency IS NOT NULL
+                        AND lpp.currency != '643'
+                    )
+                    OR (
+                        lpp.supplier_name IS NOT NULL
+                        AND lpp.supplier_name ILIKE '%ZILOL%'
+                    )
+                THEN TRUE
+                ELSE FALSE
+            END AS use_planned_cost
+        FROM latest_purchase_price lpp
     )
     SELECT
-        lpp.supply_date,
-        lpp.guid,
-        lpp.document_number,
-        lpp.local_vendor_code,
-        lpp.product_name,
-        lpp.amount_with_vat,
-        lpp.quantity,
-        lpp.latest_price_per_item,
+        ppp.supply_date,
+        ppp.guid,
+        ppp.document_number,
+        ppp.local_vendor_code,
+        ppp.product_name,
+        ppp.amount_with_vat,
+        ppp.quantity,
+        ppp.latest_price_per_item,
         CASE
-            WHEN
-                (
-                    lpp.currency IS NOT NULL
-                    AND lpp.currency != '643'
-                )
-                OR lpp.supplier_name ILIKE '%ZILOL"%'
-            THEN lpp.planned_cost
-            ELSE lpp.latest_price_per_item
+            WHEN ppp.use_planned_cost
+            THEN ppp.planned_cost
+            ELSE ppp.latest_price_per_item
         END AS price_per_item,
-        lpp.currency,
-        lpp.planned_cost,
+        ppp.currency,
+        ppp.planned_cost,
         CASE
-            WHEN
-                (
-                    (lpp.currency IS NOT NULL AND lpp.currency != '643')
-                    OR lpp.supplier_name ILIKE '%ZILOL%'
-                )
-                AND (lpp.planned_cost IS NULL OR lpp.planned_cost = 0)
+            WHEN ppp.use_planned_cost
+                AND (ppp.planned_cost IS NULL OR ppp.planned_cost = 0)
             THEN 'ALARM: planned_cost missing'
             ELSE NULL
         END AS alarm_flag
-    FROM latest_purchase_price lpp
-    ORDER BY lpp.local_vendor_code
+    FROM prepared_purchase_price ppp
+    ORDER BY ppp.local_vendor_code
     """
 )
 

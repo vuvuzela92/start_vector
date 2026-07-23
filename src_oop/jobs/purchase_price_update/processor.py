@@ -320,6 +320,8 @@ def build_report_dataframe(changed_rows: pd.DataFrame) -> pd.DataFrame:
     Особенности поведения:
     дата поставки переводится в строку, а в колонку `insert_date` записывается
     дата формирования отчета.
+    Если прежняя цена отсутствовала, в отчет подставляется `0`, чтобы поле
+    разницы не оставалось пустым и корректно показывало отклонение.
     """
 
     report_dataframe = changed_rows.copy()
@@ -328,6 +330,18 @@ def build_report_dataframe(changed_rows: pd.DataFrame) -> pd.DataFrame:
         errors="coerce",
     ).dt.date.astype(str)
     report_dataframe["insert_date"] = datetime.now().strftime("%Y-%m-%d")
+    # Для листа истории пустую прежнюю цену трактуем как отсутствие базовой цены.
+    # Это позволяет явно показать ноль и корректно посчитать разницу, вместо того
+    # чтобы оставлять в отчете пустые ячейки, которые сложно интерпретировать.
+    report_dataframe["unit_price"] = _normalize_numeric_series(
+        report_dataframe["unit_price"]
+    ).fillna(0)
+    report_dataframe["price_per_item"] = _normalize_numeric_series(
+        report_dataframe["price_per_item"]
+    )
+    report_dataframe["price_diff_rub"] = (
+        report_dataframe["unit_price"] - report_dataframe["price_per_item"]
+    )
     report_dataframe = report_dataframe.reindex(columns=list(REPORT_COLUMNS))
     return report_dataframe.fillna("")
 
