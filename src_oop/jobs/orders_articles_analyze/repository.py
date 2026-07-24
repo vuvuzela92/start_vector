@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class ArticleAnalyzeRepository:
     """Содержит SQL-запросы для формирования артикульного анализа."""
 
-    def __init__(self, days_ago: int = 28, days_to: int = 1):
+    def __init__(self, days_ago: int = 2, days_to: int = 1):
         self.days_ago = days_ago
         self.days_to = days_to
 
