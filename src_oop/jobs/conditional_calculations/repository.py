@@ -4,7 +4,7 @@ from src_oop.core.database import Database
 
 
 class ConditionalCalculationsRepository:
-    def __init__(self, days_ago: int = 130, days_to: int = 1):
+    def __init__(self, days_ago: int = 207, days_to: int = 1):
         self.days_ago = days_ago
         self.days_to = days_to
     
@@ -16,7 +16,7 @@ class ConditionalCalculationsRepository:
             SUM(o.orders_sum_rub) AS orders_sum,
             ROUND(SUM(o.sales_revenue_rep)) AS sales_sum,
             ROUND(SUM(o.profit_by_cond_orders)) AS profit_by_ind_cond_orders,
-            ROUND(SUM(o.sales_profit_cond_rep)) AS profit_by_ind_cond_sales,
+            ROUND(SUM(o.profit_by_cond_sales)) AS profit_by_ind_cond_sales,
             SUM(o.sales_count_rep) AS sales_count,
             SUM(o.orders_count) AS order_count,
             SUM(o.adv_spend) AS adv_spend,
