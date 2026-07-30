@@ -1,4 +1,5 @@
-from src_oop.jobs.fbo_supplies.service import FboSuppliesService
+"""Сервисный слой пакета logistic_ved."""
 
-# Совместимость на переходный период: старое имя сервиса перенаправлено на новый класс.
-LogisticVedService = FboSuppliesService
+from src_oop.jobs.fbo_supplies.service import FboSuppliesService as LogisticVedService
+
+__all__ = ["LogisticVedService"]

@@ -1,4 +1,7 @@
-from src_oop.jobs.fbo_supplies.google_sheets_client import FboSuppliesGoogleSheetsClient
+"""Клиент Google Sheets пакета logistic_ved."""
 
-# Совместимость на переходный период: старое имя клиента перенаправлено на новый класс.
-LogisticVedGoogleSheetsClient = FboSuppliesGoogleSheetsClient
+from src_oop.jobs.fbo_supplies.google_sheets_client import (
+    FboSuppliesGoogleSheetsClient as LogisticVedGoogleSheetsClient,
+)
+
+__all__ = ["LogisticVedGoogleSheetsClient"]

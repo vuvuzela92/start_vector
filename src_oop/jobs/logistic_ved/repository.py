@@ -1,4 +1,5 @@
-from src_oop.jobs.fbo_supplies.repository import FboSuppliesRepository
+"""Репозиторный слой пакета logistic_ved."""
 
-# Совместимость на переходный период: старое имя репозитория перенаправлено на новый класс.
-LogisticVedRepository = FboSuppliesRepository
+from src_oop.jobs.fbo_supplies.repository import FboSuppliesRepository as LogisticVedRepository
+
+__all__ = ["LogisticVedRepository"]
