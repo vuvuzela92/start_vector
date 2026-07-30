@@ -287,23 +287,23 @@ class LogisticVedUpdater:
                 self._parse_rmb_value
             )
 
+        # В исходной таблице ORDER_LINE_ID не должен быть пустым:
+        # без него строку нельзя корректно сопоставить между закупщиками и логистами.
+        empty_key_rows = source_dataframe[source_dataframe[ORDER_LINE_ID_COLUMN] == ""]
+        if not empty_key_rows.empty:
+            logger.warning(
+                "Пропущены строки без ORDER_LINE_ID в таблице Заказы белые ТЕСТ: count=%s",
+                len(empty_key_rows.index),
+            )
+            source_dataframe = source_dataframe[
+                source_dataframe[ORDER_LINE_ID_COLUMN] != ""
+            ].copy()
+
         # В прямую выгрузку попадают только строки, которые закупщики реально передают логистам.
         filtered_dataframe = source_dataframe[
             (source_dataframe[TRUCK_NUMBER_COLUMN] != "")
             & (source_dataframe[STATUS_COLUMN].str.lower() == READY_FOR_PICKUP_STATUS)
         ].copy()
-
-        # Строки без ключа синхронизации переносить нельзя:
-        # в дальнейшем по ним невозможно сопоставить данные между таблицами.
-        empty_key_rows = filtered_dataframe[filtered_dataframe[ORDER_LINE_ID_COLUMN] == ""]
-        if not empty_key_rows.empty:
-            logger.warning(
-                "Пропущены строки без ORDER_LINE_ID после фильтрации: count=%s",
-                len(empty_key_rows.index),
-            )
-            filtered_dataframe = filtered_dataframe[
-                filtered_dataframe[ORDER_LINE_ID_COLUMN] != ""
-            ].copy()
 
         # Если в источнике есть дубли, забираем последнюю строку по ключу,
         # считая ее самой актуальной версией у закупщиков.

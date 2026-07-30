@@ -303,15 +303,23 @@ class LogisticVedReverseUpdater:
         """Строит карту ORDER_LINE_ID -> список номеров строк в таблице закупщиков."""
         order_line_id_index = headers.index(ORDER_LINE_ID_COLUMN)
         positions: dict[str, list[int]] = {}
+        empty_order_line_id_count = 0
 
         for row_offset, row in enumerate(values[SOURCE_DATA_ROW_INDEX:]):
             normalized_row = self._normalize_row_length(row, len(headers))
             order_line_id = self._normalize_string(normalized_row[order_line_id_index])
             if order_line_id == "":
+                empty_order_line_id_count += 1
                 continue
 
             sheet_row_number = SOURCE_DATA_ROW_INDEX + 1 + row_offset
             positions.setdefault(order_line_id, []).append(sheet_row_number)
+
+        if empty_order_line_id_count:
+            logger.warning(
+                "В таблице Заказы белые ТЕСТ пропущены строки без ORDER_LINE_ID: count=%s",
+                empty_order_line_id_count,
+            )
 
         duplicate_source_keys = sum(
             1 for row_numbers in positions.values() if len(row_numbers) > 1
