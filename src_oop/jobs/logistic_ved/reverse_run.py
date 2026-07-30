@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 from time import sleep
+from zoneinfo import ZoneInfo
 
 import gspread
 from gspread.utils import rowcol_to_a1
@@ -136,6 +138,8 @@ TARGET_HEADER_ROW_INDEX = 3
 TARGET_DATA_ROW_INDEX = 4
 # Максимальный размер одного пакета изменений при batch_update в Google Sheets.
 BATCH_UPDATE_CHUNK_SIZE = 500
+# Ячейка с датой и временем последней успешной обратной синхронизации в таблице закупщиков.
+LAST_SYNC_CELL = "B1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +205,7 @@ class LogisticVedReverseUpdater:
             operation_name="read target values logistic_ved_reverse",
             func=self.target_connector.sheet_title.get_all_values,
         )
+        updated_at_value = self._build_updated_at_value()
 
         source_headers = self._extract_headers(source_values, SOURCE_HEADER_ROW_INDEX)
         target_headers = self._extract_headers(target_values, TARGET_HEADER_ROW_INDEX)
@@ -226,10 +231,18 @@ class LogisticVedReverseUpdater:
         )
 
         if updates.total_updates == 0:
+            self._update_last_sync_marker(
+                worksheet=self.source_connector.sheet_title,
+                updated_at_value=updated_at_value,
+            )
             logger.info("Изменений для обратной записи не найдено.")
             return
 
         self._apply_updates(updates)
+        self._update_last_sync_marker(
+            worksheet=self.source_connector.sheet_title,
+            updated_at_value=updated_at_value,
+        )
         logger.info(
             "Задача logistic_ved_reverse_run завершена успешно: source_updates=%s target_updates=%s total_updates=%s",
             len(updates.source_updates),
@@ -493,6 +506,20 @@ class LogisticVedReverseUpdater:
             operation_name="batch_update logistic_ved_reverse target",
             worksheet=self.target_connector.sheet_title,
             updates=updates.target_updates,
+        )
+
+    def _build_updated_at_value(self) -> str:
+        """Возвращает текущее московское время в строковом формате."""
+        return datetime.now(ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d %H:%M:%S")
+
+    def _update_last_sync_marker(self, worksheet, updated_at_value: str) -> None:
+        """Записывает в B1 дату и время последней успешной обратной синхронизации."""
+        self._execute_with_retry(
+            operation_name="update delivery_calculation_china last sync marker",
+            func=worksheet.update,
+            range_name=LAST_SYNC_CELL,
+            values=[[updated_at_value]],
+            value_input_option="USER_ENTERED",
         )
 
     def _apply_sheet_updates(

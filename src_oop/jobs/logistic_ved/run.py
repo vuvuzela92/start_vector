@@ -53,6 +53,7 @@ ORDER_SUM_RMB_COLUMN = "Сумма заказа, RMB"
 CREATED_AT_COLUMN = "created_at"
 UPDATED_AT_COLUMN = "updatet_at"
 SHEET_ROW_NUMBER_COLUMN = "__sheet_row_number"
+LAST_SYNC_CELL = "A2"
 READY_FOR_PICKUP_STATUS = "товар готов к вывозу"
 GOOGLE_WRITE_RETRY_ATTEMPTS = 5
 GOOGLE_WRITE_RETRY_DELAY_SECONDS = 2
@@ -178,6 +179,10 @@ class LogisticVedUpdater:
             worksheet=self.target_connector.sheet_title,
             headers=target_headers,
             sync_plan=sync_plan,
+        )
+        self._update_last_sync_marker(
+            worksheet=self.target_connector.sheet_title,
+            updated_at_value=updated_at_value,
         )
         logger.info("Задача logistic_ved_run завершена успешно.")
 
@@ -468,6 +473,16 @@ class LogisticVedUpdater:
                 value_input_option="USER_ENTERED",
                 table_range=f"A{self.target_config.header_row_index + 1}:{rowcol_to_a1(self.target_config.header_row_index + 1, len(headers))}",
             )
+
+    def _update_last_sync_marker(self, worksheet, updated_at_value: str) -> None:
+        """Записывает в A2 дату и время последнего успешного обновления данных."""
+        self._execute_with_retry(
+            operation_name="update ved_logistics_2026 last sync marker",
+            func=worksheet.update,
+            range_name=LAST_SYNC_CELL,
+            values=[[updated_at_value]],
+            value_input_option="USER_ENTERED",
+        )
 
     def _apply_cell_updates(
         self,
