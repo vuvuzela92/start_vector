@@ -131,7 +131,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
     },
     "update_payments_analyze_with_ved": {
         "func": smart_run(update_payments_analyze_with_ved),
-        "desc": "Production-выгрузка объединенного balance_df и ved_balance_df",
+        "desc": "Production-выгрузка объединенного balance_df и ved_balance_df в Платежный календарь во вкладку Аналитика_платежей",
     },
     # Аналитика артикулов и закупочной цены.
     "orders_article_analyze_run": {
