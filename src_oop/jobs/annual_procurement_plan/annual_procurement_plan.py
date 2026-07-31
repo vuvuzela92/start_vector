@@ -35,7 +35,7 @@ class AnnualProcurementPlan:
 
         # Константы для фильтрации
         self.choosen_orders_columns = ["wild", "Модель", "Статус", "Кол-во к заказу", "Сумма заказа, RMB", "нед прибытие"]
-        self.cancel_statuses = ["отмена", "в планах", "прибыло"]
+        self.cancel_statuses = ["отмена", "в планах", "прибыло","РАЗОБРАТЬСЯ", "утеряно карго", "не получили", "излишек", "недостача"]
 
         # Подключение к базе данных
         self.engine = Database.get_engine()
