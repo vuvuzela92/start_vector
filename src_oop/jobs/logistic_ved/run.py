@@ -52,15 +52,24 @@ TRUCK_NUMBER_COLUMN = "Номер Трака"
 ORDER_SUM_RMB_COLUMN = "Сумма заказа, RMB"
 CREATED_AT_COLUMN = "created_at"
 UPDATED_AT_COLUMN = "updatet_at"
+# Служебная колонка в локальном DataFrame, где хранится реальный номер строки из Google Sheets.
 SHEET_ROW_NUMBER_COLUMN = "__sheet_row_number"
+# Ячейка в ОТЧЁТ_2.0, куда пишется дата и время последнего успешного обновления.
 LAST_SYNC_CELL = "A2"
 READY_FOR_PICKUP_STATUS = "товар готов к вывозу"
+# Количество попыток повторного запроса в Google Sheets при временных ошибках API.
 GOOGLE_WRITE_RETRY_ATTEMPTS = 5
+# Базовая пауза между повторными попытками, если Google Sheets не вернул отдельное время ожидания.
 GOOGLE_WRITE_RETRY_DELAY_SECONDS = 2
+# Коды ошибок Google Sheets, при которых запрос безопасно повторить.
 GOOGLE_WRITE_RETRY_STATUS_CODES = (429, 500, 502, 503, 504)
+# Максимальный размер одного пакета изменений при batch_update.
 BATCH_UPDATE_CHUNK_SIZE = 500
+# Список исходных колонок, которые можно исключать из прямой синхронизации без изменения CHINA_COLS.
 OPTIONAL_COLUMNS: set[str] = set()
+# Рабочий набор колонок закупщиков, которые реально участвуют в прямой синхронизации.
 ACTIVE_CHINA_COLS = [column for column in CHINA_COLS if column not in OPTIONAL_COLUMNS]
+# Набор колонок, которые должны присутствовать в целевой таблице логистов.
 MANAGED_TARGET_COLUMNS = [*ACTIVE_CHINA_COLS, CREATED_AT_COLUMN, UPDATED_AT_COLUMN]
 
 
