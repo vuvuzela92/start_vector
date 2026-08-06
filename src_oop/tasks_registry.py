@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict
 from src.modules.GOOGLE_SHEETS.credit_analyze_vector import update_credit_data_vector
 from src.modules.WB.advert.tasks import advert_info, advert_spend
 from src.modules.WB.reports.tasks import orders_report_today
+from src_oop.jobs.add_new_items.run import add_new_items_run
 from src_oop.jobs.advert.run import advert_stat
 from src_oop.jobs.annual_procurement_plan.run import (
     transport_data_to_annual_procurement_plan,
@@ -96,6 +97,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "desc": "Обновление данных для кредитного анализа Вектор",
     },
     # Бухгалтерские и регламентные выгрузки.
+    "add_new_items_run": {
+        "func": smart_run(add_new_items_run),
+        "desc": "OOP transfer of new items to UNIT, autopilot, competitors and products",
+    },
     "update_week_n_redeem": {
         "func": smart_run(update_week_n_redeem),
         "desc": "Обновление данных в ОТЧЕТ за 2026 пров v.2.0",
