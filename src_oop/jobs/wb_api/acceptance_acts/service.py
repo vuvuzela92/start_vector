@@ -90,7 +90,7 @@ class AcceptanceActsService:
             date_from.isoformat(),
             date_to.isoformat(),
         )
-        logger.info("run_fbo mode: dry_run=%s", self.dry_run)
+        logger.info("Режим run_fbo: dry_run=%s", self.dry_run)
         result = self._build_empty_result(
             act_type=ACT_TYPE_FBO,
             date_from=date_from,
@@ -119,7 +119,7 @@ class AcceptanceActsService:
             len(result.warnings),
             len(result.errors),
         )
-        logger.info("run_fbo completed with dry_run=%s", self.dry_run)
+        logger.info("run_fbo завершён: dry_run=%s", self.dry_run)
         return result
 
     async def run_fbs(
@@ -134,7 +134,7 @@ class AcceptanceActsService:
             date_from.isoformat(),
             date_to.isoformat(),
         )
-        logger.info("run_fbs mode: dry_run=%s", self.dry_run)
+        logger.info("Режим run_fbs: dry_run=%s", self.dry_run)
         result = self._build_empty_result(
             act_type=ACT_TYPE_FBS,
             date_from=date_from,
@@ -167,7 +167,7 @@ class AcceptanceActsService:
             len(result.warnings),
             len(result.errors),
         )
-        logger.info("run_fbs completed with dry_run=%s", self.dry_run)
+        logger.info("run_fbs завершён: dry_run=%s", self.dry_run)
         return result
 
     async def run_all(
@@ -183,7 +183,7 @@ class AcceptanceActsService:
             date_to.isoformat(),
         )
 
-        logger.info("run_all mode: dry_run=%s", self.dry_run)
+        logger.info("Режим run_all: dry_run=%s", self.dry_run)
         resolved_tokens = self._resolve_account_tokens(tokens_by_account)
         fbo_result = await self.run_fbo(
             date_from=date_from,
@@ -214,7 +214,7 @@ class AcceptanceActsService:
             len(result.warnings),
             len(result.errors),
         )
-        logger.info("run_all completed with dry_run=%s", self.dry_run)
+        logger.info("run_all завершён: dry_run=%s", self.dry_run)
         return result
 
     def _resolve_repository(
@@ -370,7 +370,7 @@ class AcceptanceActsService:
         if validation_result.status == "failed":
             self._append_messages(result.errors, validation_result.errors)
             logger.warning(
-                "Validation failed, Excel пропущен: account=%s act_type=%s excel=%s",
+                "Валидация не пройдена, Excel пропущен: account=%s act_type=%s excel=%s",
                 excel_file.account,
                 act_type,
                 excel_file.excel_name,

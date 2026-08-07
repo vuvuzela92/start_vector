@@ -104,7 +104,8 @@ class WBAdvertSpendClient:
 
                     response.raise_for_status()
                     raise RuntimeError(
-                        f"WB spend request failed for account={account}: status={response.status} detail={error_detail}"
+                        f"Запрос рекламных затрат WB завершился ошибкой: "
+                        f"account={account} status={response.status} detail={error_detail}"
                     )
             except PermissionError:
                 raise
@@ -118,7 +119,8 @@ class WBAdvertSpendClient:
             ) as error:
                 if attempt >= self.max_retries:
                     raise RuntimeError(
-                        f"WB spend request failed after retries for account={account}: {type(error).__name__}: {error}"
+                        f"Запрос рекламных затрат WB завершился ошибкой после всех повторов: "
+                        f"account={account} error_type={type(error).__name__} error={error}"
                     ) from error
                 await self._sleep_for_retry(
                     account=account,
@@ -126,7 +128,7 @@ class WBAdvertSpendClient:
                     error_detail=f"{type(error).__name__}: {error}",
                 )
 
-        raise RuntimeError(f"WB spend request exhausted retries for account={account}")
+        raise RuntimeError(f"Запрос рекламных затрат WB исчерпал все попытки повтора: account={account}")
 
     async def _read_json_payload(self, response: aiohttp.ClientResponse) -> dict | list | str | None:
         content_type = response.headers.get("Content-Type", "")

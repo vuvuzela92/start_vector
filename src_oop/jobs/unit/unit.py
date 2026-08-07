@@ -21,6 +21,13 @@ class UnitSheets:
 
 class UnitEconomics:
     def __init__(self) -> None:
+        """
+        Инициализирует доступ к БД и основным листам UNIT.
+
+        Бизнес-логика:
+        собирает подключения, которые нужны задачам UNIT для чтения расчетных данных и записи
+        результатов в боевой или тестовый лист.
+        """
         self.database = Database()
         self.sheets = UnitSheets(main=unit_gs, test=unit_gs_test)
         self.google_table = self.sheets.main.title
@@ -36,6 +43,13 @@ class UnitEconomics:
 
     @staticmethod
     def _build_dataframe_from_sheet(values: list[list[str]]) -> pd.DataFrame:
+        """
+        Преобразует значения Google Sheets в DataFrame с первой строкой как заголовками.
+
+        Бизнес-логика:
+        сохраняет привычную структуру листов UNIT, где первая строка является шапкой, а все следующие
+        строки участвуют в расчетах и обновлениях.
+        """
         if not values:
             return pd.DataFrame()
 
@@ -49,6 +63,13 @@ class UnitEconomics:
         use_test_sheet: bool = False,
         required_columns: list[str] | tuple[str, ...] | None = None,
     ) -> pd.DataFrame:
+        """
+        Читает основной или тестовый лист UNIT в DataFrame.
+
+        Бизнес-логика:
+        используется задачами UNIT как единая точка чтения таблицы; если переданы обязательные колонки,
+        метод останавливает сценарий понятной ошибкой до дальнейших расчетов и записи.
+        """
         connector = self.google_connect_test if use_test_sheet else self.google_connect
         values = connector.sheet_title.get_all_values()
         dataframe = self._build_dataframe_from_sheet(values)
@@ -64,7 +85,7 @@ class UnitEconomics:
                 )
 
         logger.info(
-            "UNIT sheet loaded: table=%s, sheet=%s, rows=%s",
+            "Лист UNIT загружен: table=%s, sheet=%s, rows=%s",
             connector.table_title,
             connector.sheet_title.title,
             len(dataframe),

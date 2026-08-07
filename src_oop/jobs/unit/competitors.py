@@ -169,7 +169,7 @@ class UnitCompetitorsService:
         )
 
         logger.info(
-            "Competitors price plans prepared: unit_rows=%s, db_rows=%s, "
+            "Планы обновления конкурентов подготовлены: unit_rows=%s, db_rows=%s, "
             "our_price_rows=%s, unique_wild=%s",
             len(unit_df),
             len(competitors_df),
@@ -296,7 +296,7 @@ class UnitCompetitorsService:
         )
         if duplicate_rows:
             logger.warning(
-                "Competitors positions contain duplicate keys: duplicates=%s",
+                "В позициях конкурентов найдены дубли ключей: duplicates=%s",
                 duplicate_rows,
             )
         return dataframe
@@ -550,7 +550,7 @@ class UnitCompetitorsService:
         row_count = len(plan.matrix)
         if row_count == 0:
             logger.info(
-                "Column update skipped: sheet=%s, columns=%s, rows=0",
+                "Обновление колонок UNIT пропущено: sheet=%s, columns=%s, rows=0",
                 worksheet.title,
                 plan.column_names,
             )
@@ -580,7 +580,8 @@ class UnitCompetitorsService:
 
             if dry_run:
                 logger.info(
-                    "Dry-run column update: sheet=%s, column=%s, range=%s, rows=%s",
+                    "Dry-run: обновление колонки UNIT не записано в Google Sheets: "
+                    "sheet=%s, column=%s, range=%s, rows=%s",
                     worksheet.title,
                     column_name,
                     range_label,
@@ -594,7 +595,7 @@ class UnitCompetitorsService:
                 value_input_option="USER_ENTERED",
             )
             logger.info(
-                "Column updated: sheet=%s, column=%s, range=%s, rows=%s",
+                "Колонка UNIT обновлена в Google Sheets: sheet=%s, column=%s, range=%s, rows=%s",
                 worksheet.title,
                 column_name,
                 range_label,

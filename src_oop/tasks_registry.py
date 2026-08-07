@@ -14,7 +14,7 @@ from src_oop.jobs.annual_procurement_plan.run import (
     transport_supplies_data_to_annual_procurement_plan,
     transport_unit_data_to_annual_procurement_plan,
 )
-from src_oop.jobs.autopilot.run import update_individual_info
+from src_oop.jobs.autopilot.run import autopilot_hourly_run, update_individual_info
 from src_oop.jobs.bukh_docs.run import get_bukh_docs_async
 from src_oop.jobs.bukh_docs.week_n_redeem_run import update_week_n_redeem
 from src_oop.jobs.calculation_of_purchases_china.run import (
@@ -230,6 +230,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "update_individual_info": {
         "func": smart_run(update_individual_info),
         "desc": "Обновление данных об индивидуальных условиях",
+    },
+    "autopilot_hourly_run": {
+        "func": smart_run(autopilot_hourly_run),
+        "desc": "Почасовое обновление метрик панели управления автопилотом",
     },
     # Логистика ВЭД
     "logistic_ved_run": {

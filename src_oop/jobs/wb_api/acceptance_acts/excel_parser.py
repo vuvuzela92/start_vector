@@ -74,7 +74,7 @@ class AcceptanceExcelParser:
         )
 
         logger.info(
-            "Старт parsing Excel WB: account=%s expected_act_type=%s excel=%s",
+            "Старт разбора Excel WB: account=%s expected_act_type=%s excel=%s",
             excel_file.account,
             excel_file.expected_act_type,
             excel_file.excel_name,
@@ -96,7 +96,7 @@ class AcceptanceExcelParser:
         worksheet, sheet_frame = self._select_working_sheet(workbook)
         if self._should_fallback_to_normal_mode(worksheet, sheet_frame):
             logger.warning(
-                "Excel WB requires fallback to normal mode: account=%s excel=%s sheet=%s",
+                "Excel WB требует повторного чтения в обычном режиме: account=%s excel=%s sheet=%s",
                 excel_file.account,
                 excel_file.excel_name,
                 worksheet.title if worksheet is not None else None,
@@ -110,7 +110,7 @@ class AcceptanceExcelParser:
                 )
                 result.errors.append(message)
                 logger.exception(
-                    "Fallback-ошибка чтения Excel WB: account=%s excel=%s error=%s",
+                    "Ошибка повторного чтения Excel WB в обычном режиме: account=%s excel=%s error=%s",
                     excel_file.account,
                     excel_file.excel_name,
                     error,
@@ -225,7 +225,7 @@ class AcceptanceExcelParser:
         result.status = self._resolve_status(result)
 
         logger.info(
-            "Parsing Excel WB завершён: account=%s excel=%s sheet=%s header_rows=%s "
+            "Разбор Excel WB завершён: account=%s excel=%s sheet=%s header_rows=%s "
             "data_start=%s document_date=%s actual_act_type=%s status=%s warnings=%s errors=%s",
             excel_file.account,
             excel_file.excel_name,

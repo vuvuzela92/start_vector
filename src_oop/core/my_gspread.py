@@ -119,7 +119,7 @@ class GoogleTabs:
             target_cols = max(old_cols, new_cols)
 
             if target_rows == 0 or target_cols == 0:
-                logger.info("Google Sheet update skipped: no old data and no new data.")
+                logger.info("Обновление Google Sheets пропущено: старых и новых данных нет.")
                 return
 
             values = [["" for _ in range(target_cols)] for _ in range(target_rows)]
@@ -134,12 +134,12 @@ class GoogleTabs:
                 values,
                 value_input_option="USER_ENTERED",
             )
-            logger.info("Google Sheet data fully overwritten in range %s", target_range)
+            logger.info("Данные Google Sheets полностью перезаписаны в диапазоне %s", target_range)
 
         except Exception as error:
-            logger.exception("Failed to update Google Sheet: %s", error)
+            logger.exception("Не удалось обновить Google Sheets: %s", error)
             if "APIError: [400]: This action would increase the number of cells in the workbook" in str(error):
-                logger.error("Google Sheets cell limit exceeded during overwrite.")
+                logger.error("Превышен лимит ячеек Google Sheets при полной перезаписи.")
             raise
 
     def _send_df_to_google(self, df, sheet):
@@ -158,7 +158,7 @@ class GoogleTabs:
                 sheet.append_rows(df_data_to_append[1:], value_input_option="USER_ENTERED")
 
         except Exception as error:
-            print(f"An error occurred: {error}")
+            print(f"Произошла ошибка при записи DataFrame в Google Sheets: {error}")
 
     def update_column_by_name(self, column_name: str, data_to_write: list):
         """

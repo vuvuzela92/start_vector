@@ -47,11 +47,17 @@ def _build_combined_balance_with_ved() -> tuple[pd.DataFrame, VedBalanceAnalytic
     duplicate_risk_df = ved_service.build_duplicate_risk_report(ved_balance_df)
     duplicate_stage_numbers = ved_service.get_duplicate_risk_stage_numbers()
 
-    logger.info("balance_df shape: %s", balance_df.shape)
-    logger.info("ved_balance_df shape: %s", ved_balance_df.shape)
-    logger.info("combined_balance_df shape: %s", combined_balance_df.shape)
-    logger.info("VED missing columns vs balance_df: %s", alignment_result.missing_columns)
-    logger.info("VED extra columns vs balance_df: %s", alignment_result.extra_columns)
+    logger.info("Размер balance_df после расчета белых заказов: %s", balance_df.shape)
+    logger.info("Размер ved_balance_df после расчета ВЭД: %s", ved_balance_df.shape)
+    logger.info("Размер combined_balance_df после объединения: %s", combined_balance_df.shape)
+    logger.info(
+        "Колонки ВЭД, отсутствующие в структуре balance_df: %s",
+        alignment_result.missing_columns,
+    )
+    logger.info(
+        "Лишние колонки ВЭД относительно структуры balance_df: %s",
+        alignment_result.extra_columns,
+    )
 
     if duplicate_stage_numbers:
         logger.warning(
@@ -92,7 +98,7 @@ def update_orders_white_balance_analytics() -> None:
     """Запускает штатный расчет аналитики платежей по белым заказам."""
     service = OrdersWhiteBalanceAnalyticsService()
     df_balance = service.run()
-    logger.info("Orders white balance analytics updated: %s.", df_balance.shape)
+    logger.info("Аналитика платежей по белым заказам обновлена: shape=%s.", df_balance.shape)
 
 
 def update_test_balance_with_ved() -> None:

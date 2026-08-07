@@ -376,9 +376,10 @@ class WBAdvertStatsClient:
                             attempts_made=attempt,
                             failed=True,
                             error_message=last_error_message,
-                        )
+                    )
                     raise RuntimeError(
-                        f"WB request failed after retries: account={account} request={request_name} error={last_error_message}"
+                        f"Запрос WB завершился ошибкой после всех повторов: "
+                        f"account={account} request={request_name} error={last_error_message}"
                     ) from error
                 await self._sleep_for_retry(
                     account=account,
@@ -389,7 +390,8 @@ class WBAdvertStatsClient:
                 )
 
         exhausted_message = (
-            f"WB request exhausted retries unexpectedly: account={account} request={request_name}"
+            f"Запрос WB неожиданно исчерпал все попытки повтора: "
+            f"account={account} request={request_name}"
         )
         if allow_failure:
             return RequestExecutionResult(

@@ -15,10 +15,24 @@ STATUS_TARGET_COLUMN = "Статус товара"
 
 
 def _normalize_series(series: pd.Series) -> pd.Series:
+    """
+    Нормализует значения колонки перед сопоставлением по wild.
+
+    Бизнес-логика:
+    убирает `NaN` и лишние пробелы, чтобы одинаковые wild и статусы не расходились из-за формата
+    ячеек Google Sheets.
+    """
     return series.fillna("").astype(str).str.strip()
 
 
 def _prepare_statuses_lookup(df_statuses: pd.DataFrame) -> tuple[pd.DataFrame, int, list[str]]:
+    """
+    Готовит справочник статусов wild для безопасного обновления UNIT.
+
+    Бизнес-логика:
+    убирает пустые wild, фиксирует конфликтующие статусы и оставляет один последний непустой статус,
+    чтобы при merge не размножить строки основного листа UNIT.
+    """
     prepared_statuses = df_statuses[[WILD_COLUMN, STATUS_SOURCE_COLUMN]].copy()
     prepared_statuses[WILD_COLUMN] = _normalize_series(prepared_statuses[WILD_COLUMN])
     prepared_statuses[STATUS_SOURCE_COLUMN] = _normalize_series(
@@ -34,7 +48,7 @@ def _prepare_statuses_lookup(df_statuses: pd.DataFrame) -> tuple[pd.DataFrame, i
     )
     conflicting_wilds = status_variants[status_variants["status_count"] > 1][WILD_COLUMN].tolist()
 
-    # Keep one final non-empty status per wild to prevent row multiplication on merge.
+    # Оставляем один последний непустой статус на wild, чтобы merge не размножал строки.
     prepared_statuses = prepared_statuses[prepared_statuses[STATUS_SOURCE_COLUMN] != ""].copy()
     prepared_statuses = prepared_statuses.drop_duplicates(subset=[WILD_COLUMN], keep="last")
 
@@ -42,6 +56,13 @@ def _prepare_statuses_lookup(df_statuses: pd.DataFrame) -> tuple[pd.DataFrame, i
 
 
 def update_wild_statuses() -> None:
+    """
+    Обновляет статус товара в UNIT по справочнику wild-статусов.
+
+    Бизнес-логика:
+    читает источник статусов и основной лист UNIT, сопоставляет строки по `wild`, проверяет, что число
+    строк не изменилось после merge, и затем записывает подготовленные статусы в целевую колонку.
+    """
     calc = Calculation_of_purchases_russia()
     statuses_table = calc.google_connect_statuses.sheet_title.get_all_values()
 
@@ -49,7 +70,7 @@ def update_wild_statuses() -> None:
     status_rows = statuses_table[1:]
     df_statuses = pd.DataFrame(status_rows, columns=status_headers)
     logger.info(
-        "Statuses source loaded: %s rows.",
+        "Источник статусов wild загружен: rows=%s.",
         len(df_statuses),
     )
 
@@ -61,7 +82,7 @@ def update_wild_statuses() -> None:
     df_unit_short = df_unit[[WILD_COLUMN, STATUS_TARGET_COLUMN]].copy()
     df_unit_short[WILD_COLUMN] = _normalize_series(df_unit_short[WILD_COLUMN])
     logger.info(
-        "UNIT main sheet loaded: %s rows.",
+        "Основной лист UNIT загружен для обновления статусов: rows=%s.",
         len(df_unit_short),
     )
 
@@ -69,7 +90,7 @@ def update_wild_statuses() -> None:
         _prepare_statuses_lookup(df_statuses)
     )
     logger.info(
-        "Statuses lookup prepared: %s unique wild, %s conflicting wild. Examples: %s",
+        "Справочник статусов подготовлен: unique_wild=%s conflicting_wild=%s examples=%s",
         len(wild_with_statuses),
         conflicting_wild_count,
         conflicting_wild_examples,
@@ -85,7 +106,7 @@ def update_wild_statuses() -> None:
 
     if result_row_count != source_row_count:
         raise ValueError(
-            "Merge invariant failed: "
+            "Проверка merge не пройдена: "
             f"source_rows={source_row_count}, merged_rows={result_row_count}, "
             f"conflicting_wild={conflicting_wild_count}, "
             f"examples={conflicting_wild_examples}"
@@ -96,28 +117,28 @@ def update_wild_statuses() -> None:
 
     if STATUS_TARGET_COLUMN not in result_df.columns:
         raise ValueError(
-            f"Missing target column: '{STATUS_TARGET_COLUMN}'."
+            f"Целевая колонка отсутствует после подготовки данных: '{STATUS_TARGET_COLUMN}'."
         )
 
     results_list = result_df[STATUS_TARGET_COLUMN].astype(str).tolist()
     logger.info(
-        "Prepared %s values for column '%s'.",
+        "Подготовлены значения для обновления колонки UNIT: values=%s column='%s'.",
         len(results_list),
         STATUS_TARGET_COLUMN,
     )
 
     if len(results_list) != source_row_count:
         raise ValueError(
-            "Write invariant failed: "
+            "Проверка длины перед записью не пройдена: "
             f"unit_rows={source_row_count}, values_to_write={len(results_list)}, "
             f"conflicting_wild={conflicting_wild_count}, "
             f"examples={conflicting_wild_examples}"
         )
 
     logger.info(
-        "Write length check passed: %s values for %s UNIT rows.",
+        "Проверка длины перед записью пройдена: values=%s unit_rows=%s.",
         len(results_list),
         source_row_count,
     )
     unit_economics.google_connect.update_column_by_name(STATUS_TARGET_COLUMN, results_list)
-    logger.info("Column '%s' updated in Google Sheets.", STATUS_TARGET_COLUMN)
+    logger.info("Колонка UNIT обновлена в Google Sheets: column='%s'.", STATUS_TARGET_COLUMN)

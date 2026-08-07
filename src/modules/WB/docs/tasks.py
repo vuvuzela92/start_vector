@@ -16,7 +16,8 @@ async def get_bukh_docs(
 ):
     """Совместимая обертка над новой OOP-реализацией бухгалтерских документов WB."""
     logger.info(
-        "Legacy entrypoint src.modules.WB.docs.tasks.get_bukh_docs перенаправлен в src_oop.jobs.bukh_docs."
+        "Совместимый entrypoint src.modules.WB.docs.tasks.get_bukh_docs перенаправлен "
+        "в src_oop.jobs.bukh_docs."
     )
     return await _get_bukh_docs_async(
         date_from=date_from,

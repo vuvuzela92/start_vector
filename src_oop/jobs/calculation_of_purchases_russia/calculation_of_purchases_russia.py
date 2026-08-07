@@ -161,7 +161,7 @@ class Calculation_of_purchases_russia:
         values = update_df.values.tolist()
 
         if not values:
-            logger.info("No rows to update for penalties and virtual stock.")
+            logger.info("Нет строк для обновления штрафов и виртуального склада.")
             return update_df
 
         worksheet.update(
@@ -170,7 +170,7 @@ class Calculation_of_purchases_russia:
             value_input_option="USER_ENTERED",
         )
         logger.info(
-            "Updated penalties and virtual stock in Google Sheets starting from %s",
+            "Штрафы и виртуальный склад обновлены в Google Sheets, начиная с ячейки %s",
             start_cell,
         )
         return update_df

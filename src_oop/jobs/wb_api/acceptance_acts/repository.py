@@ -126,7 +126,7 @@ class AcceptanceActsRepository:
     def refresh_fbs_check_mv(self) -> DBWriteResult:
         """Выполняет non-fatal refresh materialized view для ФБС."""
         logger.info(
-            "Запуск refresh materialized view для ФБС: sql=%s",
+            "Запуск обновления materialized view для ФБС: sql=%s",
             REFRESH_FBS_MATERIALIZED_VIEW_SQL,
         )
 
@@ -135,7 +135,7 @@ class AcceptanceActsRepository:
             with engine.begin() as connection:
                 connection.execute(text(REFRESH_FBS_MATERIALIZED_VIEW_SQL))
 
-            logger.info("Refresh materialized view public.check_act_fbs выполнен успешно.")
+            logger.info("Materialized view public.check_act_fbs обновлена успешно.")
             return DBWriteResult(
                 table_name="public.check_act_fbs",
                 input_rows=0,
@@ -144,7 +144,7 @@ class AcceptanceActsRepository:
             )
         except Exception as error:
             logger.warning(
-                "Ошибка refresh materialized view public.check_act_fbs: %s",
+                "Ошибка обновления materialized view public.check_act_fbs: %s",
                 error,
             )
             return DBWriteResult(
@@ -187,7 +187,7 @@ class AcceptanceActsRepository:
         """Общий путь записи одного chunk в PostgreSQL."""
         if not rows:
             logger.info(
-                "Пропуск пустого chunk записи: table=%s act_type=%s unique_keys=%s",
+                "Пропуск пустого пакета записи: table=%s act_type=%s unique_keys=%s",
                 table_name,
                 act_type,
                 unique_keys,
@@ -204,7 +204,7 @@ class AcceptanceActsRepository:
         dataframe = self._records_to_dataframe(records)
 
         logger.info(
-            "Запись chunk в PostgreSQL: table=%s act_type=%s chunk_size=%s unique_keys=%s",
+            "Запись пакета строк в PostgreSQL: table=%s act_type=%s chunk_size=%s unique_keys=%s",
             table_name,
             act_type,
             len(rows),
@@ -220,7 +220,7 @@ class AcceptanceActsRepository:
                 chunk_size=chunk_size,
             )
             logger.info(
-                "Chunk успешно записан: table=%s act_type=%s rows=%s",
+                "Пакет строк успешно записан: table=%s act_type=%s rows=%s",
                 table_name,
                 act_type,
                 len(rows),
@@ -233,7 +233,7 @@ class AcceptanceActsRepository:
             )
         except Exception as error:
             logger.exception(
-                "Ошибка записи chunk: table=%s act_type=%s rows=%s error=%s",
+                "Ошибка записи пакета строк: table=%s act_type=%s rows=%s error=%s",
                 table_name,
                 act_type,
                 len(rows),

@@ -181,8 +181,8 @@ def get_articles_autopilot(sh = None, remote = False):
         except Exception as e:
             for i, val in enumerate(articles_raw):
                 if not val.strip():
-                    logging.error(f"At index {i} the value is '{val}' - fix!")
-            raise ValueError(f"Failed to parse articles: {e}")
+                    logging.error(f"Не удалось распознать артикул в таблице: index={i} value='{val}'")
+            raise ValueError(f"Не удалось распарсить артикулы: {e}")
 
     except Exception as e:
         logging.error(f'Ошибка при попытке парсинга артикулов из таблицы Автопилот:\n{e}')
@@ -406,7 +406,7 @@ def clean_extra_rows(sh, inserted_data, sheet_name="Sheet", logger=None):
         n_cleared = 0
 
     if logger is not None:
-        logger.info(f"Cleaned {n_cleared} rows in {sheet_name}")
+        logger.info(f"Очищены лишние строки в Google Sheets: sheet={sheet_name} rows={n_cleared}")
 
 
 
@@ -438,7 +438,7 @@ def delete_rows_by_index(sh, row_indices, trash_sheet=None, dont_delete = False)
     if not dont_delete:
         for idx in sorted(row_indices, reverse=True):
             sh.delete_rows(idx)
-            logging.info(f'Deleted row {idx}')
+            logging.info(f'Строка удалена из Google Sheets: row={idx}')
             
 
 def delete_rows_based_on_values(sh, values_to_delete, col_num, transform_to_str = True, trash_sheet = None):
@@ -469,26 +469,29 @@ def delete_rows_based_on_values(sh, values_to_delete, col_num, transform_to_str 
     ]
 
     if not rows_to_delete:
-        logging.info(f"{sh.title}: Duplicates aren't found, no rows to delete.")
+        logging.info(f"{sh.title}: дубликаты не найдены, удалять нечего.")
         return
 
     # сортируем в обратном порядке, чтобы избежать смещения строк
     rows_to_delete.sort(reverse=True)
     rows_num = len(rows_to_delete)
-    logging.info(f'Found {rows_num} rows to delete')
+    logging.info(f'Найдены строки для удаления: rows={rows_num}')
     print(rows_to_delete)
 
     try:
         c = 1
         for row_num in rows_to_delete:
             sh.delete_rows(row_num)
-            logging.info(f'Deleted row {row_num}: proccessed {c}/{rows_num} rows')
+            logging.info(f'Строка удалена из Google Sheets: row={row_num} processed={c}/{rows_num}')
 
             # trash_sheet.update()
             c += 1
-        logging.info(f"Successfully deleted {len(rows_to_delete)} rows: {sorted(rows_to_delete, reverse=False)}")
+        logging.info(
+            f"Удаление строк Google Sheets завершено: "
+            f"rows={len(rows_to_delete)} deleted={sorted(rows_to_delete, reverse=False)}"
+        )
     except Exception as e:
-        logging.error(f"Error during deletion: {e}")
+        logging.error(f"Ошибка при удалении строк Google Sheets: {e}")
 
 
 def remove_duplicates_by_val(sh, values_to_exclude, col_values_to_delete_from=None, col_num_to_delete_from=None, trash_sheet = None):
@@ -509,7 +512,10 @@ def remove_duplicates_by_val(sh, values_to_exclude, col_values_to_delete_from=No
         if col_num_to_delete_from:
             col_values_to_delete_from = sh.col_values(col_num_to_delete_from)
         else:
-            logging.error('At least one of the arguments should be given: col_values_to_delete_from или col_num_to_delete_from')
+            logging.error(
+                'Нужно передать хотя бы один аргумент: '
+                'col_values_to_delete_from или col_num_to_delete_from'
+            )
             return
 
     # Находим индексы строк (1-индексированные), где значение есть в values_to_exclude
@@ -517,10 +523,10 @@ def remove_duplicates_by_val(sh, values_to_exclude, col_values_to_delete_from=No
     idxs = list(duplicates.keys())
 
     if idxs:
-        logging.info(f"{len(idxs)} duplicates of the provided values are found: {duplicates}")
+        logging.info(f"Найдены дубликаты переданных значений: rows={len(idxs)} duplicates={duplicates}")
         delete_rows_by_index(sh=sh, row_indices=idxs, trash_sheet=trash_sheet)
     else:
-        logging.info(f"{sh.title}: the provided values aren't found in the column")
+        logging.info(f"{sh.title}: переданные значения не найдены в колонке.")
 
     return duplicates
     
@@ -551,11 +557,14 @@ def find_duplicates_by_val_and_warn(sh, values_to_exclude, col_values_to_delete_
     idxs = list(duplicates.keys())
 
     if idxs:
-        logging.error(f"{len(idxs)} duplicates of the provided values are found: {duplicates}")
+        logging.error(f"Найдены дубликаты переданных значений: rows={len(idxs)} duplicates={duplicates}")
         if raise_absent_error:
-            raise ValueError(f'The provided values are found in {sh.title}:\n{duplicates}\n. Delete the duplicates to continue')
+            raise ValueError(
+                f'Переданные значения найдены в {sh.title}:\n{duplicates}\n'
+                f'Удалите дубликаты, чтобы продолжить.'
+            )
     else:
-        logging.info(f"{sh.title}: the provided values aren't found in the column")
+        logging.info(f"{sh.title}: переданные значения не найдены в колонке.")
 
     return duplicates
 
@@ -579,16 +588,19 @@ def remove_duplicates_from_col(sh, col_num=None, col_name=None, col_letter=None,
     )
     
     if duplicates:
-        logging.info(f"{sh.title}: {len(duplicates)} duplicates are found: {duplicates}. Deleting...")
+        logging.info(
+            f"{sh.title}: найдены дубликаты, начинаем удаление: "
+            f"rows={len(duplicates)} duplicates={duplicates}"
+        )
         delete_rows_by_index(
             sh=sh,
             row_indices=duplicates.keys(),
             trash_sheet=trash_sheet,
             dont_delete=dont_delete
         )
-        logging.info(f"{sh.title}: {len(duplicates)} rows are deleted")
+        logging.info(f"{sh.title}: строки удалены: rows={len(duplicates)}")
     else:
-        logging.info(f"{sh.title}: Duplicates not found")
+        logging.info(f"{sh.title}: дубликаты не найдены.")
 
 
 

@@ -136,7 +136,7 @@ class ClickHouseDatabase:
         columns = [column_name for column_name, _ in meta]
         dataframe = pd.DataFrame(result, columns=columns)
         logger.info(
-            "ClickHouse query loaded: rows=%s, columns=%s",
+            "Запрос ClickHouse выполнен: rows=%s, columns=%s",
             len(dataframe),
             columns,
         )
