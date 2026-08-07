@@ -3,10 +3,11 @@ import inspect
 from typing import Any, Callable, Dict
 
 from src.modules.GOOGLE_SHEETS.credit_analyze_vector import update_credit_data_vector
-from src.modules.WB.advert.tasks import advert_info, advert_spend
 from src.modules.WB.reports.tasks import orders_report_today
 from src_oop.jobs.add_new_items.run import add_new_items_run
+from src_oop.jobs.advert_info.run import advert_info
 from src_oop.jobs.advert.run import advert_stat
+from src_oop.jobs.advert_spend.run import advert_spend
 from src_oop.jobs.annual_procurement_plan.run import (
     transport_data_to_annual_procurement_plan,
     transport_parfume_data_to_annual_procurement_plan,
