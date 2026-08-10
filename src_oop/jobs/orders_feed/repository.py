@@ -6,9 +6,15 @@ import logging
 from collections.abc import Sequence
 
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
 
 from src_oop.core.database import Database
-from src_oop.jobs.orders_feed.config import KEY_COLUMNS, TABLE_NAME
+from src_oop.jobs.orders_feed.config import (
+    KEY_COLUMNS,
+    TABLE_NAME,
+    UPSERT_UPDATE_COLUMNS,
+)
+from src_oop.jobs.orders_feed.exceptions import OrderFeedRepositoryError
 from src_oop.jobs.orders_feed.models import (
     OrderFeedBase,
     OrderFeedSaveResult,
@@ -28,7 +34,6 @@ class OrderFeedRepository:
         deduplicated, collapsed = self._deduplicate_by_keys(rows)
         if not deduplicated:
             return OrderFeedSaveResult(input_rows, 0, 0, collapsed)
-        self.create_table()
         self._upsert(deduplicated)
         logger.info(
             "Страница Order Feed сохранена через upsert | table=%s | rows=%s",
@@ -39,11 +44,17 @@ class OrderFeedRepository:
 
     def create_table(self) -> None:
         """Создаёт таблицу, PostgreSQL enum-типы и аналитические индексы из ORM-модели."""
-        OrderFeedBase.metadata.create_all(
-            Database.get_engine(),
-            tables=[WBOrderFeedRecord.__table__],
-            checkfirst=True,
-        )
+        try:
+            OrderFeedBase.metadata.create_all(
+                Database.get_engine(),
+                tables=[WBOrderFeedRecord.__table__],
+                checkfirst=True,
+            )
+        except SQLAlchemyError as error:
+            logger.exception("Не удалось подготовить таблицу Order Feed | table=%s", TABLE_NAME)
+            raise OrderFeedRepositoryError(
+                f"Не удалось создать или проверить таблицу {TABLE_NAME}."
+            ) from error
         logger.info(
             "Таблица Order Feed и связанные enum-типы готовы | table=%s",
             TABLE_NAME,
@@ -52,18 +63,28 @@ class OrderFeedRepository:
     def _upsert(self, rows: Sequence[OrderFeedDatabaseRow]) -> None:
         """Обновляет текущий статус заказа по составному primary key `(account, srid)`."""
         records = [row.model_dump(mode="python") for row in rows]
-        statement = insert(WBOrderFeedRecord.__table__).values(records)
+        statement = insert(WBOrderFeedRecord).values(records)
         update_columns = {
-            column.name: getattr(statement.excluded, column.name)
-            for column in WBOrderFeedRecord.__table__.columns
-            if column.name not in KEY_COLUMNS
+            column_name: statement.excluded[column_name]
+            for column_name in UPSERT_UPDATE_COLUMNS
         }
         upsert_statement = statement.on_conflict_do_update(
             index_elements=list(KEY_COLUMNS),
             set_=update_columns,
         )
-        with Database.get_engine().begin() as connection:
-            connection.execute(upsert_statement)
+        try:
+            # begin() автоматически выполняет rollback, если execute выбросит исключение.
+            with Database.get_engine().begin() as connection:
+                connection.execute(upsert_statement)
+        except SQLAlchemyError as error:
+            logger.exception(
+                "Upsert Order Feed отменён | table=%s | rows=%s",
+                TABLE_NAME,
+                len(records),
+            )
+            raise OrderFeedRepositoryError(
+                f"Не удалось выполнить upsert в {TABLE_NAME}: rows={len(records)}."
+            ) from error
 
     def _deduplicate_by_keys(
         self,

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import NotRequired, TypedDict
 
@@ -109,7 +110,7 @@ class WBOrderFeedRecord(OrderFeedBase):
     )
     destination_city: Mapped[str] = mapped_column(String(255), nullable=False)
     destination_district: Mapped[str] = mapped_column(String(255), nullable=False)
-    seller_price: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
+    seller_price: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(8), nullable=False)
     sale_type: Mapped[SaleType] = mapped_column(
         Enum(SaleType, name="wb_order_feed_sale_type", values_callable=_enum_values),
@@ -178,5 +179,5 @@ class OrderFeedRunSummary:
     collapsed_duplicate_rows: int = 0
     total_retry_count: int = 0
     failed_accounts: list[str] = field(default_factory=list)
-    started_at: datetime = field(default_factory=datetime.now)
+    started_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
     finished_at: datetime | None = None

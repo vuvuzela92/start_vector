@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import unittest
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -9,6 +10,12 @@ from zoneinfo import ZoneInfo
 from pydantic import ValidationError
 
 from src_oop.jobs.orders_feed.client import WBOrderFeedClient
+from src_oop.jobs.orders_feed.config import UPSERT_UPDATE_COLUMNS
+from src_oop.jobs.orders_feed.exceptions import (
+    OrderFeedAuthenticationError,
+    OrderFeedBadRequestError,
+    OrderFeedRateLimitError,
+)
 from src_oop.jobs.orders_feed.models import (
     OrderFeedPage,
     OrderFeedPeriod,
@@ -150,6 +157,30 @@ class OrderFeedClientTest(unittest.TestCase):
         self.assertEqual(second["pagination"]["snapshotTime"], "2026-07-02T10:00:00Z")
         self.assertEqual(second["pagination"]["offset"], 1000)
 
+    def test_api_errors_are_typed_and_keep_wb_diagnostics(self) -> None:
+        """Сохраняет статус, requestId и detail для диагностики ответа WB."""
+        client = WBOrderFeedClient()
+        cases = (
+            (400, OrderFeedBadRequestError),
+            (401, OrderFeedAuthenticationError),
+            (429, OrderFeedRateLimitError),
+        )
+        payload = {
+            "title": "too many requests",
+            "detail": "limited by test-limit",
+            "requestId": "request-123",
+            "origin": "s2s-api-auth-catalog",
+        }
+
+        for status, expected_type in cases:
+            with self.subTest(status=status):
+                error = client._api_error(status, "vector", payload)
+
+                self.assertIsInstance(error, expected_type)
+                self.assertEqual(error.status, status)
+                self.assertEqual(error.request_id, "request-123")
+                self.assertEqual(error.detail, "limited by test-limit")
+
     def test_pydantic_rejects_unknown_order_status(self) -> None:
         """Останавливает страницу до БД, если WB прислал неизвестный статус заказа."""
         invalid_order = _order("order-1")
@@ -164,6 +195,24 @@ class OrderFeedClientTest(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             OrderFeedResponse.model_validate(payload)
+
+    def test_pydantic_rejects_non_finite_seller_price(self) -> None:
+        """Не допускает NaN и infinity, которые PostgreSQL Numeric не должен получать."""
+        for invalid_price in (math.nan, math.inf, -math.inf):
+            invalid_order = _order("order-1")
+            invalid_order["sellerPrice"] = invalid_price
+            payload = {
+                "data": {
+                    "snapshotTime": "2026-07-26T20:00:00Z",
+                    "currency": "RUB",
+                    "orders": [invalid_order],
+                }
+            }
+
+            with self.subTest(invalid_price=invalid_price), self.assertRaises(
+                ValidationError
+            ):
+                OrderFeedResponse.model_validate(payload)
 
     def test_client_returns_page_only_after_pydantic_validation(self) -> None:
         """Проверяет интеграцию Pydantic-модели с внутренней страницей API-клиента."""
@@ -209,6 +258,21 @@ class OrderFeedRepositoryTest(unittest.TestCase):
         self.assertEqual(collapsed, 1)
         self.assertEqual(len(deduplicated), 1)
         self.assertEqual(deduplicated[0].updated_at.hour, 16)
+
+    def test_upsert_whitelist_does_not_change_order_identity(self) -> None:
+        """Фиксирует явный whitelist изменяемых полей и защищает идентичность заказа."""
+        immutable_columns = {
+            "account",
+            "srid",
+            "nm_id",
+            "chrt_id",
+            "created_at",
+            "data_source",
+        }
+
+        self.assertTrue(immutable_columns.isdisjoint(UPSERT_UPDATE_COLUMNS))
+        self.assertIn("status", UPSERT_UPDATE_COLUMNS)
+        self.assertIn("updated_at", UPSERT_UPDATE_COLUMNS)
 
 
 class _FakeClient:
@@ -268,6 +332,16 @@ class OrderFeedServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repository.batch_sizes, [2, 1])
         self.assertEqual(summary.pages_received, 2)
         self.assertEqual(summary.written_rows, 3)
+
+    def test_account_parameter_never_accepts_credentials(self) -> None:
+        """Не допускает JWT в параметре account и не возвращает секрет в тексте ошибки."""
+        token = "header.payload.signature" * 10
+        service = OrderFeedService(tokens_loader=lambda: {"vector": "secret"})
+
+        with self.assertRaisesRegex(ValueError, "credentials") as context:
+            service._resolve_tokens(f"vector:{token}")
+
+        self.assertNotIn(token, str(context.exception))
 
 if __name__ == "__main__":
     unittest.main()

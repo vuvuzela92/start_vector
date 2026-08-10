@@ -12,8 +12,8 @@ class OrderFeedOrderResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
-    nm_id: StrictInt = Field(alias="nmId")
-    chrt_id: StrictInt = Field(alias="chrtId")
+    nm_id: StrictInt = Field(alias="nmId", gt=0)
+    chrt_id: StrictInt = Field(alias="chrtId", gt=0)
     srid: str = Field(min_length=1)
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
@@ -24,7 +24,7 @@ class OrderFeedOrderResponse(BaseModel):
     is_mp: StrictBool = Field(alias="isMp")
     destination_city: str = Field(alias="destinationCity")
     destination_district: str = Field(alias="destinationDistrict")
-    seller_price: float = Field(alias="sellerPrice")
+    seller_price: float = Field(alias="sellerPrice", ge=0, allow_inf_nan=False)
     is_b2b: StrictBool = Field(alias="isB2b")
 
 
@@ -44,3 +44,18 @@ class OrderFeedResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     data: OrderFeedDataResponse
+
+
+class OrderFeedAPIErrorResponse(BaseModel):
+    """Общие диагностические поля ошибок WB разных API-шлюзов."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    title: str | None = None
+    detail: str | None = None
+    code: str | None = None
+    request_id: str | None = Field(default=None, alias="requestId")
+    origin: str | None = None
+    status: int | None = None
+    status_text: str | None = Field(default=None, alias="statusText")
+    timestamp: datetime | None = None

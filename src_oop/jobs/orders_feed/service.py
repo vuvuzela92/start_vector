@@ -7,7 +7,7 @@ import json
 import logging
 import os
 from collections.abc import Callable, Mapping
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 
 from src_oop.jobs.orders_feed.client import WBOrderFeedClient
 from src_oop.jobs.orders_feed.config import (
+    HISTORY_BOUNDARY_SAFETY_MINUTES,
     MAX_CONCURRENT_ACCOUNTS,
     MAX_PERIOD_DAYS,
     REQUEST_INTERVAL_SECONDS,
@@ -106,7 +107,7 @@ class OrderFeedService:
                     account_name,
                     result,
                 )
-        summary.finished_at = datetime.now(tz=MOSCOW_TZ)
+        summary.finished_at = datetime.now(tz=UTC)
         logger.info(
             "Загрузка Order Feed завершена | pages=%s | raw_rows=%s | written_rows=%s | failed_accounts=%s",
             summary.pages_received,
@@ -125,7 +126,7 @@ class OrderFeedService:
         period: OrderFeedPeriod,
         summary: OrderFeedRunSummary,
     ) -> None:
-        """Проходит offset-пагинацию кабинета с паузой WB и batch-upsert каждой страницы."""
+        """Проходит offset-пагинацию кабинета и сохраняет каждую страницу отдельным батчем."""
         async with semaphore:
             offset = 0
             snapshot_time: str | None = None
@@ -167,11 +168,15 @@ class OrderFeedService:
         """Ограничивает ручной период доступными WB последними 31 сутками."""
         now = datetime.now(tz=MOSCOW_TZ)
         end = self._ensure_timezone(date_to or now)
-        start = self._ensure_timezone(date_from or (end - timedelta(days=MAX_PERIOD_DAYS)))
-        earliest = now - timedelta(days=MAX_PERIOD_DAYS)
+        earliest = now - timedelta(days=MAX_PERIOD_DAYS) + timedelta(
+            minutes=HISTORY_BOUNDARY_SAFETY_MINUTES
+        )
+        start = self._ensure_timezone(date_from or earliest)
         if start < earliest:
             raise ValueError(
-                f"Начало Order Feed не может быть ранее последних {MAX_PERIOD_DAYS} суток."
+                "Начало Order Feed выходит за доступные последние "
+                f"{MAX_PERIOD_DAYS} суток с техническим запасом "
+                f"{HISTORY_BOUNDARY_SAFETY_MINUTES} минут."
             )
         if end > now + timedelta(minutes=1):
             raise ValueError("Конец периода Order Feed не может быть в будущем.")
@@ -201,7 +206,12 @@ class OrderFeedService:
             raise ValueError("Не найдены токены кабинетов WB для Order Feed.")
         if account is None:
             return tokens
-        selected = account.strip()
+        selected = account.strip().strip('"').strip("'")
+        if ":" in selected or (len(selected) > 100 and selected.count(".") >= 2):
+            raise ValueError(
+                "В account переданы credentials. Укажите только название кабинета "
+                "без кавычек и токена."
+            )
         if selected not in tokens:
-            raise ValueError(f"Аккаунт '{account}' не найден в токенах WB.")
+            raise ValueError(f"Аккаунт '{selected}' не найден в токенах WB.")
         return {selected: tokens[selected]}

@@ -19,13 +19,26 @@ from src_oop.jobs.orders_feed.config import (
     RETRY_BASE_SLEEP_SECONDS,
     RETRY_MAX_SLEEP_SECONDS,
 )
+from src_oop.jobs.orders_feed.exceptions import (
+    OrderFeedAPIError,
+    OrderFeedAuthenticationError,
+    OrderFeedAuthorizationError,
+    OrderFeedBadRequestError,
+    OrderFeedRateLimitError,
+    OrderFeedResponseValidationError,
+    OrderFeedTransportError,
+    OrderFeedUpstreamError,
+)
 from src_oop.jobs.orders_feed.models import (
     OrderFeedPage,
     OrderFeedPaginationRequest,
     OrderFeedPeriod,
     OrderFeedRequest,
 )
-from src_oop.jobs.orders_feed.schemas.api import OrderFeedResponse
+from src_oop.jobs.orders_feed.schemas.api import (
+    OrderFeedAPIErrorResponse,
+    OrderFeedResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,37 +86,62 @@ class WBOrderFeedClient:
                     payload = await self._read_json_payload(response)
                     if response.status == 429 or response.status in {500, 502, 503, 504}:
                         if attempt >= self.max_retries:
-                            raise RuntimeError(
-                                "WB не отдал страницу Order Feed после всех повторов: "
-                                f"account={account} offset={offset} status={response.status}"
-                            )
+                            raise self._api_error(response.status, account, payload)
                         await self._sleep_for_retry(
                             account, offset, attempt, response.status, response.headers
                         )
                         continue
-                    if response.status in {401, 403}:
-                        raise PermissionError(
-                            "WB отклонил токен Order Feed: "
-                            f"account={account} status={response.status}"
-                        )
-                    if response.status == 402:
-                        raise PermissionError(
-                            f"Тариф кабинета не дает доступ к Order Feed: account={account}"
-                        )
+                    if response.status >= 400:
+                        raise self._api_error(response.status, account, payload)
                     response.raise_for_status()
                     return self._parse_page(account, offset, payload, attempt - 1)
-            except (PermissionError, ValueError):
+            except (OrderFeedAPIError, OrderFeedResponseValidationError):
+                raise
+            except aiohttp.ClientResponseError:
                 raise
             except (TimeoutError, aiohttp.ClientConnectionError, aiohttp.ClientError, OSError, RuntimeError) as error:
                 if attempt >= self.max_retries:
-                    raise RuntimeError(
+                    raise OrderFeedTransportError(
                         "Запрос Order Feed завершился ошибкой после всех повторов: "
                         f"account={account} offset={offset} error={error}"
                     ) from error
                 await self._sleep_for_retry(account, offset, attempt, error=error)
 
-        raise RuntimeError(
+        raise OrderFeedTransportError(
             f"Запрос Order Feed неожиданно исчерпал повторы: account={account} offset={offset}"
+        )
+
+    def _api_error(
+        self,
+        status: int,
+        account: str,
+        payload: object,
+    ) -> OrderFeedAPIError:
+        """Преобразует разные форматы ошибок WB в типизированное исключение."""
+        parsed = OrderFeedAPIErrorResponse.model_validate(payload) if isinstance(payload, dict) else None
+        title = parsed.title if parsed else None
+        detail = parsed.detail if parsed else None
+        request_id = parsed.request_id if parsed else None
+        error_class: type[OrderFeedAPIError]
+        if status == 400:
+            error_class = OrderFeedBadRequestError
+        elif status == 401:
+            error_class = OrderFeedAuthenticationError
+        elif status in {402, 403}:
+            error_class = OrderFeedAuthorizationError
+        elif status == 429:
+            error_class = OrderFeedRateLimitError
+        else:
+            error_class = OrderFeedUpstreamError
+        diagnostic = detail or title or "WB не передал описание ошибки"
+        return error_class(
+            f"Ошибка WB Order Feed: account={account} status={status} "
+            f"request_id={request_id or '-'} detail={diagnostic}",
+            status=status,
+            account=account,
+            request_id=request_id,
+            detail=detail,
+            response_body=payload,
         )
 
     def _build_request_body(
@@ -142,9 +180,10 @@ class WBOrderFeedClient:
         try:
             validated = OrderFeedResponse.model_validate(payload)
         except ValidationError as error:
-            raise ValueError(
+            raise OrderFeedResponseValidationError(
                 "WB вернул Order Feed, не соответствующий контракту API: "
-                f"{error.error_count()} ошибок валидации; details={error.errors(include_url=False)}"
+                f"{error.error_count()} ошибок валидации; "
+                f"details={error.errors(include_url=False, include_input=False)}"
             ) from error
 
         snapshot_time = validated.data.snapshot_time.isoformat().replace("+00:00", "Z")
