@@ -6,22 +6,34 @@ import unittest
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from pydantic import ValidationError
+
 from src_oop.jobs.orders_feed.client import WBOrderFeedClient
 from src_oop.jobs.orders_feed.models import (
-    DataSource,
     OrderFeedPage,
     OrderFeedPeriod,
     OrderFeedSaveResult,
-    OrderStatus,
-    SaleType,
-    WarehouseType,
     WBOrderFeedRecord,
 )
 from src_oop.jobs.orders_feed.normalizer import OrderFeedNormalizer
+from src_oop.jobs.orders_feed.repository import OrderFeedRepository
+from src_oop.jobs.orders_feed.schemas.api import (
+    OrderFeedOrderResponse,
+    OrderFeedResponse,
+)
+from src_oop.jobs.orders_feed.schemas.enums import (
+    DataSource,
+    OrderStatus,
+    SaleType,
+    WarehouseType,
+)
 from src_oop.jobs.orders_feed.service import OrderFeedService
 
 
-def _order(srid: str, updated_at: str = "2026-07-26T19:19:38+03:00") -> dict:
+def _order(
+    srid: str,
+    updated_at: str = "2026-07-26T19:19:38+03:00",
+) -> dict[str, object]:
     """Создаёт минимальный реалистичный заказ для проверки API-маппинга."""
     return {
         "nmId": 47254354,
@@ -41,6 +53,11 @@ def _order(srid: str, updated_at: str = "2026-07-26T19:19:38+03:00") -> dict:
     }
 
 
+def _validated_order(srid: str) -> OrderFeedOrderResponse:
+    """Создаёт проверенную Pydantic-строку API для тестов normalizer и service."""
+    return OrderFeedOrderResponse.model_validate(_order(srid))
+
+
 class OrderFeedNormalizerTest(unittest.TestCase):
     """Проверяет контракт между camelCase WB и snake_case PostgreSQL."""
 
@@ -50,24 +67,45 @@ class OrderFeedNormalizerTest(unittest.TestCase):
             "vector",
             "2026-07-26T20:00:00Z",
             "RUB",
-            [_order("order-1")],
+            [_validated_order("order-1")],
             0,
             1000,
         )
 
         result = OrderFeedNormalizer().normalize(page)
 
-        row = result.iloc[0]
-        self.assertEqual(row["account"], "vector")
-        self.assertEqual(row["nm_id"], 47254354)
-        self.assertEqual(row["data_source"], "order_feed")
-        self.assertEqual(row["status"], OrderStatus.CANCEL.value)
-        self.assertEqual(row["warehouse_type"], WarehouseType.SELLER.value)
-        self.assertEqual(row["sale_type"], SaleType.B2C.value)
-        self.assertEqual(row["currency"], "RUB")
-        self.assertEqual(str(row["created_at"].tz), "UTC")
-        self.assertEqual(str(row["snapshot_time"].tz), "UTC")
-        self.assertIsNotNone(row["loaded_at"])
+        row = result[0]
+        self.assertEqual(row.account, "vector")
+        self.assertEqual(row.nm_id, 47254354)
+        self.assertEqual(row.data_source, "order_feed")
+        self.assertEqual(row.status, OrderStatus.CANCEL)
+        self.assertEqual(row.warehouse_type, WarehouseType.SELLER)
+        self.assertEqual(row.sale_type, SaleType.B2C)
+        self.assertEqual(row.currency, "RUB")
+        self.assertEqual(str(row.created_at.tzinfo), "UTC")
+        self.assertEqual(str(row.snapshot_time.tzinfo), "UTC")
+        self.assertIsNotNone(row.loaded_at)
+
+    def test_missing_cancel_type_is_null_for_non_cancelled_order(self) -> None:
+        """Сохраняет Pydantic None для действующего заказа без cancelType."""
+        cancelled = _validated_order("order-cancelled")
+        created = _order("order-created")
+        created["status"] = "created"
+        created.pop("cancelType")
+        validated_created = OrderFeedOrderResponse.model_validate(created)
+        page = OrderFeedPage(
+            "vector",
+            "2026-07-26T20:00:00Z",
+            "RUB",
+            [cancelled, validated_created],
+            0,
+            1000,
+        )
+
+        result = OrderFeedNormalizer().normalize(page)
+
+        created_row = next(row for row in result if row.srid == "order-created")
+        self.assertIsNone(created_row.cancel_type)
 
     def test_table_model_uses_semantic_enum_columns(self) -> None:
         """Подтверждает понятную схему таблицы без неоднозначных is_mp и is_b2b."""
@@ -82,6 +120,15 @@ class OrderFeedNormalizerTest(unittest.TestCase):
             columns["data_source"].type.enums,
             [item.value for item in DataSource],
         )
+
+    def test_nm_id_references_unique_article(self) -> None:
+        """Фиксирует связь многих заказов с одной уникальной карточкой article."""
+        foreign_keys = list(WBOrderFeedRecord.__table__.c.nm_id.foreign_keys)
+
+        self.assertEqual(len(foreign_keys), 1)
+        self.assertEqual(foreign_keys[0].target_fullname, "article.nm_id")
+        self.assertEqual(foreign_keys[0].ondelete, "RESTRICT")
+        self.assertEqual(foreign_keys[0].onupdate, "CASCADE")
 
 
 class OrderFeedClientTest(unittest.TestCase):
@@ -103,6 +150,66 @@ class OrderFeedClientTest(unittest.TestCase):
         self.assertEqual(second["pagination"]["snapshotTime"], "2026-07-02T10:00:00Z")
         self.assertEqual(second["pagination"]["offset"], 1000)
 
+    def test_pydantic_rejects_unknown_order_status(self) -> None:
+        """Останавливает страницу до БД, если WB прислал неизвестный статус заказа."""
+        invalid_order = _order("order-1")
+        invalid_order["status"] = "unknown"
+        payload = {
+            "data": {
+                "snapshotTime": "2026-07-26T20:00:00Z",
+                "currency": "RUB",
+                "orders": [invalid_order],
+            }
+        }
+
+        with self.assertRaises(ValidationError):
+            OrderFeedResponse.model_validate(payload)
+
+    def test_client_returns_page_only_after_pydantic_validation(self) -> None:
+        """Проверяет интеграцию Pydantic-модели с внутренней страницей API-клиента."""
+        order = _order("order-1")
+        payload = {
+            "data": {
+                "snapshotTime": "2026-07-26T20:00:00Z",
+                "currency": "RUB",
+                "orders": [order],
+            }
+        }
+
+        page = WBOrderFeedClient()._parse_page("vector", 0, payload, 0)
+
+        self.assertEqual(page.snapshot_time, "2026-07-26T20:00:00Z")
+        self.assertEqual(page.orders[0].status, OrderStatus.CANCEL)
+        self.assertEqual(page.orders[0].cancel_type, "app")
+
+
+class OrderFeedRepositoryTest(unittest.TestCase):
+    """Проверяет подготовку типизированного батча без подключения к PostgreSQL."""
+
+    def test_deduplication_keeps_latest_pydantic_row(self) -> None:
+        """Оставляет последний статус заказа по updated_at внутри одного API-батча."""
+        older = OrderFeedOrderResponse.model_validate(
+            _order("order-1", "2026-07-26T18:00:00+03:00")
+        )
+        newer = OrderFeedOrderResponse.model_validate(
+            _order("order-1", "2026-07-26T19:00:00+03:00")
+        )
+        page = OrderFeedPage(
+            "vector",
+            "2026-07-26T20:00:00Z",
+            "RUB",
+            [older, newer],
+            0,
+            1000,
+        )
+        rows = OrderFeedNormalizer().normalize(page)
+
+        deduplicated, collapsed = OrderFeedRepository()._deduplicate_by_keys(rows)
+
+        self.assertEqual(collapsed, 1)
+        self.assertEqual(len(deduplicated), 1)
+        self.assertEqual(deduplicated[0].updated_at.hour, 16)
+
 
 class _FakeClient:
     """Имитирует две страницы WB без сетевых запросов и минутного ожидания."""
@@ -116,7 +223,11 @@ class _FakeClient:
         offset = kwargs["offset"]
         snapshot = kwargs["snapshot_time"]
         self.calls.append((offset, snapshot))
-        orders = [_order("order-1"), _order("order-2")] if offset == 0 else [_order("order-3")]
+        orders = (
+            [_validated_order("order-1"), _validated_order("order-2")]
+            if offset == 0
+            else [_validated_order("order-3")]
+        )
         return OrderFeedPage(
             "vector", "2026-07-26T20:00:00Z", "RUB", orders, offset, 2
         )
@@ -131,7 +242,7 @@ class _FakeRepository:
 
     def save(self, dataframe) -> OrderFeedSaveResult:
         """Имитирует успешный upsert страницы без подключения к PostgreSQL."""
-        size = len(dataframe.index)
+        size = len(dataframe)
         self.batch_sizes.append(size)
         return OrderFeedSaveResult(input_rows=size, written_rows=size)
 
@@ -157,7 +268,6 @@ class OrderFeedServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repository.batch_sizes, [2, 1])
         self.assertEqual(summary.pages_received, 2)
         self.assertEqual(summary.written_rows, 3)
-
 
 if __name__ == "__main__":
     unittest.main()

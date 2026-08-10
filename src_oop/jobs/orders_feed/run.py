@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 from datetime import datetime
 
+from src_oop.jobs.orders_feed.repository import OrderFeedRepository
 from src_oop.jobs.orders_feed.service import OrderFeedService
 
 
@@ -46,13 +48,30 @@ def order_feed(
     asyncio.run(order_feed_async(date_from=date_from, date_to=date_to, account=account))
 
 
+def create_order_feed_table() -> None:
+    """Создаёт таблицу, enum-типы и индексы Order Feed без выполнения запросов к WB."""
+    OrderFeedRepository().create_table()
+
+
 def main() -> None:
     """Запускает ручную CLI-загрузку с необязательными периодом и кабинетом."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(message)s",
+    )
     parser = argparse.ArgumentParser(description="Загрузка WB Order Feed в PostgreSQL")
     parser.add_argument("--date-from")
     parser.add_argument("--date-to")
     parser.add_argument("--account")
+    parser.add_argument(
+        "--create-table-only",
+        action="store_true",
+        help="Создать таблицу и PostgreSQL enum-типы без обращения к WB API",
+    )
     args = parser.parse_args()
+    if args.create_table_only:
+        create_order_feed_table()
+        return
     order_feed(args.date_from, args.date_to, args.account)
 
 

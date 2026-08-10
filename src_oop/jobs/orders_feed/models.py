@@ -5,52 +5,56 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from typing import NotRequired, TypedDict
 
-from sqlalchemy import BigInteger, DateTime, Enum, Index, Numeric, String
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    Table,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from src_oop.jobs.orders_feed.config import TABLE_NAME
+from src_oop.jobs.orders_feed.schemas.api import OrderFeedOrderResponse
+from src_oop.jobs.orders_feed.schemas.enums import (
+    CancelType,
+    DataSource,
+    OrderStatus,
+    SaleType,
+    WarehouseType,
+)
 
 
-class OrderStatus(StrEnum):
-    """Допустимые бизнес-статусы заказа в ответе WB Order Feed."""
+class OrderFeedPaginationRequest(TypedDict):
+    """Типизирует offset-пагинацию запроса, где snapshotTime отсутствует на первой странице."""
 
-    CREATED = "created"
-    BUYOUT = "buyout"
-    CANCEL = "cancel"
-    RETURN = "return"
-    RETURN_DEFECTIVE = "returnDefective"
+    offset: int
+    limit: int
+    snapshotTime: NotRequired[str]
 
 
-class CancelType(StrEnum):
-    """Причины отмены, которые WB возвращает только для отменённого заказа."""
+class OrderFeedSelectedPeriodRequest(TypedDict):
+    """Типизирует границы периода по времени текущего статуса заказа."""
 
-    APP = "app"
-    RECEIPT = "receipt"
-    EXPIRE = "expire"
-    OTHER = "other"
+    start: str
+    end: str
 
 
-class WarehouseType(StrEnum):
-    """Понятное представление булевого признака WB `isMp`."""
+class OrderFeedRequest(TypedDict):
+    """Описывает полное JSON-тело запроса отчёта без товарных фильтров."""
 
-    SELLER = "seller"
-    WB = "wb"
-
-
-class SaleType(StrEnum):
-    """Тип покупателя, полученный из булевого признака WB `isB2b`."""
-
-    B2B = "b2b"
-    B2C = "b2c"
-
-
-class DataSource(StrEnum):
-    """Источник строки для будущего объединения новой и исторических витрин."""
-
-    ORDER_FEED = "order_feed"
-    ORDERS = "orders"
-    SALES = "sales"
+    selectedPeriod: OrderFeedSelectedPeriodRequest
+    nmIds: list[int]
+    subjectIds: list[int]
+    brandNames: list[str]
+    tagIds: list[int]
+    pagination: OrderFeedPaginationRequest
 
 
 def _enum_values(enum_class: type[StrEnum]) -> list[str]:
@@ -62,19 +66,31 @@ class OrderFeedBase(DeclarativeBase):
     """Базовый класс метаданных для управляемого создания таблицы Order Feed."""
 
 
+# Ссылка нужна SQLAlchemy для построения FK, но repository намеренно не создаёт таблицу article.
+ARTICLE_REFERENCE_TABLE = Table(
+    "article",
+    OrderFeedBase.metadata,
+    Column("nm_id", BigInteger, primary_key=True),
+)
+
+
 class WBOrderFeedRecord(OrderFeedBase):
     """Декларативная модель строки PostgreSQL-таблицы WB Order Feed."""
 
     __tablename__ = TABLE_NAME
-    __table_args__ = (
-        Index("ix_wb_order_feed_account_updated_at", "account", "updated_at"),
-        Index("ix_wb_order_feed_nm_id", "nm_id"),
-        Index("ix_wb_order_feed_status", "status"),
-    )
 
     account: Mapped[str] = mapped_column(String(255), primary_key=True)
     srid: Mapped[str] = mapped_column(String(255), primary_key=True)
-    nm_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    nm_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey(
+            "article.nm_id",
+            name="fk_wb_order_feed_nm_id_article",
+            onupdate="CASCADE",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
     chrt_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -106,6 +122,12 @@ class WBOrderFeedRecord(OrderFeedBase):
     snapshot_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     loaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
+    __table_args__ = (
+        Index("ix_wb_order_feed_account_updated_at", "account", "updated_at"),
+        Index("ix_wb_order_feed_nm_id", "nm_id"),
+        Index("ix_wb_order_feed_status", "status"),
+    )
+
 
 @dataclass(frozen=True, slots=True)
 class OrderFeedPeriod:
@@ -122,7 +144,7 @@ class OrderFeedPage:
     account: str
     snapshot_time: str
     currency: str
-    orders: list[dict]
+    orders: list[OrderFeedOrderResponse]
     offset: int
     limit: int
     retries_used: int = 0

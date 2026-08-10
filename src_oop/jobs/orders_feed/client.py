@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
 import aiohttp
+from pydantic import ValidationError
 
 from src_oop.jobs.orders_feed.config import (
     MAX_RETRIES,
@@ -17,7 +19,13 @@ from src_oop.jobs.orders_feed.config import (
     RETRY_BASE_SLEEP_SECONDS,
     RETRY_MAX_SLEEP_SECONDS,
 )
-from src_oop.jobs.orders_feed.models import OrderFeedPage, OrderFeedPeriod
+from src_oop.jobs.orders_feed.models import (
+    OrderFeedPage,
+    OrderFeedPaginationRequest,
+    OrderFeedPeriod,
+    OrderFeedRequest,
+)
+from src_oop.jobs.orders_feed.schemas.api import OrderFeedResponse
 
 logger = logging.getLogger(__name__)
 
@@ -103,9 +111,12 @@ class WBOrderFeedClient:
         period: OrderFeedPeriod,
         offset: int,
         snapshot_time: str | None,
-    ) -> dict:
+    ) -> OrderFeedRequest:
         """Формирует запрос без фильтров, чтобы бизнес-витрина получила все заказы кабинета."""
-        pagination: dict[str, object] = {"offset": offset, "limit": self.page_limit}
+        pagination: OrderFeedPaginationRequest = {
+            "offset": offset,
+            "limit": self.page_limit,
+        }
         if snapshot_time:
             pagination["snapshotTime"] = snapshot_time
         return {
@@ -127,24 +138,21 @@ class WBOrderFeedClient:
         payload: object,
         retries_used: int,
     ) -> OrderFeedPage:
-        """Проверяет обязательную оболочку ответа, чтобы не принять ошибочный JSON за пустой отчёт."""
-        if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
-            raise TypeError("WB вернул неожиданный формат Order Feed: отсутствует объект data.")
-        data = payload["data"]
-        orders = data.get("orders")
-        snapshot_time = data.get("snapshotTime")
-        currency = data.get("currency")
-        if not isinstance(orders, list):
-            raise TypeError("WB вернул неожиданный формат Order Feed: orders не является списком.")
-        if not isinstance(snapshot_time, str) or not snapshot_time:
-            raise ValueError("WB вернул Order Feed без обязательного snapshotTime.")
-        if not isinstance(currency, str) or not currency:
-            raise ValueError("WB вернул Order Feed без обязательной валюты.")
+        """Валидирует всю страницу через Pydantic до нормализации и записи в PostgreSQL."""
+        try:
+            validated = OrderFeedResponse.model_validate(payload)
+        except ValidationError as error:
+            raise ValueError(
+                "WB вернул Order Feed, не соответствующий контракту API: "
+                f"{error.error_count()} ошибок валидации; details={error.errors(include_url=False)}"
+            ) from error
+
+        snapshot_time = validated.data.snapshot_time.isoformat().replace("+00:00", "Z")
         return OrderFeedPage(
             account=account,
             snapshot_time=snapshot_time,
-            currency=currency,
-            orders=orders,
+            currency=validated.data.currency,
+            orders=validated.data.orders,
             offset=offset,
             limit=self.page_limit,
             retries_used=retries_used,
@@ -166,7 +174,7 @@ class WBOrderFeedClient:
         offset: int,
         attempt: int,
         status: int | None = None,
-        headers: aiohttp.typedefs.LooseHeaders | None = None,
+        headers: Mapping[str, str] | None = None,
         error: Exception | None = None,
     ) -> None:
         """Соблюдает Retry-After и backoff, чтобы временный сбой не оборвал загрузку кабинета."""
@@ -186,7 +194,7 @@ class WBOrderFeedClient:
     def _retry_delay(
         self,
         attempt: int,
-        headers: aiohttp.typedefs.LooseHeaders | None,
+        headers: Mapping[str, str] | None,
     ) -> float:
         """Вычисляет безопасную паузу повтора с приоритетом серверного Retry-After."""
         retry_after = headers.get("Retry-After") if headers else None

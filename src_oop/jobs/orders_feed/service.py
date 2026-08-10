@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import aiohttp
+from dotenv import load_dotenv
 
 from src_oop.jobs.orders_feed.client import WBOrderFeedClient
 from src_oop.jobs.orders_feed.config import (
@@ -25,10 +29,28 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
 def _load_api_tokens() -> Mapping[str, str]:
-    """Загружает токены только при рабочем запуске, не требуя секреты при импорте и тестах."""
-    from src_oop.core.utils_general import load_api_tokens
+    """Загружает WB-токены внутри Order Feed, не завися от legacy-настроек других jobs."""
+    load_dotenv()
+    creds_dir = os.getenv("CREDS_DIR")
+    tokens_file = os.getenv("CREDS_FILE") or os.getenv("TOKENS_FILE")
+    if not creds_dir or not tokens_file:
+        raise ValueError(
+            "Для Order Feed должны быть заданы CREDS_DIR и CREDS_FILE "
+            "(или TOKENS_FILE)."
+        )
 
-    return load_api_tokens()
+    project_root = Path(__file__).resolve().parents[3]
+    tokens_path = project_root / creds_dir / tokens_file
+    if not tokens_path.is_file():
+        raise FileNotFoundError(
+            f"Файл токенов WB для Order Feed не найден: {tokens_path}"
+        )
+
+    with tokens_path.open(encoding="utf-8") as file:
+        payload = json.load(file)
+    if not isinstance(payload, dict):
+        raise TypeError("Файл токенов WB должен содержать объект account -> token.")
+    return payload
 
 
 class OrderFeedService:
@@ -121,7 +143,7 @@ class OrderFeedService:
                 summary.raw_rows += len(page.orders)
                 snapshot_time = page.snapshot_time
                 normalized = self.normalizer.normalize(page)
-                summary.normalized_rows += len(normalized.index)
+                summary.normalized_rows += len(normalized)
                 saved = self.repository.save(normalized)
                 summary.written_rows += saved.written_rows
                 summary.dropped_missing_key_rows += saved.dropped_missing_key_rows
