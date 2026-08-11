@@ -34,7 +34,7 @@ def _load_api_tokens() -> Mapping[str, str]:
     """Загружает WB-токены внутри Order Feed, не завися от legacy-настроек других jobs."""
     load_dotenv()
     creds_dir = os.getenv("CREDS_DIR")
-    tokens_file = os.getenv("CREDS_FILE") or os.getenv("TOKENS_FILE")
+    tokens_file = os.getenv("TOKENS_FILE")
     if not creds_dir or not tokens_file:
         raise ValueError(
             "Для Order Feed должны быть заданы CREDS_DIR и CREDS_FILE "
@@ -205,9 +205,8 @@ class OrderFeedService:
                 "Загрузчик токенов должен вернуть Mapping account -> token."
             )
         tokens = {
-            str(name).strip(): str(token).strip()
+            name.strip().upper(): token.strip()
             for name, token in loaded.items()
-            if str(name).strip() and str(token).strip()
         }
         if not tokens:
             raise ValueError("Не найдены токены кабинетов WB для Order Feed.")
