@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-ORDER_FEED_URL = "https://seller-analytics-api.wildberries.ru/api/analytics/v1/order-feed"
+ORDER_FEED_URL = (
+    "https://seller-analytics-api.wildberries.ru/api/analytics/v1/order-feed"
+)
 TABLE_NAME = "wb_order_feed"
 
 # Кабинет входит в ключ, чтобы данные разных продавцов никогда не перезаписали друг друга.

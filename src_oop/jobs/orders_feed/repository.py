@@ -7,7 +7,6 @@ from collections.abc import Sequence
 
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
-
 from src_oop.core.database import Database
 from src_oop.jobs.orders_feed.config import (
     KEY_COLUMNS,
@@ -51,7 +50,9 @@ class OrderFeedRepository:
                 checkfirst=True,
             )
         except SQLAlchemyError as error:
-            logger.exception("Не удалось подготовить таблицу Order Feed | table=%s", TABLE_NAME)
+            logger.exception(
+                "Не удалось подготовить таблицу Order Feed | table=%s", TABLE_NAME
+            )
             raise OrderFeedRepositoryError(
                 f"Не удалось создать или проверить таблицу {TABLE_NAME}."
             ) from error

@@ -10,7 +10,6 @@ from email.utils import parsedate_to_datetime
 
 import aiohttp
 from pydantic import ValidationError
-
 from src_oop.jobs.orders_feed.config import (
     MAX_RETRIES,
     ORDER_FEED_URL,
@@ -83,7 +82,12 @@ class WBOrderFeedClient:
                     timeout=timeout,
                 ) as response:
                     payload = await self._read_json_payload(response)
-                    if response.status == 429 or response.status in {500, 502, 503, 504}:
+                    if response.status == 429 or response.status in {
+                        500,
+                        502,
+                        503,
+                        504,
+                    }:
                         if attempt >= self.max_retries:
                             raise self._api_error(response.status, account, payload)
                         await self._sleep_for_retry(
@@ -94,11 +98,17 @@ class WBOrderFeedClient:
                         raise self._api_error(response.status, account, payload)
                     response.raise_for_status()
                     return self._parse_page(account, offset, payload, attempt - 1)
-            except (OrderFeedAPIError, OrderFeedResponseValidationError):
+            except OrderFeedAPIError, OrderFeedResponseValidationError:
                 raise
             except aiohttp.ClientResponseError:
                 raise
-            except (TimeoutError, aiohttp.ClientConnectionError, aiohttp.ClientError, OSError, RuntimeError) as error:
+            except (
+                TimeoutError,
+                aiohttp.ClientConnectionError,
+                aiohttp.ClientError,
+                OSError,
+                RuntimeError,
+            ) as error:
                 if attempt >= self.max_retries:
                     raise OrderFeedTransportError(
                         "Запрос Order Feed завершился ошибкой после всех повторов: "
@@ -117,7 +127,11 @@ class WBOrderFeedClient:
         payload: object,
     ) -> OrderFeedAPIError:
         """Преобразует разные форматы ошибок WB в типизированное исключение."""
-        parsed = OrderFeedAPIErrorResponse.model_validate(payload) if isinstance(payload, dict) else None
+        parsed = (
+            OrderFeedAPIErrorResponse.model_validate(payload)
+            if isinstance(payload, dict)
+            else None
+        )
         title = parsed.title if parsed else None
         detail = parsed.detail if parsed else None
         request_id = parsed.request_id if parsed else None
@@ -250,12 +264,15 @@ class WBOrderFeedClient:
         if retry_after:
             try:
                 return min(max(float(retry_after), 0.0), self.retry_max_sleep_seconds)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 try:
                     retry_at = parsedate_to_datetime(str(retry_after))
                     now = datetime.now(tz=retry_at.tzinfo)
-                    return min(max((retry_at - now).total_seconds(), 0.0), self.retry_max_sleep_seconds)
-                except (TypeError, ValueError, OverflowError):
+                    return min(
+                        max((retry_at - now).total_seconds(), 0.0),
+                        self.retry_max_sleep_seconds,
+                    )
+                except TypeError, ValueError, OverflowError:
                     pass
         delay = self.retry_base_sleep_seconds * (2 ** max(attempt - 1, 0))
         return min(delay, self.retry_max_sleep_seconds)

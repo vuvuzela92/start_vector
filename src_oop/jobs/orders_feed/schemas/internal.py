@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 from src_oop.jobs.orders_feed.config import MAX_PERIOD_DAYS
 from src_oop.jobs.orders_feed.schemas.api import OrderFeedOrderResponse
 
@@ -22,7 +21,9 @@ class OrderFeedPeriod(BaseModel):
     def validate_period(self) -> OrderFeedPeriod:
         """Запрещает неоднозначные даты, обратный и слишком длинный период."""
         if self.start.tzinfo is None or self.end.tzinfo is None:
-            raise ValueError("Границы периода Order Feed должны содержать часовой пояс.")
+            raise ValueError(
+                "Границы периода Order Feed должны содержать часовой пояс."
+            )
         if self.start > self.end:
             raise ValueError("Начало периода Order Feed не может быть позже конца.")
         if self.end - self.start > timedelta(days=MAX_PERIOD_DAYS):

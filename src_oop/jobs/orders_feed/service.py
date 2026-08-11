@@ -13,7 +13,6 @@ from zoneinfo import ZoneInfo
 
 import aiohttp
 from dotenv import load_dotenv
-
 from src_oop.jobs.orders_feed.client import WBOrderFeedClient
 from src_oop.jobs.orders_feed.config import (
     HISTORY_BOUNDARY_SAFETY_MINUTES,
@@ -169,8 +168,10 @@ class OrderFeedService:
         """Ограничивает ручной период доступными WB последними 31 сутками."""
         now = datetime.now(tz=MOSCOW_TZ)
         end = self._ensure_timezone(date_to or now)
-        earliest = now - timedelta(days=MAX_PERIOD_DAYS) + timedelta(
-            minutes=HISTORY_BOUNDARY_SAFETY_MINUTES
+        earliest = (
+            now
+            - timedelta(days=MAX_PERIOD_DAYS)
+            + timedelta(minutes=HISTORY_BOUNDARY_SAFETY_MINUTES)
         )
         start = self._ensure_timezone(date_from or earliest)
         if start < earliest:
@@ -184,7 +185,9 @@ class OrderFeedService:
         if start > end:
             raise ValueError("Начало периода Order Feed не может быть позже конца.")
         if end - start > timedelta(days=MAX_PERIOD_DAYS):
-            raise ValueError(f"Период Order Feed не может превышать {MAX_PERIOD_DAYS} сутки.")
+            raise ValueError(
+                f"Период Order Feed не может превышать {MAX_PERIOD_DAYS} сутки."
+            )
         return OrderFeedPeriod(start=start, end=end)
 
     def _ensure_timezone(self, value: datetime) -> datetime:
@@ -197,7 +200,9 @@ class OrderFeedService:
         """Загружает валидные токены и применяет необязательный фильтр кабинета."""
         loaded = self.tokens_loader()
         if not isinstance(loaded, Mapping):
-            raise TypeError("Загрузчик токенов должен вернуть Mapping account -> token.")
+            raise TypeError(
+                "Загрузчик токенов должен вернуть Mapping account -> token."
+            )
         tokens = {
             str(name).strip(): str(token).strip()
             for name, token in loaded.items()

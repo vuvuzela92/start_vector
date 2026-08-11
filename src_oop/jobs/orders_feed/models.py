@@ -20,7 +20,6 @@ from sqlalchemy import (
     Table,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-
 from src_oop.jobs.orders_feed.config import TABLE_NAME
 from src_oop.jobs.orders_feed.schemas.enums import (
     CancelType,
@@ -92,8 +91,12 @@ class WBOrderFeedRecord(OrderFeedBase):
         nullable=False,
     )
     chrt_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     status: Mapped[OrderStatus] = mapped_column(
         Enum(OrderStatus, name="wb_order_feed_status", values_callable=_enum_values),
         nullable=False,
@@ -104,7 +107,11 @@ class WBOrderFeedRecord(OrderFeedBase):
     warehouse_name: Mapped[str] = mapped_column(String(255), nullable=False)
     warehouse_region: Mapped[str] = mapped_column(String(255), nullable=False)
     warehouse_type: Mapped[WarehouseType] = mapped_column(
-        Enum(WarehouseType, name="wb_order_feed_warehouse_type", values_callable=_enum_values),
+        Enum(
+            WarehouseType,
+            name="wb_order_feed_warehouse_type",
+            values_callable=_enum_values,
+        ),
         nullable=False,
     )
     destination_city: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -119,7 +126,9 @@ class WBOrderFeedRecord(OrderFeedBase):
         Enum(DataSource, name="wb_data_source", values_callable=_enum_values),
         nullable=False,
     )
-    snapshot_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    snapshot_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     loaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
