@@ -6,19 +6,43 @@ import argparse
 import asyncio
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from src_oop.jobs.orders_feed.repository import OrderFeedRepository
 from src_oop.jobs.orders_feed.service import OrderFeedService
 
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
 
 def _parse_datetime(value: str | datetime | None) -> datetime | None:
-    """Разбирает ISO datetime ручного запуска, сохраняя переданный часовой пояс."""
+    """Разбирает удобные форматы даты ручного запуска."""
     if value is None or isinstance(value, datetime):
         return value
+    normalized = value.strip()
+    if not normalized:
+        return None
     try:
-        return datetime.fromisoformat(value)
-    except ValueError as error:
-        raise ValueError("Дата должна быть в ISO-формате, например 2026-07-23T00:00:00+03:00.") from error
+        # Поддерживает YYYY-MM-DD, пробел или T, минуты/секунды и timezone.
+        parsed = datetime.fromisoformat(normalized)
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=MOSCOW_TZ)
+    except ValueError:
+        pass
+
+    for date_format in (
+        "%d.%m.%Y %H:%M:%S",
+        "%d.%m.%Y %H:%M",
+        "%d.%m.%Y",
+    ):
+        try:
+            return datetime.strptime(normalized, date_format).replace(tzinfo=MOSCOW_TZ)
+        except ValueError:
+            continue
+
+    raise ValueError(
+        "Не удалось распознать дату. Допустимые примеры: "
+        "2026-07-23, '2026-07-23 12:00', "
+        "2026-07-23T12:00:00+03:00 или '23.07.2026 12:00'."
+    )
 
 
 async def order_feed_async(
@@ -60,8 +84,14 @@ def main() -> None:
         format="%(asctime)s | %(levelname)s | %(message)s",
     )
     parser = argparse.ArgumentParser(description="Загрузка WB Order Feed в PostgreSQL")
-    parser.add_argument("--date-from")
-    parser.add_argument("--date-to")
+    parser.add_argument(
+        "--date-from",
+        help="Начало: YYYY-MM-DD, 'YYYY-MM-DD HH:MM' или ISO datetime",
+    )
+    parser.add_argument(
+        "--date-to",
+        help="Конец: YYYY-MM-DD, 'YYYY-MM-DD HH:MM' или ISO datetime",
+    )
     parser.add_argument("--account")
     parser.add_argument(
         "--create-table-only",

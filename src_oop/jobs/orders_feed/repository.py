@@ -73,7 +73,6 @@ class OrderFeedRepository:
             set_=update_columns,
         )
         try:
-            # begin() автоматически выполняет rollback, если execute выбросит исключение.
             with Database.get_engine().begin() as connection:
                 connection.execute(upsert_statement)
         except SQLAlchemyError as error:

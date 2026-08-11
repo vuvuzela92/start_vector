@@ -22,7 +22,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from src_oop.jobs.orders_feed.config import TABLE_NAME
-from src_oop.jobs.orders_feed.schemas.api import OrderFeedOrderResponse
 from src_oop.jobs.orders_feed.schemas.enums import (
     CancelType,
     DataSource,
@@ -128,32 +127,6 @@ class WBOrderFeedRecord(OrderFeedBase):
         Index("ix_wb_order_feed_nm_id", "nm_id"),
         Index("ix_wb_order_feed_status", "status"),
     )
-
-
-@dataclass(frozen=True, slots=True)
-class OrderFeedPeriod:
-    """Описывает допустимый период одного запроса отчёта по текущему статусу заказа."""
-
-    start: datetime
-    end: datetime
-
-
-@dataclass(slots=True)
-class OrderFeedPage:
-    """Хранит одну страницу стабильного снимка WB и метрики выполненного запроса."""
-
-    account: str
-    snapshot_time: str
-    currency: str
-    orders: list[OrderFeedOrderResponse]
-    offset: int
-    limit: int
-    retries_used: int = 0
-
-    @property
-    def has_next_page(self) -> bool:
-        """Определяет продолжение пагинации по бизнес-правилу неполной последней страницы."""
-        return len(self.orders) >= self.limit
 
 
 @dataclass(slots=True)

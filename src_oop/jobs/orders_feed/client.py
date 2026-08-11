@@ -30,15 +30,14 @@ from src_oop.jobs.orders_feed.exceptions import (
     OrderFeedUpstreamError,
 )
 from src_oop.jobs.orders_feed.models import (
-    OrderFeedPage,
     OrderFeedPaginationRequest,
-    OrderFeedPeriod,
     OrderFeedRequest,
 )
 from src_oop.jobs.orders_feed.schemas.api import (
     OrderFeedAPIErrorResponse,
     OrderFeedResponse,
 )
+from src_oop.jobs.orders_feed.schemas.internal import OrderFeedPage, OrderFeedPeriod
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +185,18 @@ class WBOrderFeedClient:
                 f"details={error.errors(include_url=False, include_input=False)}"
             ) from error
 
-        snapshot_time = validated.data.snapshot_time.isoformat().replace("+00:00", "Z")
+        response_snapshot_time = validated.data.snapshot_time
+        if response_snapshot_time is None:
+            snapshot_time = None
+            logger.warning(
+                "WB вернул пустой snapshotTime; ответ считается последней страницей "
+                "| account=%s | offset=%s | rows=%s",
+                account,
+                offset,
+                len(validated.data.orders),
+            )
+        else:
+            snapshot_time = response_snapshot_time.isoformat().replace("+00:00", "Z")
         return OrderFeedPage(
             account=account,
             snapshot_time=snapshot_time,

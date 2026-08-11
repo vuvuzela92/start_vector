@@ -21,9 +21,10 @@ from src_oop.jobs.orders_feed.config import (
     MAX_PERIOD_DAYS,
     REQUEST_INTERVAL_SECONDS,
 )
-from src_oop.jobs.orders_feed.models import OrderFeedPeriod, OrderFeedRunSummary
+from src_oop.jobs.orders_feed.models import OrderFeedRunSummary
 from src_oop.jobs.orders_feed.normalizer import OrderFeedNormalizer
 from src_oop.jobs.orders_feed.repository import OrderFeedRepository
+from src_oop.jobs.orders_feed.schemas.internal import OrderFeedPeriod
 
 logger = logging.getLogger(__name__)
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")

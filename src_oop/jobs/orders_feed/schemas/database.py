@@ -56,7 +56,7 @@ class OrderFeedDatabaseRow(BaseModel):
         order: OrderFeedOrderResponse,
         account: str,
         currency: str,
-        snapshot_time: str,
+        snapshot_time: str | datetime,
     ) -> OrderFeedDatabaseRow:
         """Преобразует проверенный заказ WB в семантические enum-поля PostgreSQL."""
         return cls(

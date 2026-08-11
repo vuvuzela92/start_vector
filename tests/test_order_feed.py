@@ -17,13 +17,12 @@ from src_oop.jobs.orders_feed.exceptions import (
     OrderFeedRateLimitError,
 )
 from src_oop.jobs.orders_feed.models import (
-    OrderFeedPage,
-    OrderFeedPeriod,
     OrderFeedSaveResult,
     WBOrderFeedRecord,
 )
 from src_oop.jobs.orders_feed.normalizer import OrderFeedNormalizer
 from src_oop.jobs.orders_feed.repository import OrderFeedRepository
+from src_oop.jobs.orders_feed.run import _parse_datetime
 from src_oop.jobs.orders_feed.schemas.api import (
     OrderFeedOrderResponse,
     OrderFeedResponse,
@@ -34,7 +33,39 @@ from src_oop.jobs.orders_feed.schemas.enums import (
     SaleType,
     WarehouseType,
 )
+from src_oop.jobs.orders_feed.schemas.internal import OrderFeedPage, OrderFeedPeriod
 from src_oop.jobs.orders_feed.service import OrderFeedService
+
+
+class OrderFeedRunTest(unittest.TestCase):
+    """Проверяет удобные форматы периода ручного CLI-запуска."""
+
+    def test_parse_manual_datetime_formats(self) -> None:
+        """Принимает короткий, ISO и привычный российский форматы."""
+        moscow_tz = ZoneInfo("Europe/Moscow")
+        cases = {
+            "2026-07-23": datetime(2026, 7, 23, tzinfo=moscow_tz),
+            "2026-07-23 12:00": datetime(2026, 7, 23, 12, tzinfo=moscow_tz),
+            "2026-07-23T12:30:45": datetime(
+                2026, 7, 23, 12, 30, 45, tzinfo=moscow_tz
+            ),
+            "23.07.2026 12:00": datetime(2026, 7, 23, 12, tzinfo=moscow_tz),
+        }
+
+        for value, expected in cases.items():
+            with self.subTest(value=value):
+                self.assertEqual(_parse_datetime(value), expected)
+
+    def test_parse_manual_datetime_keeps_timezone(self) -> None:
+        """Не теряет явно заданный offset, включая суффикс Z."""
+        self.assertEqual(
+            _parse_datetime("2026-07-23T12:00:00+03:00").utcoffset(),
+            timedelta(hours=3),
+        )
+        self.assertEqual(
+            _parse_datetime("2026-07-23T09:00:00Z").utcoffset(),
+            timedelta(0),
+        )
 
 
 def _order(
@@ -71,12 +102,12 @@ class OrderFeedNormalizerTest(unittest.TestCase):
     def test_normalize_adds_business_metadata_and_converts_columns(self) -> None:
         """Гарантирует сохранение кабинета, валюты, источника и временных полей."""
         page = OrderFeedPage(
-            "vector",
-            "2026-07-26T20:00:00Z",
-            "RUB",
-            [_validated_order("order-1")],
-            0,
-            1000,
+            account="vector",
+            snapshot_time="2026-07-26T20:00:00Z",
+            currency="RUB",
+            orders=[_validated_order("order-1")],
+            offset=0,
+            limit=1000,
         )
 
         result = OrderFeedNormalizer().normalize(page)
@@ -101,12 +132,12 @@ class OrderFeedNormalizerTest(unittest.TestCase):
         created.pop("cancelType")
         validated_created = OrderFeedOrderResponse.model_validate(created)
         page = OrderFeedPage(
-            "vector",
-            "2026-07-26T20:00:00Z",
-            "RUB",
-            [cancelled, validated_created],
-            0,
-            1000,
+            account="vector",
+            snapshot_time="2026-07-26T20:00:00Z",
+            currency="RUB",
+            orders=[cancelled, validated_created],
+            offset=0,
+            limit=1000,
         )
 
         result = OrderFeedNormalizer().normalize(page)
@@ -145,8 +176,8 @@ class OrderFeedClientTest(unittest.TestCase):
         """Фиксирует snapshotTime начиная со второй страницы одного отчёта."""
         tz = ZoneInfo("Europe/Moscow")
         period = OrderFeedPeriod(
-            datetime(2026, 7, 1, tzinfo=tz),
-            datetime(2026, 7, 2, tzinfo=tz),
+            start=datetime(2026, 7, 1, tzinfo=tz),
+            end=datetime(2026, 7, 2, tzinfo=tz),
         )
         client = WBOrderFeedClient(page_limit=1000)
 
@@ -156,6 +187,28 @@ class OrderFeedClientTest(unittest.TestCase):
         self.assertNotIn("snapshotTime", first["pagination"])
         self.assertEqual(second["pagination"]["snapshotTime"], "2026-07-02T10:00:00Z")
         self.assertEqual(second["pagination"]["offset"], 1000)
+
+    def test_internal_period_rejects_invalid_boundaries(self) -> None:
+        """Переносит базовые инварианты периода из orchestration в Pydantic-модель."""
+        tz = ZoneInfo("Europe/Moscow")
+
+        with self.assertRaises(ValidationError):
+            OrderFeedPeriod(
+                start=datetime(2026, 7, 2, tzinfo=tz),
+                end=datetime(2026, 7, 1, tzinfo=tz),
+            )
+
+    def test_internal_page_rejects_invalid_pagination(self) -> None:
+        """Не выпускает из API-клиента страницу с отрицательным offset или limit."""
+        with self.assertRaises(ValidationError):
+            OrderFeedPage(
+                account="vector",
+                snapshot_time=None,
+                currency="RUB",
+                orders=[],
+                offset=-1,
+                limit=0,
+            )
 
     def test_api_errors_are_typed_and_keep_wb_diagnostics(self) -> None:
         """Сохраняет статус, requestId и detail для диагностики ответа WB."""
@@ -231,6 +284,38 @@ class OrderFeedClientTest(unittest.TestCase):
         self.assertEqual(page.orders[0].status, OrderStatus.CANCEL)
         self.assertEqual(page.orders[0].cancel_type, "app")
 
+    def test_empty_snapshot_is_allowed_for_last_page(self) -> None:
+        """Сохраняет неполную страницу, когда WB не сформировал snapshotTime."""
+        payload = {
+            "data": {
+                "snapshotTime": "",
+                "currency": "RUB",
+                "orders": [_order("order-1")],
+            }
+        }
+
+        page = WBOrderFeedClient(page_limit=1000)._parse_page(
+            "vector", 0, payload, 0
+        )
+
+        self.assertFalse(page.has_next_page)
+        self.assertIsNone(page.snapshot_time)
+
+    def test_empty_snapshot_stops_pagination_even_for_full_page(self) -> None:
+        """Считает отсутствие snapshotTime явным признаком последней страницы WB."""
+        payload = {
+            "data": {
+                "snapshotTime": "",
+                "currency": "RUB",
+                "orders": [_order("order-1")],
+            }
+        }
+
+        page = WBOrderFeedClient(page_limit=1)._parse_page("vector", 0, payload, 0)
+
+        self.assertFalse(page.has_next_page)
+        self.assertIsNone(page.snapshot_time)
+
 
 class OrderFeedRepositoryTest(unittest.TestCase):
     """Проверяет подготовку типизированного батча без подключения к PostgreSQL."""
@@ -244,12 +329,12 @@ class OrderFeedRepositoryTest(unittest.TestCase):
             _order("order-1", "2026-07-26T19:00:00+03:00")
         )
         page = OrderFeedPage(
-            "vector",
-            "2026-07-26T20:00:00Z",
-            "RUB",
-            [older, newer],
-            0,
-            1000,
+            account="vector",
+            snapshot_time="2026-07-26T20:00:00Z",
+            currency="RUB",
+            orders=[older, newer],
+            offset=0,
+            limit=1000,
         )
         rows = OrderFeedNormalizer().normalize(page)
 
@@ -293,7 +378,12 @@ class _FakeClient:
             else [_validated_order("order-3")]
         )
         return OrderFeedPage(
-            "vector", "2026-07-26T20:00:00Z", "RUB", orders, offset, 2
+            account="vector",
+            snapshot_time="2026-07-26T20:00:00Z",
+            currency="RUB",
+            orders=orders,
+            offset=offset,
+            limit=2,
         )
 
 

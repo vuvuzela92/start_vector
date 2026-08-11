@@ -2,7 +2,14 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    field_validator,
+)
 
 from src_oop.jobs.orders_feed.schemas.enums import CancelType, OrderStatus
 
@@ -33,9 +40,15 @@ class OrderFeedDataResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
-    snapshot_time: datetime = Field(alias="snapshotTime")
+    snapshot_time: datetime | None = Field(default=None, alias="snapshotTime")
     currency: str = Field(min_length=1)
     orders: list[OrderFeedOrderResponse]
+
+    @field_validator("snapshot_time", mode="before")
+    @classmethod
+    def empty_snapshot_time_is_missing(cls, value: object) -> object:
+        """WB иногда присылает пустую метку, если результат помещается в одну страницу."""
+        return None if value == "" else value
 
 
 class OrderFeedResponse(BaseModel):
