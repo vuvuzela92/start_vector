@@ -203,7 +203,7 @@ class WBOrderFeedClient:
         response_snapshot_time = validated.data.snapshot_time
         if response_snapshot_time is None:
             snapshot_time = None
-            logger.warning(
+            logger.info(
                 "WB вернул пустой snapshotTime; ответ считается последней страницей "
                 "| account=%s | offset=%s | rows=%s",
                 account,

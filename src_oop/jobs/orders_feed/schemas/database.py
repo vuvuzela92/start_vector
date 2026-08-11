@@ -40,6 +40,20 @@ class OrderFeedDatabaseRow(BaseModel):
     snapshot_time: datetime
     loaded_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
+    @field_validator(
+        "warehouse_name",
+        "warehouse_region",
+        "destination_city",
+        "destination_district",
+        mode="before",
+    )
+    @classmethod
+    def normalize_empty_location(cls, value: object) -> object:
+        """Заменяет пустые поля местоположения WB значением для аналитики."""
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return "Не указано"
+        return value.strip() if isinstance(value, str) else value
+
     @field_validator("created_at", "updated_at", "snapshot_time", "loaded_at")
     @classmethod
     def normalize_datetime_to_utc(cls, value: datetime) -> datetime:

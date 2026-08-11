@@ -146,6 +146,30 @@ class OrderFeedNormalizerTest(unittest.TestCase):
         created_row = next(row for row in result if row.srid == "order-created")
         self.assertIsNone(created_row.cancel_type)
 
+    def test_empty_location_fields_are_replaced_without_dropping_order(self) -> None:
+        """Сохраняет заказ, если WB прислал пустые или null-поля местоположения."""
+        order_payload = _order("order-empty-location")
+        order_payload["warehouseName"] = ""
+        order_payload["warehouseRegion"] = "   "
+        order_payload["destinationCity"] = None
+        order_payload["destinationDistrict"] = ""
+        order = OrderFeedOrderResponse.model_validate(order_payload)
+        page = OrderFeedPage(
+            account="vector",
+            snapshot_time=None,
+            currency="RUB",
+            orders=[order],
+            offset=0,
+            limit=1000,
+        )
+
+        row = OrderFeedNormalizer().normalize(page)[0]
+
+        self.assertEqual(row.warehouse_name, "Не указано")
+        self.assertEqual(row.warehouse_region, "Не указано")
+        self.assertEqual(row.destination_city, "Не указано")
+        self.assertEqual(row.destination_district, "Не указано")
+
     def test_table_model_uses_semantic_enum_columns(self) -> None:
         """Оставляет enum только для справочников, которыми управляет приложение."""
         columns = WBOrderFeedRecord.__table__.columns
