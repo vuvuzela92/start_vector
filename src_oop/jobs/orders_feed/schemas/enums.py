@@ -4,7 +4,7 @@ from enum import StrEnum
 
 
 class OrderStatus(StrEnum):
-    """Допустимые бизнес-статусы заказа в ответе WB Order Feed."""
+    """Известные текущей версии приложения статусы WB Order Feed."""
 
     CREATED = "created"
     BUYOUT = "buyout"
@@ -14,7 +14,7 @@ class OrderStatus(StrEnum):
 
 
 class CancelType(StrEnum):
-    """Причины отмены, которые WB возвращает только для отменённого заказа."""
+    """Известные причины отмены, описанные в текущем контракте WB."""
 
     APP = "app"
     RECEIPT = "receipt"

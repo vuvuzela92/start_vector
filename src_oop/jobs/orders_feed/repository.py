@@ -7,6 +7,7 @@ from collections.abc import Sequence
 
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
+
 from src_oop.core.database import Database
 from src_oop.jobs.orders_feed.config import (
     KEY_COLUMNS,

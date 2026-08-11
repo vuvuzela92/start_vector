@@ -10,6 +10,7 @@ from email.utils import parsedate_to_datetime
 
 import aiohttp
 from pydantic import ValidationError
+
 from src_oop.jobs.orders_feed.config import (
     MAX_RETRIES,
     ORDER_FEED_URL,

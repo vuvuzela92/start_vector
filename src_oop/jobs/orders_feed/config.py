@@ -30,7 +30,7 @@ UPSERT_UPDATE_COLUMNS: tuple[str, ...] = (
 MAX_PERIOD_DAYS = 31
 # Запас защищает границу 31 суток от сетевой задержки и повторов одного запроса.
 HISTORY_BOUNDARY_SAFETY_MINUTES = 5
-PAGE_LIMIT = 1000
+PAGE_LIMIT = 2000
 REQUEST_TIMEOUT_SECONDS = 60
 MAX_RETRIES = 5
 RETRY_BASE_SLEEP_SECONDS = 5

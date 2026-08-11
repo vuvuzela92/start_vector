@@ -6,11 +6,10 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
 from src_oop.jobs.orders_feed.schemas.api import OrderFeedOrderResponse
 from src_oop.jobs.orders_feed.schemas.enums import (
-    CancelType,
     DataSource,
-    OrderStatus,
     SaleType,
     WarehouseType,
 )
@@ -27,8 +26,8 @@ class OrderFeedDatabaseRow(BaseModel):
     chrt_id: int
     created_at: datetime
     updated_at: datetime
-    status: OrderStatus
-    cancel_type: CancelType | None
+    status: str = Field(min_length=1, max_length=64)
+    cancel_type: str | None = Field(default=None, max_length=64)
     warehouse_name: str
     warehouse_region: str
     warehouse_type: WarehouseType
@@ -57,7 +56,7 @@ class OrderFeedDatabaseRow(BaseModel):
         currency: str,
         snapshot_time: str | datetime,
     ) -> OrderFeedDatabaseRow:
-        """Преобразует проверенный заказ WB в семантические enum-поля PostgreSQL."""
+        """Преобразует заказ WB, сохраняя внешние справочники без потери значений."""
         return cls(
             account=account,
             srid=order.srid,

@@ -20,11 +20,10 @@ from sqlalchemy import (
     Table,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
 from src_oop.jobs.orders_feed.config import TABLE_NAME
 from src_oop.jobs.orders_feed.schemas.enums import (
-    CancelType,
     DataSource,
-    OrderStatus,
     SaleType,
     WarehouseType,
 )
@@ -97,13 +96,9 @@ class WBOrderFeedRecord(OrderFeedBase):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    status: Mapped[OrderStatus] = mapped_column(
-        Enum(OrderStatus, name="wb_order_feed_status", values_callable=_enum_values),
-        nullable=False,
-    )
-    cancel_type: Mapped[CancelType | None] = mapped_column(
-        Enum(CancelType, name="wb_order_feed_cancel_type", values_callable=_enum_values)
-    )
+    # Внешние справочники WB храним как строки: API может добавить новые значения.
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    cancel_type: Mapped[str | None] = mapped_column(String(64))
     warehouse_name: Mapped[str] = mapped_column(String(255), nullable=False)
     warehouse_region: Mapped[str] = mapped_column(String(255), nullable=False)
     warehouse_type: Mapped[WarehouseType] = mapped_column(

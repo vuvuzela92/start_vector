@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
+from sqlalchemy import String
 
 from src_oop.jobs.orders_feed.client import WBOrderFeedClient
 from src_oop.jobs.orders_feed.config import UPSERT_UPDATE_COLUMNS
@@ -146,14 +147,15 @@ class OrderFeedNormalizerTest(unittest.TestCase):
         self.assertIsNone(created_row.cancel_type)
 
     def test_table_model_uses_semantic_enum_columns(self) -> None:
-        """Подтверждает понятную схему таблицы без неоднозначных is_mp и is_b2b."""
+        """Оставляет enum только для справочников, которыми управляет приложение."""
         columns = WBOrderFeedRecord.__table__.columns
 
         self.assertIn("warehouse_type", columns)
         self.assertIn("sale_type", columns)
         self.assertNotIn("is_mp", columns)
         self.assertNotIn("is_b2b", columns)
-        self.assertEqual(columns["status"].type.enums, [item.value for item in OrderStatus])
+        self.assertIsInstance(columns["status"].type, String)
+        self.assertIsInstance(columns["cancel_type"].type, String)
         self.assertEqual(
             columns["data_source"].type.enums,
             [item.value for item in DataSource],
@@ -234,10 +236,11 @@ class OrderFeedClientTest(unittest.TestCase):
                 self.assertEqual(error.request_id, "request-123")
                 self.assertEqual(error.detail, "limited by test-limit")
 
-    def test_pydantic_rejects_unknown_order_status(self) -> None:
-        """Останавливает страницу до БД, если WB прислал неизвестный статус заказа."""
+    def test_pydantic_preserves_unknown_external_enum_values(self) -> None:
+        """Не теряет страницу при появлении новых status и cancelType в WB API."""
         invalid_order = _order("order-1")
-        invalid_order["status"] = "unknown"
+        invalid_order["status"] = "awaitingPayment"
+        invalid_order["cancelType"] = "sellerRequest"
         payload = {
             "data": {
                 "snapshotTime": "2026-07-26T20:00:00Z",
@@ -246,8 +249,13 @@ class OrderFeedClientTest(unittest.TestCase):
             }
         }
 
-        with self.assertRaises(ValidationError):
-            OrderFeedResponse.model_validate(payload)
+        response = OrderFeedResponse.model_validate(payload)
+        order = response.data.orders[0]
+
+        self.assertEqual(order.status, "awaitingPayment")
+        self.assertEqual(order.cancel_type, "sellerRequest")
+        self.assertIsNone(order.known_status)
+        self.assertIsNone(order.known_cancel_type)
 
     def test_pydantic_rejects_non_finite_seller_price(self) -> None:
         """Не допускает NaN и infinity, которые PostgreSQL Numeric не должен получать."""

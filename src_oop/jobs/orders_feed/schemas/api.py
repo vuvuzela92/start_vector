@@ -10,6 +10,7 @@ from pydantic import (
     StrictInt,
     field_validator,
 )
+
 from src_oop.jobs.orders_feed.schemas.enums import CancelType, OrderStatus
 
 
@@ -23,8 +24,8 @@ class OrderFeedOrderResponse(BaseModel):
     srid: str = Field(min_length=1)
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
-    status: OrderStatus
-    cancel_type: CancelType | None = Field(default=None, alias="cancelType")
+    status: str = Field(min_length=1, max_length=64)
+    cancel_type: str | None = Field(default=None, alias="cancelType", max_length=64)
     warehouse_name: str = Field(alias="warehouseName", min_length=1)
     warehouse_region: str = Field(alias="warehouseRegion")
     is_mp: StrictBool = Field(alias="isMp")
@@ -32,6 +33,24 @@ class OrderFeedOrderResponse(BaseModel):
     destination_district: str = Field(alias="destinationDistrict")
     seller_price: float = Field(alias="sellerPrice", ge=0, allow_inf_nan=False)
     is_b2b: StrictBool = Field(alias="isB2b")
+
+    @property
+    def known_status(self) -> OrderStatus | None:
+        """Возвращает типизированный статус, если он известен текущей версии контракта."""
+        try:
+            return OrderStatus(self.status)
+        except ValueError:
+            return None
+
+    @property
+    def known_cancel_type(self) -> CancelType | None:
+        """Возвращает типизированную причину отмены без потери нового значения WB."""
+        if self.cancel_type is None:
+            return None
+        try:
+            return CancelType(self.cancel_type)
+        except ValueError:
+            return None
 
 
 class OrderFeedDataResponse(BaseModel):
