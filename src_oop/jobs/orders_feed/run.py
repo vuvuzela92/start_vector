@@ -12,6 +12,7 @@ from src_oop.jobs.orders_feed.repository import OrderFeedRepository
 from src_oop.jobs.orders_feed.service import OrderFeedService
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+logger = logging.getLogger(__name__)
 
 
 def _parse_datetime(value: str | datetime | None) -> datetime | None:
@@ -106,4 +107,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("Программа останолвенна вручную")
+

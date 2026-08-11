@@ -212,7 +212,7 @@ class OrderFeedService:
             raise ValueError("Не найдены токены кабинетов WB для Order Feed.")
         if account is None:
             return tokens
-        selected = account.strip().strip('"').strip("'")
+        selected = account.upper().strip()
         if ":" in selected or (len(selected) > 100 and selected.count(".") >= 2):
             raise ValueError(
                 "В account переданы credentials. Укажите только название кабинета "

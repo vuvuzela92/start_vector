@@ -72,6 +72,7 @@ class OrderFeedRepository:
         }
         upsert_statement = statement.on_conflict_do_update(
             index_elements=list(KEY_COLUMNS),
+            index_where=WBOrderFeedRecord.account.is_not(None),
             set_=update_columns,
         )
         try:

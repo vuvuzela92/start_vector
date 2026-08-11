@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import math
 import unittest
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 from sqlalchemy import String
 
+from src_oop.jobs.orders_feed.backfill import BackfillSource, OrderFeedBackfill
 from src_oop.jobs.orders_feed.client import WBOrderFeedClient
 from src_oop.jobs.orders_feed.config import UPSERT_UPDATE_COLUMNS
 from src_oop.jobs.orders_feed.exceptions import (
@@ -28,6 +30,7 @@ from src_oop.jobs.orders_feed.schemas.api import (
     OrderFeedOrderResponse,
     OrderFeedResponse,
 )
+from src_oop.jobs.orders_feed.schemas.backfill import LegacyOrderFeedRow
 from src_oop.jobs.orders_feed.schemas.enums import (
     DataSource,
     OrderStatus,
@@ -390,6 +393,70 @@ class OrderFeedRepositoryTest(unittest.TestCase):
         self.assertTrue(immutable_columns.isdisjoint(UPSERT_UPDATE_COLUMNS))
         self.assertIn("status", UPSERT_UPDATE_COLUMNS)
         self.assertIn("updated_at", UPSERT_UPDATE_COLUMNS)
+
+    def test_legacy_identity_columns_are_nullable_and_use_partial_indexes(self) -> None:
+        """Позволяет legacy-строкам жить без account/chrt_id и сохраняет идемпотентность."""
+        table = WBOrderFeedRecord.__table__
+        unique_indexes = {index.name for index in table.indexes if index.unique}
+
+        self.assertTrue(table.c.account.nullable)
+        self.assertTrue(table.c.chrt_id.nullable)
+        self.assertFalse(table.c.srid.nullable)
+        self.assertIn("uq_wb_order_feed_account_srid", unique_indexes)
+        self.assertIn("uq_wb_order_feed_legacy_source_srid", unique_indexes)
+
+
+class OrderFeedBackfillTest(unittest.TestCase):
+    """Проверяет безопасные SQL-шаблоны разового переноса больших таблиц."""
+
+    def test_source_selects_independent_keyset_query(self) -> None:
+        """Использует id для sales и пару date/srid для orders без дорогого OFFSET."""
+        backfill = OrderFeedBackfill()
+        sales_query, sales_params = backfill._build_select_query(
+            BackfillSource.SALES, 100, 500
+        )
+        orders_query, orders_params = backfill._build_select_query(
+            BackfillSource.ORDERS, (date(2026, 1, 1), "srid-1"), 500
+        )
+
+        self.assertIn("FROM sales", sales_query)
+        self.assertIn("source.id > :cursor_id", sales_query)
+        self.assertIn("FROM orders", orders_query)
+        self.assertIn("(source.date, source.srid) >", orders_query)
+        self.assertNotIn(" OFFSET ", sales_query.upper())
+        self.assertNotIn(" OFFSET ", orders_query.upper())
+        self.assertEqual(sales_params["batch_size"], 500)
+        self.assertEqual(orders_params["batch_size"], 500)
+
+    def test_python_schema_applies_required_legacy_business_rules(self) -> None:
+        """Фиксирует статусы, источник, цену и тип покупателя в Pydantic-схеме."""
+        source_row = {
+            "srid": "legacy-1",
+            "article_id": 123,
+            "date_from": datetime(2026, 1, 1, tzinfo=ZoneInfo("Europe/Moscow")),
+            "last_change_date": datetime(
+                2026, 1, 2, tzinfo=ZoneInfo("Europe/Moscow")
+            ),
+            "warehouse_name": " Склад ",
+            "warehouse_type": "Склад продавца",
+            "country_name": "Казахстан",
+            "oblast_okrug_name": "",
+            "region_name": "",
+            "finished_price": 1000,
+            "discount_percent": 10,
+            "order_type": "Клиентский",
+            "sale_id": "R123",
+        }
+
+        row = LegacyOrderFeedRow.from_source(source_row, DataSource.SALES)
+
+        self.assertEqual(row.status, "return")
+        self.assertEqual(row.seller_price, Decimal("900.00"))
+        self.assertEqual(row.sale_type, SaleType.B2C)
+        self.assertEqual(row.warehouse_type, WarehouseType.SELLER)
+        self.assertEqual(row.destination_district, "Казахстан")
+        self.assertEqual(row.warehouse_region, "Не указано")
+        self.assertEqual(row.data_source, DataSource.SALES)
 
 
 class _FakeClient:

@@ -14,10 +14,12 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Identity,
     Index,
     Numeric,
     String,
     Table,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -77,8 +79,9 @@ class WBOrderFeedRecord(OrderFeedBase):
 
     __tablename__ = TABLE_NAME
 
-    account: Mapped[str] = mapped_column(String(255), primary_key=True)
-    srid: Mapped[str] = mapped_column(String(255), primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    account: Mapped[str | None] = mapped_column(String(255))
+    srid: Mapped[str] = mapped_column(String(255), nullable=False)
     nm_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey(
@@ -89,7 +92,7 @@ class WBOrderFeedRecord(OrderFeedBase):
         ),
         nullable=False,
     )
-    chrt_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    chrt_id: Mapped[int | None] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -127,6 +130,20 @@ class WBOrderFeedRecord(OrderFeedBase):
     loaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
+        Index(
+            "uq_wb_order_feed_account_srid",
+            "account",
+            "srid",
+            unique=True,
+            postgresql_where=text("account IS NOT NULL"),
+        ),
+        Index(
+            "uq_wb_order_feed_legacy_source_srid",
+            "data_source",
+            "srid",
+            unique=True,
+            postgresql_where=text("account IS NULL"),
+        ),
         Index("ix_wb_order_feed_account_updated_at", "account", "updated_at"),
         Index("ix_wb_order_feed_nm_id", "nm_id"),
         Index("ix_wb_order_feed_status", "status"),
