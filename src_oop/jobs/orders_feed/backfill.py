@@ -13,7 +13,6 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
-
 from src_oop.core.database import Database
 from src_oop.jobs.orders_feed.exceptions import OrderFeedRepositoryError
 from src_oop.jobs.orders_feed.models import WBOrderFeedRecord
@@ -340,4 +339,6 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        logger.info("Backfill Order Feed остановлен пользователем; сохранённые батчи остаются в БД.")
+        logger.info(
+            "Backfill Order Feed остановлен пользователем; сохранённые батчи остаются в БД."
+        )

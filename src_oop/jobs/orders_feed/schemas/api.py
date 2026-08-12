@@ -10,7 +10,6 @@ from pydantic import (
     StrictInt,
     field_validator,
 )
-
 from src_oop.jobs.orders_feed.schemas.enums import CancelType, OrderStatus
 
 

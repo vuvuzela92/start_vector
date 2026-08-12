@@ -10,7 +10,6 @@ from email.utils import parsedate_to_datetime
 
 import aiohttp
 from pydantic import ValidationError
-
 from src_oop.jobs.orders_feed.config import (
     MAX_RETRIES,
     ORDER_FEED_URL,
@@ -204,7 +203,7 @@ class WBOrderFeedClient:
         if response_snapshot_time is None:
             snapshot_time = None
             logger.info(
-                "WB вернул пустой snapshotTime; ответ считается последней страницей "
+                "WB вернул поседнюю страницу ленты заказов."
                 "| account=%s | offset=%s | rows=%s",
                 account,
                 offset,

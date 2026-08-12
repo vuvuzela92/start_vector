@@ -6,10 +6,12 @@ import math
 import unittest
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 from sqlalchemy import String
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src_oop.jobs.orders_feed.backfill import BackfillSource, OrderFeedBackfill
 from src_oop.jobs.orders_feed.client import WBOrderFeedClient
@@ -405,6 +407,67 @@ class OrderFeedRepositoryTest(unittest.TestCase):
         self.assertIn("uq_wb_order_feed_account_srid", unique_indexes)
         self.assertIn("uq_wb_order_feed_legacy_source_srid", unique_indexes)
 
+    def test_page_is_split_into_database_chunks(self) -> None:
+        """Не отправляет большую API-страницу одной тяжёлой транзакцией PostgreSQL."""
+        rows = OrderFeedNormalizer().normalize(
+            OrderFeedPage(
+                account="vector",
+                snapshot_time=None,
+                currency="RUB",
+                orders=[_validated_order(f"order-{index}") for index in range(5)],
+                offset=0,
+                limit=10,
+            )
+        )
+        repository = OrderFeedRepository(chunk_size=2, max_retries=1)
+
+        with patch.object(repository, "_upsert_chunk") as upsert_chunk:
+            result = repository.save(rows, account="vector", offset=9000)
+
+        self.assertEqual([len(call.args[0]) for call in upsert_chunk.call_args_list], [2, 2, 1])
+        self.assertEqual(result.written_rows, 5)
+
+    def test_transient_upsert_error_is_retried(self) -> None:
+        """Повторяет оборванное соединение и не помечает кабинет сразу проваленным."""
+        rows = OrderFeedNormalizer().normalize(
+            OrderFeedPage(
+                account="vector",
+                snapshot_time=None,
+                currency="RUB",
+                orders=[_validated_order("order-1")],
+                offset=0,
+                limit=10,
+            )
+        )
+        repository = OrderFeedRepository(chunk_size=1, max_retries=2)
+        transient_error = OperationalError("INSERT", {}, Exception("connection lost"))
+        engine = Mock()
+
+        with (
+            patch.object(
+                repository,
+                "_upsert_chunk",
+                side_effect=[transient_error, None],
+            ) as upsert_chunk,
+            patch("src_oop.jobs.orders_feed.repository.time.sleep"),
+            patch(
+                "src_oop.jobs.orders_feed.repository.Database.get_engine",
+                return_value=engine,
+            ),
+        ):
+            result = repository.save(rows, account="vector", offset=36000)
+
+        self.assertEqual(upsert_chunk.call_count, 2)
+        engine.dispose.assert_called_once()
+        self.assertEqual(result.written_rows, 1)
+
+    def test_non_transient_upsert_error_is_not_retried(self) -> None:
+        """Не повторяет нарушения ограничений БД, которые retry исправить не сможет."""
+        repository = OrderFeedRepository(max_retries=4)
+        error = IntegrityError("INSERT", {}, Exception("foreign key violation"))
+
+        self.assertFalse(repository._is_transient_database_error(error))
+
 
 class OrderFeedBackfillTest(unittest.TestCase):
     """Проверяет безопасные SQL-шаблоны разового переноса больших таблиц."""
@@ -536,7 +599,7 @@ class _FakeRepository:
         """Создаёт пустой журнал размеров сохранённых страниц."""
         self.batch_sizes: list[int] = []
 
-    def save(self, dataframe) -> OrderFeedSaveResult:
+    def save(self, dataframe, **_context) -> OrderFeedSaveResult:
         """Имитирует успешный upsert страницы без подключения к PostgreSQL."""
         size = len(dataframe)
         self.batch_sizes.append(size)

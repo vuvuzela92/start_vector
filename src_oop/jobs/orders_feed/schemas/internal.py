@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 from src_oop.jobs.orders_feed.config import MAX_PERIOD_DAYS
 from src_oop.jobs.orders_feed.schemas.api import OrderFeedOrderResponse
 

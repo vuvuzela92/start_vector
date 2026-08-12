@@ -22,7 +22,6 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-
 from src_oop.jobs.orders_feed.config import TABLE_NAME
 from src_oop.jobs.orders_feed.schemas.enums import (
     DataSource,

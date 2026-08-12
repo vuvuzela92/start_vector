@@ -13,7 +13,6 @@ from zoneinfo import ZoneInfo
 
 import aiohttp
 from dotenv import load_dotenv
-
 from src_oop.jobs.orders_feed.client import WBOrderFeedClient
 from src_oop.jobs.orders_feed.config import (
     HISTORY_BOUNDARY_SAFETY_MINUTES,
@@ -146,7 +145,12 @@ class OrderFeedService:
                 snapshot_time = page.snapshot_time
                 normalized = self.normalizer.normalize(page)
                 summary.normalized_rows += len(normalized)
-                saved = self.repository.save(normalized)
+                saved = await asyncio.to_thread(
+                    self.repository.save,
+                    normalized,
+                    account=account,
+                    offset=offset,
+                )
                 summary.written_rows += saved.written_rows
                 summary.dropped_missing_key_rows += saved.dropped_missing_key_rows
                 summary.collapsed_duplicate_rows += saved.collapsed_duplicate_rows

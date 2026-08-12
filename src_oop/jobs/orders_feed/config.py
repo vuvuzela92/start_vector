@@ -39,3 +39,9 @@ RETRY_MAX_SLEEP_SECONDS = 180
 # Персональные и сервисные токены допускают один запрос в минуту на кабинет.
 REQUEST_INTERVAL_SECONDS = 60
 MAX_CONCURRENT_ACCOUNTS = 3
+
+# Страница WB делится на короткие транзакции, чтобы не перегружать соединение PostgreSQL.
+DB_WRITE_CHUNK_SIZE = 2000
+DB_WRITE_MAX_RETRIES = 4
+DB_WRITE_RETRY_BASE_SECONDS = 2
+DB_WRITE_RETRY_MAX_SECONDS = 30

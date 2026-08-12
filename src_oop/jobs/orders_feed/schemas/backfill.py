@@ -8,7 +8,6 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-
 from src_oop.jobs.orders_feed.schemas.enums import (
     DataSource,
     SaleType,
