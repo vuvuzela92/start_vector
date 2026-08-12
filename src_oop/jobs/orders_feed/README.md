@@ -94,6 +94,21 @@ uv run python -m src_oop.jobs.orders_feed.backfill --source sales
 uv run python -m src_oop.jobs.orders_feed.backfill --source orders --batch-size 1000
 ```
 
+Загрузить только определённый период (обе даты включаются полностью):
+
+```bash
+uv run python -m src_oop.jobs.orders_feed.backfill --source orders --date-from "2025-01-01" --date-to "2025-03-31"
+```
+
+Период можно совместить с собственным размером батча:
+
+```bash
+uv run python -m src_oop.jobs.orders_feed.backfill --source sales --date-from "2025-01-01" --date-to "2025-12-31" --batch-size 1000
+```
+
+Можно указать только одну границу. Без `--date-from` и `--date-to` переносится
+вся доступная история выбранной таблицы. Фильтрация выполняется по `date_from`.
+
 По умолчанию используется батч из 2 000 исходных строк. Каждый батч
 сохраняется отдельной транзакцией, поэтому ранее записанные данные остаются в
 таблице при ошибке последующего батча.

@@ -428,6 +428,34 @@ class OrderFeedBackfillTest(unittest.TestCase):
         self.assertEqual(sales_params["batch_size"], 500)
         self.assertEqual(orders_params["batch_size"], 500)
 
+    def test_period_is_applied_before_batch_limit(self) -> None:
+        """Ограничивает обе legacy-таблицы включительными календарными датами."""
+        backfill = OrderFeedBackfill()
+        timezone = ZoneInfo("Europe/Moscow")
+        start, end_exclusive = backfill._resolve_period(
+            datetime(2026, 1, 10, tzinfo=timezone),
+            datetime(2026, 1, 12, tzinfo=timezone),
+        )
+        query, parameters = backfill._build_select_query(
+            BackfillSource.SALES, 0, 500, start, end_exclusive
+        )
+
+        self.assertIn("source.date_from >= :date_from", query)
+        self.assertIn("source.date_from < :date_to", query)
+        self.assertEqual(start.date(), date(2026, 1, 10))
+        self.assertEqual(end_exclusive.date(), date(2026, 1, 13))
+        self.assertEqual(parameters["date_from"], start)
+        self.assertEqual(parameters["date_to"], end_exclusive)
+
+    def test_backfill_rejects_reversed_period(self) -> None:
+        """Не запускает чтение таблиц при перепутанных границах периода."""
+        timezone = ZoneInfo("Europe/Moscow")
+        with self.assertRaisesRegex(ValueError, "не может быть позже"):
+            OrderFeedBackfill()._resolve_period(
+                datetime(2026, 2, 1, tzinfo=timezone),
+                datetime(2026, 1, 1, tzinfo=timezone),
+            )
+
     def test_python_schema_applies_required_legacy_business_rules(self) -> None:
         """Фиксирует статусы, источник, цену и тип покупателя в Pydantic-схеме."""
         source_row = {
@@ -442,7 +470,7 @@ class OrderFeedBackfillTest(unittest.TestCase):
             "country_name": "Казахстан",
             "oblast_okrug_name": "",
             "region_name": "",
-            "finished_price": 1000,
+            "total_price": 1000,
             "discount_percent": 10,
             "order_type": "Клиентский",
             "sale_id": "R123",
@@ -451,12 +479,27 @@ class OrderFeedBackfillTest(unittest.TestCase):
         row = LegacyOrderFeedRow.from_source(source_row, DataSource.SALES)
 
         self.assertEqual(row.status, "return")
-        self.assertEqual(row.seller_price, Decimal("900.00"))
+        self.assertEqual(row.seller_price, Decimal(900))
         self.assertEqual(row.sale_type, SaleType.B2C)
         self.assertEqual(row.warehouse_type, WarehouseType.SELLER)
         self.assertEqual(row.destination_district, "Казахстан")
         self.assertEqual(row.warehouse_region, "Не указано")
         self.assertEqual(row.data_source, DataSource.SALES)
+
+    def test_seller_price_is_rounded_to_whole_rubles_half_up(self) -> None:
+        """Округляет денежный результат до рубля по правилу 50 копеек вверх."""
+        cases = {
+            "311.49": Decimal(311),
+            "311.50": Decimal(312),
+            "311.85": Decimal(312),
+        }
+
+        for total_price, expected in cases.items():
+            with self.subTest(total_price=total_price):
+                result = LegacyOrderFeedRow._seller_price(
+                    {"total_price": total_price, "discount_percent": 0}
+                )
+                self.assertEqual(result, expected)
 
 
 class _FakeClient:

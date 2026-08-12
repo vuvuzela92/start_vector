@@ -204,10 +204,7 @@ class OrderFeedService:
             raise TypeError(
                 "Загрузчик токенов должен вернуть Mapping account -> token."
             )
-        tokens = {
-            name.strip().upper(): token.strip()
-            for name, token in loaded.items()
-        }
+        tokens = {name.strip().upper(): token.strip() for name, token in loaded.items()}
         if not tokens:
             raise ValueError("Не найдены токены кабинетов WB для Order Feed.")
         if account is None:

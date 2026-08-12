@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -63,7 +63,9 @@ class LegacyOrderFeedRow(BaseModel):
     ) -> LegacyOrderFeedRow:
         """Применяет согласованные правила переноса orders или sales в Python."""
         if source not in {DataSource.ORDERS, DataSource.SALES}:
-            raise ValueError(f"Источник {source} не поддерживается для legacy-backfill.")
+            raise ValueError(
+                f"Источник {source} не поддерживается для legacy-backfill."
+            )
         status = cls._status(row, source)
         updated_at = row.get("last_change_date") or row["date_from"]
         return cls(
@@ -115,4 +117,7 @@ class LegacyOrderFeedRow(BaseModel):
         total_price = Decimal(str(row.get("total_price") or 0))
         discount_percent = Decimal(str(row.get("discount_percent") or 0))
         result = total_price * (Decimal(1) - discount_percent / Decimal(100))
-        return max(result, Decimal(0)).quantize(Decimal("0.01"))
+        return max(result, Decimal(0)).quantize(
+            Decimal(1),
+            rounding=ROUND_HALF_UP,
+        )

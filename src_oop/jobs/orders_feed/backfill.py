@@ -6,7 +6,7 @@ import argparse
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, time, timedelta
 from enum import StrEnum
 from typing import Any
 
@@ -17,6 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from src_oop.core.database import Database
 from src_oop.jobs.orders_feed.exceptions import OrderFeedRepositoryError
 from src_oop.jobs.orders_feed.models import WBOrderFeedRecord
+from src_oop.jobs.orders_feed.run import MOSCOW_TZ, _parse_datetime
 from src_oop.jobs.orders_feed.schemas.backfill import LegacyOrderFeedRow
 from src_oop.jobs.orders_feed.schemas.enums import DataSource
 
@@ -88,6 +89,8 @@ class OrderFeedBackfill:
         self,
         source: BackfillSource,
         batch_size: int = DEFAULT_BATCH_SIZE,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
     ) -> BackfillResult:
         """Переносит выбранный источник, сохраняя каждый Python-батч отдельно.
 
@@ -96,10 +99,19 @@ class OrderFeedBackfill:
         """
         if batch_size <= 0:
             raise ValueError("Размер батча backfill должен быть больше нуля.")
+        period_start, period_end = self._resolve_period(date_from, date_to)
         result = BackfillResult(source=source)
-        cursor: int | tuple[date, str] = 0 if source is BackfillSource.SALES else (date.min, "")
+        cursor: int | tuple[date, str] = (
+            0 if source is BackfillSource.SALES else (date.min, "")
+        )
         while True:
-            source_rows = self._fetch_batch(source, cursor, batch_size)
+            source_rows = self._fetch_batch(
+                source,
+                cursor,
+                batch_size,
+                period_start,
+                period_end,
+            )
             if not source_rows:
                 break
             cursor = self._next_cursor(source, source_rows)
@@ -119,22 +131,58 @@ class OrderFeedBackfill:
             )
         logger.info(
             "Backfill Order Feed завершён | source=%s | batches=%s | "
-            "source_rows=%s | written_rows=%s",
+            "source_rows=%s | written_rows=%s | date_from=%s | date_to=%s",
             source.value,
             result.batches,
             result.source_rows,
             result.written_rows,
+            period_start,
+            period_end,
         )
         return result
+
+    def _resolve_period(
+        self,
+        date_from: datetime | None,
+        date_to: datetime | None,
+    ) -> tuple[datetime | None, datetime | None]:
+        """Готовит включительные пользовательские даты к полуоткрытому SQL-периоду.
+
+        `date_to` включает весь указанный календарный день. Поэтому в SQL
+        передаётся начало следующего дня и используется строгое условие `<`.
+        """
+        start = date_from
+        end_exclusive = date_to
+        if start is not None and start.tzinfo is None:
+            start = start.replace(tzinfo=MOSCOW_TZ)
+        if end_exclusive is not None:
+            if end_exclusive.tzinfo is None:
+                end_exclusive = end_exclusive.replace(tzinfo=MOSCOW_TZ)
+            end_exclusive = datetime.combine(
+                end_exclusive.date() + timedelta(days=1),
+                time.min,
+                tzinfo=end_exclusive.tzinfo,
+            )
+        if start is not None and end_exclusive is not None and start >= end_exclusive:
+            raise ValueError("Начало периода backfill не может быть позже конца.")
+        return start, end_exclusive
 
     def _fetch_batch(
         self,
         source: BackfillSource,
         cursor: int | tuple[date, str],
         batch_size: int,
+        date_from: datetime | None,
+        date_to: datetime | None,
     ) -> list[Mapping[str, Any]]:
         """Читает только один keyset-батч и отбрасывает строки без article/FK и ключей."""
-        query, parameters = self._build_select_query(source, cursor, batch_size)
+        query, parameters = self._build_select_query(
+            source,
+            cursor,
+            batch_size,
+            date_from,
+            date_to,
+        )
         try:
             with Database.get_engine().connect() as connection:
                 return list(connection.execute(text(query), parameters).mappings())
@@ -191,13 +239,21 @@ class OrderFeedBackfill:
         source: BackfillSource,
         cursor: int | tuple[date, str],
         batch_size: int,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
     ) -> tuple[str, dict[str, object]]:
         """Формирует параметризованный SELECT без бизнес-преобразований и OFFSET."""
         common_filter = """
             source.srid IS NOT NULL
             AND BTRIM(source.srid) <> ''
             AND source.date_from IS NOT NULL
+            AND (:date_from IS NULL OR source.date_from >= :date_from)
+            AND (:date_to IS NULL OR source.date_from < :date_to)
         """
+        period_parameters: dict[str, object] = {
+            "date_from": date_from,
+            "date_to": date_to,
+        }
         if source is BackfillSource.SALES:
             query = f"""
 SELECT source.id AS cursor_id, {SOURCE_COLUMNS}, source.sale_id
@@ -207,7 +263,11 @@ WHERE source.id > :cursor_id AND {common_filter}
 ORDER BY source.id
 LIMIT :batch_size
 """
-            return query, {"cursor_id": cursor, "batch_size": batch_size}
+            return query, {
+                "cursor_id": cursor,
+                "batch_size": batch_size,
+                **period_parameters,
+            }
         cursor_date, cursor_srid = cursor
         query = f"""
 SELECT source.date AS cursor_date, {SOURCE_COLUMNS}, source.is_cancel
@@ -223,6 +283,7 @@ LIMIT :batch_size
             "cursor_date": cursor_date,
             "cursor_srid": cursor_srid,
             "batch_size": batch_size,
+            **period_parameters,
         }
 
     def _next_cursor(
@@ -243,7 +304,9 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
     )
-    parser = argparse.ArgumentParser(description="Backfill WB Order Feed из legacy-таблиц")
+    parser = argparse.ArgumentParser(
+        description="Backfill WB Order Feed из legacy-таблиц"
+    )
     parser.add_argument(
         "--source",
         required=True,
@@ -256,12 +319,25 @@ def main() -> None:
         default=DEFAULT_BATCH_SIZE,
         help=f"Число исходных строк в памяти, по умолчанию {DEFAULT_BATCH_SIZE}",
     )
+    parser.add_argument(
+        "--date-from",
+        help="Начало включительно: YYYY-MM-DD, 'YYYY-MM-DD HH:MM' или ISO",
+    )
+    parser.add_argument(
+        "--date-to",
+        help="Конечный календарный день включительно в удобном формате даты",
+    )
     args = parser.parse_args()
-    OrderFeedBackfill().run(BackfillSource(args.source), args.batch_size)
+    OrderFeedBackfill().run(
+        source=BackfillSource(args.source),
+        batch_size=args.batch_size,
+        date_from=_parse_datetime(args.date_from),
+        date_to=_parse_datetime(args.date_to),
+    )
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        logger.info("Программа останолвенна вручную")
+        logger.info("Backfill Order Feed остановлен пользователем; сохранённые батчи остаются в БД.")
