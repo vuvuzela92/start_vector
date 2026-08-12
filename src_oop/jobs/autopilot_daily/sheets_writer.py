@@ -5,9 +5,11 @@ import math
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 
 import gspread
 import pandas as pd
+import requests
 from gspread.utils import a1_to_rowcol, rowcol_to_a1
 
 from src_oop.jobs.autopilot_daily.config import (
@@ -164,11 +166,7 @@ class AutopilotDailySheetsWriter:
                     DAILY_SHEET.avg_position_current_range_end,
                     len(current_rows),
                 )
-                self.worksheet.update(
-                    current_range,
-                    current_rows,
-                    value_input_option="USER_ENTERED",
-                )
+                self._update_range("avg_position_current", current_range, current_rows)
             else:
                 current_range = "не записывался"
             history_rows = [[self._sheet_value(value)] for value in history_positions.values()]
@@ -178,11 +176,7 @@ class AutopilotDailySheetsWriter:
                     DAILY_SHEET.avg_position_history_column,
                     len(history_rows),
                 )
-                self.worksheet.update(
-                    history_range,
-                    history_rows,
-                    value_input_option="USER_ENTERED",
-                )
+                self._update_range("avg_position_history", history_range, history_rows)
             else:
                 history_range = "не записывался"
             logger.info(
@@ -295,11 +289,13 @@ class AutopilotDailySheetsWriter:
                 return DailyMetricWriteResult(metric_name=metric_name, written=True, rows=len(rows))
             except gspread.exceptions.APIError as error:
                 status_code = getattr(getattr(error, "response", None), "status_code", None)
-                if status_code == 429 and attempt < max_retries:
-                    wait_seconds = attempt * 5
+                if self._is_retryable_google_error(error) and attempt < max_retries:
+                    wait_seconds = self._retry_wait_seconds(attempt)
                     logger.warning(
-                        "Google Sheets вернул 429 при записи дневной метрики, повторяем: metric=%s attempt=%s/%s wait_seconds=%s",
+                        "Google Sheets временно не принял запись дневной метрики, повторяем попытку: metric=%s range=%s status_code=%s attempt=%s/%s wait_seconds=%s",
                         metric_name,
+                        target_range,
+                        status_code,
                         attempt,
                         max_retries,
                         wait_seconds,
@@ -308,6 +304,27 @@ class AutopilotDailySheetsWriter:
                     continue
                 logger.warning(
                     "Не удалось записать дневную метрику в Google Sheets, сценарий продолжает остальные метрики: metric=%s range=%s error=%s",
+                    metric_name,
+                    target_range,
+                    error,
+                )
+                return DailyMetricWriteResult(metric_name=metric_name, written=False, error_message=str(error))
+            except requests.exceptions.RequestException as error:
+                if attempt < max_retries:
+                    wait_seconds = self._retry_wait_seconds(attempt)
+                    logger.warning(
+                        "Сетевое соединение с Google Sheets прервано при записи дневной метрики, повторяем попытку: metric=%s range=%s attempt=%s/%s wait_seconds=%s error=%s",
+                        metric_name,
+                        target_range,
+                        attempt,
+                        max_retries,
+                        wait_seconds,
+                        error,
+                    )
+                    time.sleep(wait_seconds)
+                    continue
+                logger.warning(
+                    "Не удалось записать дневную метрику в Google Sheets после сетевой ошибки, сценарий продолжает остальные метрики: metric=%s range=%s error=%s",
                     metric_name,
                     target_range,
                     error,
@@ -343,6 +360,29 @@ class AutopilotDailySheetsWriter:
         """
         _, column_index = a1_to_rowcol(f"{start_column}1")
         return rowcol_to_a1(1, column_index + width - 1).rstrip("1")
+
+    @staticmethod
+    def _is_retryable_google_error(error: gspread.exceptions.APIError) -> bool:
+        """Определяет, стоит ли повторять ошибку Google Sheets API.
+
+        Бизнес-логика:
+        дневной сценарий пишет десятки крупных диапазонов, и временные ответы
+        Google Sheets вроде 429 или 5xx не должны приводить к пропуску метрики
+        без повторной попытки. Неретрайбл-ошибки, например неверный диапазон,
+        возвращаются сразу, чтобы не ждать без пользы.
+        """
+        status_code = getattr(getattr(error, "response", None), "status_code", None)
+        return status_code in {429, 500, 502, 503, 504}
+
+    @staticmethod
+    def _retry_wait_seconds(attempt: int) -> int:
+        """Считает паузу перед повторной записью в Google Sheets.
+
+        Бизнес-логика:
+        небольшая возрастающая пауза снижает риск повторного 429 или повторного
+        сетевого обрыва, но не задерживает дневной сценарий слишком надолго.
+        """
+        return attempt * 10
 
     @classmethod
     def _dataframe_to_rows(cls, dataframe: pd.DataFrame) -> list[list[object]]:
@@ -394,10 +434,16 @@ class AutopilotDailySheetsWriter:
 
         Бизнес-логика:
         Google Sheets не должен получать служебные pandas/float значения
-        отсутствия данных; такие значения заменяются на пустую строку.
+        отсутствия данных или Decimal из PostgreSQL; пропуски заменяются на
+        пустую строку, а Decimal переводится в обычное число, которое gspread
+        может сериализовать в JSON без падения дневного сценария.
         """
         if value is None:
             return ""
+        if isinstance(value, Decimal):
+            if value == value.to_integral_value():
+                return int(value)
+            return float(value)
         if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
             return ""
         return value

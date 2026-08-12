@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 
 import gspread
 import pandas as pd
@@ -84,7 +85,10 @@ class AutopilotDailyUnitUpdater:
 
         order_map = orders.set_index("local_vendor_code").T.to_dict("list")
         empty_line = [0] * (len(next(iter(order_map.values()))) if order_map else 0)
-        output_rows = [order_map.get(wild, empty_line) for wild in wilds_ordered]
+        output_rows = [
+            [self._sheet_value(value) for value in order_map.get(wild, empty_line)]
+            for wild in wilds_ordered
+        ]
         if not output_rows:
             return 0
 
@@ -196,3 +200,22 @@ class AutopilotDailyUnitUpdater:
         if header not in headers:
             raise ValueError(f"В UNIT не найдена обязательная колонка: {header}")
         return headers.index(header) + 1
+
+    @staticmethod
+    def _sheet_value(value: object) -> object:
+        """Готовит значение UNIT/Сопост для безопасной записи в Google Sheets.
+
+        Бизнес-логика:
+        заказы Сопоста приходят из PostgreSQL и могут иметь тип Decimal после
+        агрегирования. Google Sheets API принимает обычные числа и строки, но
+        не сериализует Decimal, поэтому numeric-значения переводятся в int/float
+        до отправки, чтобы вспомогательный UNIT-блок не падал после успешной
+        записи основных метрик ПУ.
+        """
+        if value is None or pd.isna(value):
+            return ""
+        if isinstance(value, Decimal):
+            if value == value.to_integral_value():
+                return int(value)
+            return float(value)
+        return value
