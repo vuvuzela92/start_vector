@@ -8,6 +8,7 @@ from src_oop.jobs.add_new_items.run import add_new_items_run
 from src_oop.jobs.advert_info.run import advert_info
 from src_oop.jobs.advert.run import advert_stat
 from src_oop.jobs.advert_spend.run import advert_spend
+from src_oop.jobs.autopilot_daily.run import autopilot_daily_run
 from src_oop.jobs.annual_procurement_plan.run import (
     transport_data_to_annual_procurement_plan,
     transport_parfume_data_to_annual_procurement_plan,
@@ -42,6 +43,19 @@ from src_oop.jobs.fin_reports_analyze.run import (
     update_weekly_profit_report,
 )
 from src_oop.jobs.fbo_supplies.run import fbo_supplies_run
+from src_oop.jobs.fbs_warehouses.run import (
+    create_fbs_warehouse,
+    delete_fbs_warehouse,
+    import_created_fbs_warehouse,
+    import_existing_fbs_warehouse,
+    list_fbs_warehouses,
+    list_wb_offices,
+    sync_fbs_warehouses_from_wb,
+)
+from src_oop.jobs.fbs_stocks.run import (
+    apply_new_fbs_stocks_from_unit,
+    update_fbs_stocks_in_unit,
+)
 from src_oop.jobs.logistic_ved.reverse_run import logistic_ved_reverse_run
 from src_oop.jobs.logistic_ved.run import logistic_ved_full_run, logistic_ved_run
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
@@ -195,6 +209,42 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(wms_stocks_run),
         "desc": "Выгрузка данных об остатках из WMS",
     },
+    "list_wb_offices": {
+        "func": smart_run(list_wb_offices),
+        "desc": "Получение списка офисов WB для выбора officeId при создании FBS-склада",
+    },
+    "list_fbs_warehouses": {
+        "func": smart_run(list_fbs_warehouses),
+        "desc": "Получение списка FBS-складов продавца WB",
+    },
+    "create_fbs_warehouse": {
+        "func": smart_run(create_fbs_warehouse),
+        "desc": "Создание FBS-склада продавца WB по выбранному officeId",
+    },
+    "delete_fbs_warehouse": {
+        "func": smart_run(delete_fbs_warehouse),
+        "desc": "Удаление FBS-склада продавца WB по warehouseId",
+    },
+    "import_created_fbs_warehouse": {
+        "func": smart_run(import_created_fbs_warehouse),
+        "desc": "Создание или обновление справочника warehouses_fbs из JSON ответа WB",
+    },
+    "import_existing_fbs_warehouse": {
+        "func": smart_run(import_existing_fbs_warehouse),
+        "desc": "Добавление существующего WB-склада в справочник warehouses_fbs",
+    },
+    "sync_fbs_warehouses_from_wb": {
+        "func": smart_run(sync_fbs_warehouses_from_wb),
+        "desc": "Дозаполнение справочника warehouses_fbs текущими данными складов WB",
+    },
+    "update_fbs_stocks_in_unit": {
+        "func": smart_run(update_fbs_stocks_in_unit),
+        "desc": "Обновление текущих FBS-остатков WB в UNIT 2.0 (tested)",
+    },
+    "apply_new_fbs_stocks_from_unit": {
+        "func": smart_run(apply_new_fbs_stocks_from_unit),
+        "desc": "Отправка новых FBS-остатков из UNIT в WB",
+    },
     # UNIT: сервисные обновления справочников, статусов и ценовых витрин.
     "update_adv_participants_to_gs": {
         "func": smart_run(update_adv_participants_to_gs),
@@ -234,6 +284,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "autopilot_hourly_run": {
         "func": smart_run(autopilot_hourly_run),
         "desc": "Почасовое обновление метрик панели управления автопилотом",
+    },
+    "autopilot_daily_run": {
+        "func": smart_run(autopilot_daily_run),
+        "desc": "Дневное обновление завершенных дней панели управления автопилотом и связанных UNIT-блоков",
     },
     # Логистика ВЭД
     "logistic_ved_run": {
