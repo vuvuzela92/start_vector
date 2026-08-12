@@ -15,6 +15,7 @@ from src_oop.jobs.autopilot.config import (
     AUTOPILOT_STATUS_CELL,
     AUTOPILOT_VALUES_FIRST_ROW,
     METRIC_TO_BASE_COLUMN,
+    METRICS_WITHOUT_DATE_OFFSET,
 )
 from src_oop.jobs.autopilot.models import MetricValues
 
@@ -95,10 +96,7 @@ class AutopilotSheetsWriter:
                 continue
             rows.append([self._sheet_value(values_by_article[article_id])])
 
-        target_column = self._offset_column(
-            METRIC_TO_BASE_COLUMN[metric_name],
-            self.date_column_offset,
-        )
+        target_column = self._target_column(metric_name)
         last_row = self.values_first_row + len(rows) - 1
         target_range = f"{target_column}{self.values_first_row}:{target_column}{last_row}"
 
@@ -159,6 +157,23 @@ class AutopilotSheetsWriter:
             )
         except Exception:
             logger.exception("Не удалось обновить служебную ячейку статуса ПУ.")
+
+    def _target_column(self, metric_name: str) -> str:
+        """
+        Определяет итоговую колонку записи метрики ПУ.
+
+        Бизнес-логика:
+        большинство hourly-метрик пишутся в колонку текущего дневного блока со
+        смещением, но `unit_free_stock` является моментальным снимком UNIT и
+        должен попадать в фиксированную колонку `DU` без смещения по датам.
+        """
+        base_column = METRIC_TO_BASE_COLUMN[metric_name]
+        if metric_name in METRICS_WITHOUT_DATE_OFFSET:
+            return base_column
+        return AutopilotSheetsWriter._offset_column(
+            base_column,
+            self.date_column_offset,
+        )
 
     @staticmethod
     def _offset_column(column: str, offset: int) -> str:

@@ -68,7 +68,12 @@ class AutopilotDailyService:
         articles = writer.read_articles()
         summary.articles_total = len(articles)
 
-        self._write_current_metrics(writer, current_metrics, articles, summary)
+        self._write_current_metrics(
+            writer,
+            current_metrics,
+            articles,
+            summary,
+        )
         self._write_history_metrics(writer, history_metrics, articles, summary)
         writer.update_status(datetime.now())
 
@@ -108,6 +113,9 @@ class AutopilotDailyService:
         Бизнес-логика:
         каждая текущая метрика обновляет свой недельный блок. Ошибка одной
         метрики фиксируется в summary, а остальные метрики продолжают запись.
+        Метрика `unit_free_stock` пропускается настройкой writer, потому что
+        свободный остаток относится к текущему снимку UNIT и обновляется
+        почасовым сценарием, а не дневным блоком завершенных дней.
         """
         for metric_name in CURRENT_METRIC_TO_BASE_COLUMN:
             summary.metrics_attempted += 1

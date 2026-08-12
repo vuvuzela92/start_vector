@@ -15,10 +15,9 @@ from src_oop.jobs.autopilot.cometa_adv_spend import CometaAdvSpendClient
 from src_oop.jobs.autopilot.config import (
     ENABLE_WB_ONLINE_PRICE_PARSING,
     MAX_CONCURRENT_ACCOUNTS,
-    UNIT_ARTICLE_COLUMN_INDEX,
+    UNIT_ARTICLE_COLUMN_NAME,
     UNIT_EXPECTED_REMAINS_HEADER,
     UNIT_MARGIN_COLUMN_NAME,
-    UNIT_REMAINS_COLUMN_INDEX,
     autopilot_gs,
     unit_gs,
 )
@@ -125,11 +124,8 @@ class AutopilotHourlyService:
 
         remaining_metrics: dict[str, MetricValues] = {}
         remaining_metrics["adv_spend"] = adv_spend
-        logger.info(
-            "Метрика свободного остатка UNIT собрана, но запись в ПУ пропущена до подтверждения колонки: "
-            "rows=%s",
-            len(unit_remains),
-        )
+        remaining_metrics["unit_free_stock"] = unit_remains
+        logger.info("Свободные остатки UNIT подготовлены для почасовой записи в ПУ: rows=%s", len(unit_remains))
         remaining_metrics.update(calculation_metrics)
         remaining_metrics.update(advert_metrics)
         remaining_metrics["organic"] = organic
@@ -293,32 +289,75 @@ class AutopilotHourlyService:
         Читает свободные остатки из UNIT.
 
         Бизнес-логика:
-        эти данные заполняют метрику `unit_free_stock` в ПУ. Если остаток отсутствует
-        или не является числом, по артикулу остается пропуск.
+        эти данные заполняют метрику `unit_free_stock` в ПУ. Колонки UNIT часто
+        смещаются, поэтому сценарий ищет `Артикул` и `Свободный остаток
+        (сервис)` по заголовкам. Если нужный заголовок, остаток или артикул
+        отсутствует, по артикулу остается пропуск.
         """
         worksheet = connector.sheet_title
-        skus = worksheet.col_values(UNIT_ARTICLE_COLUMN_INDEX)
-        remains = worksheet.col_values(UNIT_REMAINS_COLUMN_INDEX)
-        if remains and remains[0] != UNIT_EXPECTED_REMAINS_HEADER:
+        headers = worksheet.row_values(1)
+        article_column_index = AutopilotHourlyService._find_unit_column_index(
+            headers,
+            UNIT_ARTICLE_COLUMN_NAME,
+        )
+        remains_column_index = AutopilotHourlyService._find_unit_column_index(
+            headers,
+            UNIT_EXPECTED_REMAINS_HEADER,
+        )
+        if article_column_index is None or remains_column_index is None:
             logger.warning(
-                "В UNIT найден неожиданный заголовок колонки остатков: expected=%s actual=%s",
+                "В UNIT не найдены колонки для свободного остатка, метрика unit_free_stock будет пропущена: "
+                "article_header=%s remains_header=%s",
+                UNIT_ARTICLE_COLUMN_NAME,
                 UNIT_EXPECTED_REMAINS_HEADER,
-                remains[0],
             )
+            return {}
+
+        skus = worksheet.col_values(article_column_index)
+        remains = worksheet.col_values(remains_column_index)
 
         result: MetricValues = {}
         for index, sku in enumerate(skus[1:], start=1):
             sku_text = str(sku).strip()
             if not sku_text.isdigit() or index >= len(remains):
                 continue
-            value = str(remains[index]).strip()
+            value = str(remains[index]).strip().replace(" ", "")
             if value == "":
                 continue
             try:
-                result[int(sku_text)] = int(value)
+                result[int(sku_text)] = int(float(value.replace(",", ".")))
             except ValueError:
                 continue
         return result
+
+    @staticmethod
+    def _find_unit_column_index(headers: list[str], expected_header: str) -> int | None:
+        """
+        Ищет 1-based индекс колонки UNIT по названию заголовка.
+
+        Бизнес-логика:
+        UNIT часто меняет порядок колонок, поэтому сценарий должен опираться на
+        смысловое название поля, а не на фиксированную букву. Нормализация
+        пробелов и переносов строк защищает запись свободного остатка от
+        небольших визуальных изменений шапки таблицы.
+        """
+        normalized_expected = AutopilotHourlyService._normalize_unit_header(expected_header)
+        for index, header in enumerate(headers, start=1):
+            if AutopilotHourlyService._normalize_unit_header(header) == normalized_expected:
+                return index
+        return None
+
+    @staticmethod
+    def _normalize_unit_header(value: object) -> str:
+        """
+        Нормализует заголовок UNIT для надежного сравнения.
+
+        Бизнес-логика:
+        переносы строк, двойные пробелы и неразрывные пробелы в Google Sheets
+        не должны ломать поиск колонок `Артикул` и `Свободный остаток
+        (сервис)`, если само название поля осталось тем же.
+        """
+        return " ".join(str(value).replace("\xa0", " ").split()).casefold()
 
     @staticmethod
     def _load_unit_margins(connector: GoogleTabs) -> dict[int, float]:

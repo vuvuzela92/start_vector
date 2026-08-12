@@ -32,10 +32,12 @@ AUTOPILOT_VALUES_FIRST_ROW = 4
 AUTOPILOT_DATE_COLUMN_OFFSET = 7
 AUTOPILOT_STATUS_CELL = "A2"
 
-UNIT_ARTICLE_COLUMN_INDEX = 1
-UNIT_REMAINS_COLUMN_INDEX = 51
+UNIT_ARTICLE_COLUMN_NAME = "Артикул"
 UNIT_EXPECTED_REMAINS_HEADER = "Свободный остаток\n(сервис)"
 UNIT_MARGIN_COLUMN_NAME = "Мар"
+
+# Часть метрик является текущим снимком, а не дневным рядом, поэтому пишется в базовую колонку без смещения.
+METRICS_WITHOUT_DATE_OFFSET = {"unit_free_stock"}
 
 # Метрики ПУ пишутся в фиксированные колонки. Значение смещается на AUTOPILOT_DATE_COLUMN_OFFSET.
 METRIC_TO_BASE_COLUMN: dict[str, str] = {
