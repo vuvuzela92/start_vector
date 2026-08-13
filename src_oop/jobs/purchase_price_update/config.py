@@ -54,7 +54,7 @@ PURCHASE_PRICE_UPDATE_QUERY = text(
     """
     WITH latest_purchase_price AS (
         SELECT DISTINCT ON (local_vendor_code)
-            supply_date,
+            update_document_datetime,
             guid,
             document_number,
             local_vendor_code,
@@ -70,9 +70,13 @@ PURCHASE_PRICE_UPDATE_QUERY = text(
           AND local_vendor_code LIKE 'wild%'
           AND supplier_name != 'РВБ ООО'
           AND quantity != 0
-          AND supply_date >= CURRENT_DATE - (:days_count * INTERVAL '1 day')
-          AND supply_date < CURRENT_DATE
-        ORDER BY local_vendor_code, supply_date DESC
+          -- Поле update_document_datetime хранит точное время корректировки документа.
+          -- Для бизнес-сценария нам важно видеть изменения и за текущий день тоже,
+          -- поэтому оставляем календарное окно и включаем его верхнюю границу до
+          -- начала следующих суток, а не обрезаем всё по полуночи текущего дня.
+          AND update_document_datetime >= CURRENT_DATE - (:days_count * INTERVAL '1 day')
+          AND update_document_datetime < CURRENT_DATE + INTERVAL '1 day'
+        ORDER BY local_vendor_code, update_document_datetime DESC
     ),
     prepared_purchase_price AS (
         SELECT
@@ -93,7 +97,7 @@ PURCHASE_PRICE_UPDATE_QUERY = text(
         FROM latest_purchase_price lpp
     )
     SELECT
-        ppp.supply_date,
+        ppp.update_document_datetime,
         ppp.guid,
         ppp.document_number,
         ppp.local_vendor_code,
@@ -140,7 +144,7 @@ NEVER_CHANGE_PRICE_COLUMN = "Неизменяемая цена"
 # Минимальный набор колонок, который обязан прийти из SQL-запроса.
 # Если чего-то не хватает, задачу безопаснее остановить, чем продолжать расчет.
 REQUIRED_DB_COLUMNS = (
-    "supply_date",
+    "update_document_datetime",
     "guid",
     "document_number",
     "local_vendor_code",
@@ -168,7 +172,7 @@ REPORT_COLUMNS = (
     "unit_price",
     "price_per_item",
     "price_diff_rub",
-    "supply_date",
+    "update_document_datetime",
     "insert_date",
 )
 

@@ -325,8 +325,8 @@ def build_report_dataframe(changed_rows: pd.DataFrame) -> pd.DataFrame:
     """
 
     report_dataframe = changed_rows.copy()
-    report_dataframe["supply_date"] = pd.to_datetime(
-        report_dataframe["supply_date"],
+    report_dataframe["update_document_datetime"] = pd.to_datetime(
+        report_dataframe["update_document_datetime"],
         errors="coerce",
     ).dt.date.astype(str)
     report_dataframe["insert_date"] = datetime.now().strftime("%Y-%m-%d")
