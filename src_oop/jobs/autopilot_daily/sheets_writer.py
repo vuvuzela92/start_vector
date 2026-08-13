@@ -4,7 +4,7 @@ import logging
 import math
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import gspread
@@ -46,15 +46,18 @@ class AutopilotDailySheetsWriter:
     пропускаются, а ошибки одной метрики не прерывают весь дневной сценарий.
     """
 
-    def __init__(self, worksheet: gspread.Worksheet) -> None:
+    def __init__(self, worksheet: gspread.Worksheet, today: date | None = None) -> None:
         """Создает writer для конкретного листа ПУ.
 
         Бизнес-логика:
         хранит ссылку на worksheet и параметры строк, чтобы все записи дневного
-        сценария попадали в один и тот же пользовательский лист ПУ.
+        сценария попадали в один и тот же пользовательский лист ПУ. Дата
+        запуска нужна, чтобы явно выстроить последние завершенные дни и не
+        сдвигать показатели, если в БД отсутствует один из дней.
         """
         self.worksheet = worksheet
         self.values_first_row = DAILY_SHEET.values_first_row
+        self.today = today or date.today()
 
     def read_articles(self) -> list[int]:
         """Читает артикула ПУ в пользовательском порядке.
@@ -102,14 +105,14 @@ class AutopilotDailySheetsWriter:
             logger.info("Текущая метрика дневного ПУ пропущена: metric=%s", metric_name)
             return DailyMetricWriteResult(metric_name=metric_name, written=True, rows=0)
 
-        metric_frame = dataframe.pivot(
+        metric_frame = dataframe.copy()
+        metric_frame["date"] = pd.to_datetime(metric_frame["date"]).dt.date
+        metric_frame = metric_frame.pivot(
             columns="date",
             index="article_id",
             values=metric_name,
         ).reindex(articles)
-        metric_frame = metric_frame.reindex(sorted(metric_frame.columns), axis=1)
-        metric_frame = metric_frame.iloc[:, -DAILY_SHEET.current_days_width :]
-        metric_frame = self._pad_columns(metric_frame, DAILY_SHEET.current_days_width)
+        metric_frame = self._align_to_completed_dates(metric_frame, DAILY_SHEET.current_days_width)
         rows = self._dataframe_to_rows(metric_frame)
         start_column = CURRENT_METRIC_TO_BASE_COLUMN[metric_name]
         end_column = self._calculate_range_end(start_column, DAILY_SHEET.current_days_width)
@@ -155,7 +158,7 @@ class AutopilotDailySheetsWriter:
         результат записи продажных показателей.
         """
         try:
-            current_positions = self._normalize_width(
+            current_positions = self._align_to_completed_dates(
                 current_positions,
                 DAILY_SHEET.avg_position_current_width,
             )
@@ -360,6 +363,38 @@ class AutopilotDailySheetsWriter:
         """
         _, column_index = a1_to_rowcol(f"{start_column}1")
         return rowcol_to_a1(1, column_index + width - 1).rstrip("1")
+
+    def _align_to_completed_dates(self, dataframe: pd.DataFrame, width: int) -> pd.DataFrame:
+        """Выравнивает табличный блок по последним завершенным датам.
+
+        Бизнес-логика:
+        дневная выгрузка должна писать каждую дату в свою колонку ПУ. Если в
+        PostgreSQL нет данных за один из дней, эта дата остается пустой
+        колонкой, а последующие дни не сдвигаются влево.
+        """
+        if dataframe.empty:
+            return dataframe
+        normalized = dataframe.copy()
+        normalized.columns = [
+            pd.to_datetime(column).date()
+            if isinstance(column, (date, datetime, pd.Timestamp))
+            else column
+            for column in normalized.columns
+        ]
+        return normalized.reindex(self._completed_dates(width), axis=1)
+
+    def _completed_dates(self, width: int) -> list[date]:
+        """Возвращает даты последних завершенных дней для daily-блока.
+
+        Бизнес-логика:
+        текущий день принадлежит `autopilot_hourly_run`, поэтому daily всегда
+        строит сетку от `today - width` до вчера включительно.
+        """
+        first_day = self.today - timedelta(days=width)
+        return [
+            first_day + timedelta(days=offset)
+            for offset in range(width)
+        ]
 
     @staticmethod
     def _is_retryable_google_error(error: gspread.exceptions.APIError) -> bool:

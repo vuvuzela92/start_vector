@@ -60,6 +60,7 @@ from src_oop.jobs.logistic_ved.reverse_run import logistic_ved_reverse_run
 from src_oop.jobs.logistic_ved.run import logistic_ved_full_run, logistic_ved_run
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 from src_oop.jobs.purchase_price_update.run import purchase_price_update_run
+from src_oop.jobs.returns_to_customers.run import returns_to_customers
 from src_oop.jobs.unit.competitors import update_competitors_prices
 from src_oop.jobs.unit.update_adv_participants import update_adv_participants_to_gs
 from src_oop.jobs.unit.update_wild_statuses import update_wild_statuses
@@ -301,5 +302,9 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "logistic_ved_reverse_run": {
         "func": smart_run(logistic_ved_reverse_run),
         "desc": "Обратная отправка логистических полей из ОТЧЁТ_2.0 в Заказы белые ТЕСТ по ключу ORDER_LINE_ID",
+    },
+    "returns_to_customers": {
+        "func": smart_run(returns_to_customers),
+        "desc": "Выгрузка заявок по возвратам покупателей WB в Google Sheets",
     },
 }
