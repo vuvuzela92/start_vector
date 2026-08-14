@@ -60,6 +60,7 @@ from src_oop.jobs.fbs_stocks.run import (
 from src_oop.jobs.logistic_ved.reverse_run import logistic_ved_reverse_run
 from src_oop.jobs.logistic_ved.run import logistic_ved_full_run, logistic_ved_run
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
+from src_oop.jobs.orders_feed.run import order_feed
 from src_oop.jobs.purchase_price_update.run import purchase_price_update_run
 from src_oop.jobs.returns_to_customers.run import returns_to_customers
 from src_oop.jobs.unit.competitors import update_competitors_prices
@@ -95,6 +96,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "orders_report_today": {
         "func": smart_run(orders_report_today),
         "desc": "Запуск обновления отчета о заказах за сегодня",
+    },
+    "order_feed": {
+        "func": smart_run(order_feed),
+        "desc": "Почасовое обновление WB Order Feed за доступные последние 31 сутки",
     },
     # Старый контур Google Sheets и управленческих витрин.
     "update_penalties_in_gs_purchase_russia": {

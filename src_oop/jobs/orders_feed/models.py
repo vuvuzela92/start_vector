@@ -1,0 +1,176 @@
+"""Модели обмена данными внутри сценария WB Order Feed."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from decimal import Decimal
+from enum import StrEnum
+from typing import NotRequired, TypedDict
+
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Identity,
+    Index,
+    Numeric,
+    String,
+    Table,
+    text,
+)
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from src_oop.jobs.orders_feed.config import TABLE_NAME
+from src_oop.jobs.orders_feed.schemas.enums import (
+    DataSource,
+    SaleType,
+    WarehouseType,
+)
+
+
+class OrderFeedPaginationRequest(TypedDict):
+    """Типизирует offset-пагинацию запроса, где snapshotTime отсутствует на первой странице."""
+
+    offset: int
+    limit: int
+    snapshotTime: NotRequired[str]
+
+
+class OrderFeedSelectedPeriodRequest(TypedDict):
+    """Типизирует границы периода по времени текущего статуса заказа."""
+
+    start: str
+    end: str
+
+
+class OrderFeedRequest(TypedDict):
+    """Описывает полное JSON-тело запроса отчёта без товарных фильтров."""
+
+    selectedPeriod: OrderFeedSelectedPeriodRequest
+    nmIds: list[int]
+    subjectIds: list[int]
+    brandNames: list[str]
+    tagIds: list[int]
+    pagination: OrderFeedPaginationRequest
+
+
+def _enum_values(enum_class: type[StrEnum]) -> list[str]:
+    """Передаёт SQLAlchemy значения enum, чтобы PostgreSQL хранил понятные строки, а не имена Python."""
+    return [item.value for item in enum_class]
+
+
+class OrderFeedBase(DeclarativeBase):
+    """Базовый класс метаданных для управляемого создания таблицы Order Feed."""
+
+
+# Ссылка нужна SQLAlchemy для построения FK, но repository намеренно не создаёт таблицу article.
+ARTICLE_REFERENCE_TABLE = Table(
+    "article",
+    OrderFeedBase.metadata,
+    Column("nm_id", BigInteger, primary_key=True),
+)
+
+
+class WBOrderFeedRecord(OrderFeedBase):
+    """Декларативная модель строки PostgreSQL-таблицы WB Order Feed."""
+
+    __tablename__ = TABLE_NAME
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    account: Mapped[str | None] = mapped_column(String(255))
+    srid: Mapped[str] = mapped_column(String(255), nullable=False)
+    nm_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey(
+            "article.nm_id",
+            name="fk_wb_order_feed_nm_id_article",
+            onupdate="CASCADE",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    chrt_id: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    # Внешние справочники WB храним как строки: API может добавить новые значения.
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    cancel_type: Mapped[str | None] = mapped_column(String(64))
+    warehouse_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    warehouse_region: Mapped[str] = mapped_column(String(255), nullable=False)
+    warehouse_type: Mapped[WarehouseType] = mapped_column(
+        Enum(
+            WarehouseType,
+            name="wb_order_feed_warehouse_type",
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+    )
+    destination_city: Mapped[str] = mapped_column(String(255), nullable=False)
+    destination_district: Mapped[str] = mapped_column(String(255), nullable=False)
+    seller_price: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    sale_type: Mapped[SaleType] = mapped_column(
+        Enum(SaleType, name="wb_order_feed_sale_type", values_callable=_enum_values),
+        nullable=False,
+    )
+    data_source: Mapped[DataSource] = mapped_column(
+        Enum(DataSource, name="wb_data_source", values_callable=_enum_values),
+        nullable=False,
+    )
+    snapshot_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    loaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index(
+            "uq_wb_order_feed_account_srid",
+            "account",
+            "srid",
+            unique=True,
+            postgresql_where=text("account IS NOT NULL"),
+        ),
+        Index(
+            "uq_wb_order_feed_legacy_source_srid",
+            "data_source",
+            "srid",
+            unique=True,
+            postgresql_where=text("account IS NULL"),
+        ),
+        Index("ix_wb_order_feed_account_updated_at", "account", "updated_at"),
+        Index("ix_wb_order_feed_nm_id", "nm_id"),
+        Index("ix_wb_order_feed_status", "status"),
+    )
+
+
+@dataclass(slots=True)
+class OrderFeedSaveResult:
+    """Содержит результат upsert одной страницы отчёта в PostgreSQL."""
+
+    input_rows: int
+    written_rows: int
+    dropped_missing_key_rows: int = 0
+    collapsed_duplicate_rows: int = 0
+
+
+@dataclass(slots=True)
+class OrderFeedRunSummary:
+    """Сводит метрики полной загрузки Order Feed по выбранным кабинетам."""
+
+    accounts_total: int = 0
+    pages_received: int = 0
+    raw_rows: int = 0
+    normalized_rows: int = 0
+    written_rows: int = 0
+    dropped_missing_key_rows: int = 0
+    collapsed_duplicate_rows: int = 0
+    total_retry_count: int = 0
+    failed_accounts: list[str] = field(default_factory=list)
+    started_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
+    finished_at: datetime | None = None
