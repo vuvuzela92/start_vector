@@ -216,7 +216,6 @@ class ArticleAnalyzeRepository:
                         )
                     ), 2
                 ) AS profit_by_cond_sales,
-
                 COALESCE(o.open_count, 0) AS open_card_count,
                 COALESCE(o.cart_count, 0) AS add_to_cart_count,
                 ROUND(COALESCE(o.cart_count, 0) / NULLIF(o.open_count::NUMERIC, 0), 2) * 100 AS to_cart_convers,

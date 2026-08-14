@@ -13,10 +13,18 @@ from src_oop.jobs.fbs_stocks.config import (
     DATA_START_ROW,
     HEADER_ROW_INDEX,
     INSERT_AFTER_COLUMN,
+    MIN_STOCK_COLUMN,
+    NEW_STOCK_ALL_WAREHOUSES_COLUMN,
+    NEW_STOCK_VESHKI_COLUMN,
+    SOPOST_ADD_COLUMN,
+    SOPOST_SHEET_TITLE,
     STOCK_MANAGEMENT_COLUMNS,
     TARGET_WAREHOUSES,
+    TOTAL_STOCK_COLUMN,
     UNIT_SHEET_TITLE,
     UNIT_TABLE_TITLE,
+    VESHKI_WAREHOUSE_ID,
+    WILD_COLUMN,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,7 +41,7 @@ class UnitStocksRow:
 
 @dataclass(slots=True)
 class UnitNewStockRow:
-    """Строка UNIT с явно заданным новым остатком для отправки в WB."""
+    """Команда UNIT на изменение остатка конкретного внутреннего склада WB."""
 
     row_number: int
     article_id: int
@@ -41,6 +49,23 @@ class UnitNewStockRow:
     warehouse_id: int
     warehouse_alias: str
     amount: int
+    source_column: str
+
+
+@dataclass(slots=True)
+class UnitAutoRefillRow:
+    """Строка UNIT для проверки необходимости автопополнения FBS-остатков.
+
+    Бизнес-сценарий: cron смотрит минимальный остаток на один внутренний склад, текущий общий
+    FBS-остаток и `wild`, чтобы найти величину пополнения во вкладке `Сопост`.
+    """
+
+    row_number: int
+    article_id: int
+    account: str
+    wild: str
+    minimum_stock: int
+    sheet_total_stock: int
 
 
 class FBSStocksGoogleSheetsClient:
@@ -68,9 +93,9 @@ class FBSStocksGoogleSheetsClient:
     def read_unit_rows(self) -> tuple[list[UnitStocksRow], list[str]]:
         """Читает `Артикул` и `ЛК`, сохраняя номера строк для точечной записи FBS-остатков."""
         headers = self.worksheet.row_values(HEADER_ROW_INDEX)
-        self._validate_headers(headers, (ARTICLE_COLUMN, ACCOUNT_COLUMN))
+        self._validate_headers(headers, (ACCOUNT_COLUMN,))
 
-        article_column_index = headers.index(ARTICLE_COLUMN) + 1
+        article_column_index = self._resolve_article_column_index(headers)
         account_column_index = headers.index(ACCOUNT_COLUMN) + 1
         article_values = self.worksheet.col_values(article_column_index)[DATA_START_ROW - 1 :]
         account_values = self.worksheet.col_values(account_column_index)[DATA_START_ROW - 1 :]
@@ -98,34 +123,172 @@ class FBSStocksGoogleSheetsClient:
         )
         return rows, headers
 
+    def read_auto_refill_rows(self) -> list[UnitAutoRefillRow]:
+        """Читает строки MAIN (tested), по которым cron проверяет автопополнение остатков.
+
+        Бизнес-правила: строка участвует в проверке только если заполнены `Артикул`, `ЛК`, `wild`
+        и положительный `Минимальный остаток`. `ФБС общий остаток` читается для диагностики, а
+        фактическое решение сервис дополнительно сверяет с текущими остатками WB.
+        """
+        headers = self.worksheet.row_values(HEADER_ROW_INDEX)
+        self._validate_headers(
+            headers,
+            (ACCOUNT_COLUMN, WILD_COLUMN, MIN_STOCK_COLUMN, TOTAL_STOCK_COLUMN),
+        )
+
+        article_column_index = self._resolve_article_column_index(headers)
+        account_column_index = headers.index(ACCOUNT_COLUMN) + 1
+        wild_column_index = headers.index(WILD_COLUMN) + 1
+        minimum_stock_column_index = headers.index(MIN_STOCK_COLUMN) + 1
+        total_stock_column_index = headers.index(TOTAL_STOCK_COLUMN) + 1
+
+        article_values = self.worksheet.col_values(article_column_index)[DATA_START_ROW - 1 :]
+        account_values = self.worksheet.col_values(account_column_index)[DATA_START_ROW - 1 :]
+        wild_values = self.worksheet.col_values(wild_column_index)[DATA_START_ROW - 1 :]
+        minimum_values = self.worksheet.col_values(minimum_stock_column_index)[DATA_START_ROW - 1 :]
+        total_values = self.worksheet.col_values(total_stock_column_index)[DATA_START_ROW - 1 :]
+        max_rows = max(
+            len(article_values),
+            len(account_values),
+            len(wild_values),
+            len(minimum_values),
+            len(total_values),
+        )
+
+        rows: list[UnitAutoRefillRow] = []
+        for offset in range(max_rows):
+            article_value = article_values[offset] if offset < len(article_values) else ""
+            account_value = account_values[offset] if offset < len(account_values) else ""
+            wild_value = wild_values[offset] if offset < len(wild_values) else ""
+            minimum_value = minimum_values[offset] if offset < len(minimum_values) else ""
+            total_value = total_values[offset] if offset < len(total_values) else ""
+
+            article_id = self._coerce_article_id(article_value)
+            minimum_stock = self._coerce_optional_non_negative_int(minimum_value)
+            if (
+                article_id is None
+                or not account_value.strip()
+                or not wild_value.strip()
+                or minimum_stock is None
+                or minimum_stock <= 0
+            ):
+                continue
+
+            rows.append(
+                UnitAutoRefillRow(
+                    row_number=DATA_START_ROW + offset,
+                    article_id=article_id,
+                    account=account_value.strip(),
+                    wild=wild_value.strip(),
+                    minimum_stock=minimum_stock,
+                    sheet_total_stock=self._coerce_optional_non_negative_int(total_value) or 0,
+                )
+            )
+
+        logger.info(
+            "Строки UNIT для автопополнения FBS-остатков прочитаны | sheet=%s | rows=%s",
+            self.worksheet.title,
+            len(rows),
+        )
+        return rows
+
+    def read_sopost_add_amounts_by_wild(self) -> dict[str, int]:
+        """Читает из `Сопост` значение `Добавляем` по каждому `wild`.
+
+        Бизнес-правило: автопополнение не придумывает величину пополнения само, а использует
+        управляемое значение из строки `Сопост`, чтобы логика cron совпадала с ручным планированием.
+        """
+        if self.connector.table is None:
+            raise RuntimeError("Google Sheets подключение не содержит объект таблицы для чтения Сопост.")
+
+        worksheet = self.connector.table.worksheet(SOPOST_SHEET_TITLE)
+        headers = worksheet.row_values(HEADER_ROW_INDEX)
+        self._validate_headers(headers, (WILD_COLUMN, SOPOST_ADD_COLUMN))
+        wild_column_index = headers.index(WILD_COLUMN) + 1
+        add_column_index = headers.index(SOPOST_ADD_COLUMN) + 1
+        wild_values = worksheet.col_values(wild_column_index)[DATA_START_ROW - 1 :]
+        add_values = worksheet.col_values(add_column_index)[DATA_START_ROW - 1 :]
+
+        add_amounts_by_wild: dict[str, int] = {}
+        for offset, wild_value in enumerate(wild_values):
+            prepared_wild = wild_value.strip().casefold()
+            if not prepared_wild:
+                continue
+            raw_add_value = add_values[offset] if offset < len(add_values) else ""
+            add_amount = self._coerce_optional_non_negative_int(raw_add_value)
+            if add_amount is None or add_amount <= 0:
+                continue
+            add_amounts_by_wild[prepared_wild] = add_amount
+
+        logger.info(
+            "Значения автопополнения FBS-остатков прочитаны из Сопост | sheet=%s | wilds=%s",
+            worksheet.title,
+            len(add_amounts_by_wild),
+        )
+        return add_amounts_by_wild
+
+    def _resolve_article_column_index(self, headers: list[str]) -> int:
+        """Находит колонку артикула UNIT, защищая сценарий от пустого заголовка в первом столбце."""
+        if ARTICLE_COLUMN in headers:
+            return headers.index(ARTICLE_COLUMN) + 1
+        logger.warning(
+            "В MAIN (tested) не найден заголовок '%s', используется первая колонка как колонка артикула.",
+            ARTICLE_COLUMN,
+        )
+        return 1
+
     def read_new_stock_rows(self) -> list[UnitNewStockRow]:
-        """Читает заполненные `Новый остаток ...`, чтобы подготовить точечную отправку остатков в WB."""
+        """Читает управляющие колонки новых остатков и разворачивает их в команды по складам.
+
+        Бизнес-правила: `Новый остаток для всех складов` задает одинаковый остаток на каждом
+        внутреннем складе. `Новый остаток Вешки` задает остаток на целевом складе Вешки, а остальные
+        внутренние склады обнуляет. Одновременно заполнять оба поля в одной строке нельзя, чтобы
+        пользовательская команда не была двусмысленной.
+        """
         unit_rows, headers = self.read_unit_rows()
         self._validate_headers(
             headers,
-            tuple(target.new_stock_column for target in TARGET_WAREHOUSES),
+            (NEW_STOCK_ALL_WAREHOUSES_COLUMN, NEW_STOCK_VESHKI_COLUMN),
         )
 
-        new_values_by_warehouse: dict[int, list[str]] = {}
-        for target_warehouse in TARGET_WAREHOUSES:
-            column_index = headers.index(target_warehouse.new_stock_column) + 1
-            new_values_by_warehouse[target_warehouse.warehouse_id] = self.worksheet.col_values(
-                column_index
-            )[DATA_START_ROW - 1 :]
+        all_column_index = headers.index(NEW_STOCK_ALL_WAREHOUSES_COLUMN) + 1
+        veshki_column_index = headers.index(NEW_STOCK_VESHKI_COLUMN) + 1
+        all_values = self.worksheet.col_values(all_column_index)[DATA_START_ROW - 1 :]
+        veshki_values = self.worksheet.col_values(veshki_column_index)[DATA_START_ROW - 1 :]
 
         new_stock_rows: list[UnitNewStockRow] = []
         for unit_row in unit_rows:
             row_offset = unit_row.row_number - DATA_START_ROW
-            for target_warehouse in TARGET_WAREHOUSES:
-                column_values = new_values_by_warehouse[target_warehouse.warehouse_id]
-                raw_value = column_values[row_offset] if row_offset < len(column_values) else ""
-                amount = self._coerce_new_stock_amount(
-                    value=raw_value,
-                    row_number=unit_row.row_number,
-                    column_name=target_warehouse.new_stock_column,
+            raw_all_value = all_values[row_offset] if row_offset < len(all_values) else ""
+            raw_veshki_value = veshki_values[row_offset] if row_offset < len(veshki_values) else ""
+            all_amount = self._coerce_new_stock_amount(
+                value=raw_all_value,
+                row_number=unit_row.row_number,
+                column_name=NEW_STOCK_ALL_WAREHOUSES_COLUMN,
+            )
+            veshki_amount = self._coerce_new_stock_amount(
+                value=raw_veshki_value,
+                row_number=unit_row.row_number,
+                column_name=NEW_STOCK_VESHKI_COLUMN,
+            )
+            if all_amount is not None and veshki_amount is not None:
+                raise ValueError(
+                    "В UNIT одновременно заполнены два сценария нового FBS-остатка: "
+                    f"row={unit_row.row_number} columns="
+                    f"{NEW_STOCK_ALL_WAREHOUSES_COLUMN!r}, {NEW_STOCK_VESHKI_COLUMN!r}. "
+                    "Оставьте значение только в одной управляющей колонке."
                 )
-                if amount is None:
-                    continue
+            if all_amount is not None:
+                new_stock_rows.extend(
+                    self._build_all_warehouses_rows(
+                        unit_row=unit_row,
+                        amount=all_amount,
+                    )
+                )
+                continue
+            if veshki_amount is None:
+                continue
+            for target_warehouse in TARGET_WAREHOUSES:
                 new_stock_rows.append(
                     UnitNewStockRow(
                         row_number=unit_row.row_number,
@@ -133,7 +296,10 @@ class FBSStocksGoogleSheetsClient:
                         account=unit_row.account,
                         warehouse_id=target_warehouse.warehouse_id,
                         warehouse_alias=target_warehouse.warehouse_alias,
-                        amount=amount,
+                        amount=veshki_amount
+                        if target_warehouse.warehouse_id == VESHKI_WAREHOUSE_ID
+                        else 0,
+                        source_column=NEW_STOCK_VESHKI_COLUMN,
                     )
                 )
 
@@ -143,6 +309,29 @@ class FBSStocksGoogleSheetsClient:
             len(new_stock_rows),
         )
         return new_stock_rows
+
+    def _build_all_warehouses_rows(
+        self,
+        unit_row: UnitStocksRow,
+        amount: int,
+    ) -> list[UnitNewStockRow]:
+        """Создает команды одинакового остатка для всех внутренних складов строки UNIT.
+
+        Бизнес-правило: значение из `Новый остаток для всех складов` применяется к каждому складу
+        из внутреннего справочника. Позже склады без активной привязки в БД будут пропущены с логом.
+        """
+        return [
+            UnitNewStockRow(
+                row_number=unit_row.row_number,
+                article_id=unit_row.article_id,
+                account=unit_row.account,
+                warehouse_id=target_warehouse.warehouse_id,
+                warehouse_alias=target_warehouse.warehouse_alias,
+                amount=amount,
+                source_column=NEW_STOCK_ALL_WAREHOUSES_COLUMN,
+            )
+            for target_warehouse in TARGET_WAREHOUSES
+        ]
 
     def ensure_stock_management_columns(self) -> list[str]:
         """Создает недостающие складские колонки UNIT для управления FBS-остатками.
@@ -185,7 +374,7 @@ class FBSStocksGoogleSheetsClient:
         headers: list[str],
         values_by_column: dict[str, list[list[int | str]]],
     ) -> None:
-        """Записывает FBS-остатки только в целевые колонки складов, не трогая остальные данные UNIT."""
+        """Записывает рассчитанные FBS-остатки в целевые колонки, не трогая остальные данные UNIT."""
         self._validate_headers(headers, tuple(values_by_column.keys()))
 
         for column_name, values in values_by_column.items():
@@ -205,6 +394,41 @@ class FBSStocksGoogleSheetsClient:
                 range_label,
                 len(values),
             )
+
+    def clear_new_stock_cells(self, rows: list[UnitNewStockRow]) -> int:
+        """Очищает успешно примененные команды `Новый остаток ...`, чтобы UNIT не отправил их повторно.
+
+        Бизнес-сценарий: ячейка нового остатка является одноразовым поручением на изменение FBS-остатка.
+        После подтвержденной отправки в WB значение нужно удалить только в этой ячейке, не затрагивая
+        соседние склады, текущие FBS-остатки и строки, которые не были успешно отправлены.
+        """
+        if not rows:
+            logger.info("Очистка новых FBS-остатков в UNIT пропущена: нет успешно отправленных строк.")
+            return 0
+
+        headers = self.worksheet.row_values(HEADER_ROW_INDEX)
+        self._validate_headers(
+            headers,
+            (NEW_STOCK_ALL_WAREHOUSES_COLUMN, NEW_STOCK_VESHKI_COLUMN),
+        )
+
+        ranges: list[str] = []
+        for row in rows:
+            column_index = headers.index(row.source_column) + 1
+            ranges.append(rowcol_to_a1(row.row_number, column_index))
+
+        unique_ranges = sorted(set(ranges))
+        if not unique_ranges:
+            logger.info("Очистка новых FBS-остатков в UNIT пропущена: нет подходящих ячеек.")
+            return 0
+
+        self.worksheet.batch_clear(unique_ranges)
+        logger.info(
+            "Успешно примененные новые FBS-остатки очищены в UNIT | sheet=%s | cells=%s",
+            self.worksheet.title,
+            len(unique_ranges),
+        )
+        return len(unique_ranges)
 
     def _validate_headers(self, headers: list[str], required_columns: tuple[str, ...]) -> None:
         """Проверяет наличие колонок UNIT, чтобы не записать остатки в неверный диапазон."""
@@ -242,4 +466,21 @@ class FBSStocksGoogleSheetsClient:
             raise ValueError(
                 f"Новый остаток должен быть целым неотрицательным числом: row={row_number} column={column_name} value={value!r}"
             )
+        return int(amount)
+
+    def _coerce_optional_non_negative_int(self, value: str) -> int | None:
+        """Приводит числовые настройки UNIT/Сопост к int для сценария автопополнения.
+
+        Бизнес-правило: пустое значение означает, что строка не участвует в автопополнении. Дробные
+        и отрицательные значения не используются, чтобы cron не отправил в WB неоднозначный остаток.
+        """
+        prepared_value = str(value).strip().replace(" ", "").replace(",", ".")
+        if prepared_value == "":
+            return None
+        try:
+            amount = float(prepared_value)
+        except ValueError:
+            return None
+        if amount < 0 or not amount.is_integer():
+            return None
         return int(amount)

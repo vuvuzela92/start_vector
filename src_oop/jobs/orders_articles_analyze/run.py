@@ -1,8 +1,10 @@
 import logging
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sqlalchemy import BigInteger, Integer
 
 from src_oop.core.database import Database
 from src_oop.core.logger import LOG_DIR
@@ -15,13 +17,25 @@ from src_oop.jobs.orders_articles_analyze.tables_scheme import (
 
 logger = logging.getLogger(__name__)
 
+POSTGRES_INTEGER_RANGES: dict[str, tuple[int, int]] = {
+    # Диапазоны нужны для ранней диагностики перед batch upsert в PostgreSQL.
+    "INTEGER": (-2147483648, 2147483647),
+    "BIGINT": (-9223372036854775808, 9223372036854775807),
+}
+
 
 def _safe_records_preview(
     df: pd.DataFrame,
     preview_columns: list[str],
     max_rows: int = 50,
 ) -> list[dict[str, object]]:
-    """Возвращает безопасный preview строк для логов и диагностических сообщений."""
+    """
+    Возвращает безопасный preview строк для логов и диагностических сообщений.
+
+    Функция обслуживает диагностический сценарий задачи `orders_article_analyze_run`:
+    позволяет показывать в логах только компактный фрагмент DataFrame перед записью
+    в PostgreSQL, чтобы быстро видеть проблемные строки без вывода всего набора.
+    """
     available_columns = [column for column in preview_columns if column in df.columns]
     preview_df = (
         df.loc[:, available_columns].head(max_rows).copy()
@@ -36,6 +50,197 @@ def _safe_records_preview(
     return preview_df.replace({np.nan: None}).to_dict(orient="records")
 
 
+def _resolve_integer_columns_from_schema(
+    schema_definition: dict[str, object] | None,
+) -> dict[str, list[str]]:
+    """
+    Определяет integer-колонки из схемы таблицы для проверки перед записью.
+
+    Функция обслуживает защитный этап бизнес-сценария записи артикульной аналитики:
+    по схеме таблицы выделяет колонки, которые PostgreSQL ожидает как INTEGER
+    или BIGINT, чтобы перед upsert можно было проверить их диапазоны и не терять
+    причину ошибки внутри большого batch запроса.
+    """
+    integer_columns: list[str] = []
+    bigint_columns: list[str] = []
+
+    if not schema_definition:
+        return {"INTEGER": integer_columns, "BIGINT": bigint_columns}
+
+    for column_name, column_type in schema_definition.items():
+        if column_type is Integer:
+            integer_columns.append(column_name)
+        elif column_type is BigInteger:
+            bigint_columns.append(column_name)
+
+    return {"INTEGER": integer_columns, "BIGINT": bigint_columns}
+
+
+def _save_integer_overflow_diagnostics(
+    overflow_rows: pd.DataFrame,
+    *,
+    task_name: str,
+    range_name: str,
+) -> Path:
+    """
+    Сохраняет строки с переполнением integer-диапазона в отдельный CSV.
+
+    Эта функция нужна для расследования ошибок записи в PostgreSQL:
+    когда значения не помещаются в INTEGER или BIGINT, проблемные строки
+    сохраняются отдельно, чтобы можно было быстро понять источник переполнения
+    и не искать его по полному SQL batch.
+    """
+    diagnostics_dir = LOG_DIR / "diagnostics"
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    diagnostics_path = diagnostics_dir / (
+        f"{task_name}_{range_name.lower()}_overflow_{timestamp}.csv"
+    )
+    overflow_rows.to_csv(diagnostics_path, index=False, encoding="utf-8-sig")
+    return diagnostics_path
+
+
+def _log_integer_range_diagnostics_before_upsert(
+    df: pd.DataFrame,
+    schema_definition: dict[str, object] | None,
+    task_name: str,
+    table_name: str,
+    unique_keys: list[str],
+) -> None:
+    """
+    Проверяет integer-колонки на выход за диапазоны PostgreSQL перед upsert.
+
+    Функция защищает финальный этап сценария `orders_article_analyze_run`:
+    перед batch записью сравнивает данные со схемой таблицы и заранее выявляет
+    строки, которые не помещаются в INTEGER или BIGINT. Благодаря этому вместо
+    общего `NumericValueOutOfRange` мы получаем понятный лог, preview и CSV
+    с конкретными колонками и строками-источниками.
+    """
+    integer_columns_by_range = _resolve_integer_columns_from_schema(schema_definition)
+    available_columns = {
+        range_name: [
+            column_name
+            for column_name in columns
+            if column_name in df.columns
+        ]
+        for range_name, columns in integer_columns_by_range.items()
+    }
+
+    logger.info(
+        "Начата диагностика integer-диапазонов перед записью в PostgreSQL | task=%s | table=%s | integer_columns=%s",
+        task_name,
+        table_name,
+        available_columns,
+    )
+
+    for range_name, columns in available_columns.items():
+        if not columns:
+            logger.info(
+                "Колонки диапазона %s отсутствуют в DataFrame, этап диагностики пропущен | task=%s | table=%s",
+                range_name,
+                task_name,
+                table_name,
+            )
+            continue
+
+        min_allowed, max_allowed = POSTGRES_INTEGER_RANGES[range_name]
+        range_stats: list[dict[str, object]] = []
+        overflow_masks: list[pd.Series] = []
+
+        for column_name in columns:
+            numeric_series = pd.to_numeric(df[column_name], errors="coerce")
+            non_null_series = numeric_series.dropna()
+            overflow_mask = (
+                numeric_series.notna()
+                & (
+                    (numeric_series < min_allowed)
+                    | (numeric_series > max_allowed)
+                )
+            )
+            overflow_masks.append(overflow_mask)
+            range_stats.append(
+                {
+                    "column": column_name,
+                    "dtype": str(df[column_name].dtype),
+                    "null_count": int(df[column_name].isna().sum()),
+                    "min": None if non_null_series.empty else float(non_null_series.min()),
+                    "max": None if non_null_series.empty else float(non_null_series.max()),
+                    "overflow_count": int(overflow_mask.sum()),
+                }
+            )
+
+        logger.info(
+            "Диагностика диапазона %s перед записью в PostgreSQL | task=%s | table=%s | allowed_min=%s | allowed_max=%s | stats=%s",
+            range_name,
+            task_name,
+            table_name,
+            min_allowed,
+            max_allowed,
+            range_stats,
+        )
+
+        combined_overflow_mask = pd.Series(False, index=df.index)
+        for overflow_mask in overflow_masks:
+            combined_overflow_mask = combined_overflow_mask | overflow_mask
+
+        overflow_rows = df.loc[combined_overflow_mask].copy()
+        if overflow_rows.empty:
+            logger.info(
+                "Переполнение диапазона %s перед записью в PostgreSQL не найдено | task=%s | table=%s",
+                range_name,
+                task_name,
+                table_name,
+            )
+            continue
+
+        overflow_columns = [
+            column_name
+            for column_name, stats in zip(columns, range_stats, strict=False)
+            if stats["overflow_count"]
+        ]
+        preview_columns = [
+            column_name
+            for column_name in [
+                "date",
+                "article_id",
+                "account",
+                "local_vendor_code",
+                *unique_keys,
+                *overflow_columns,
+            ]
+            if column_name in overflow_rows.columns
+        ]
+
+        diagnostics_path = _save_integer_overflow_diagnostics(
+            overflow_rows,
+            task_name=task_name,
+            range_name=range_name,
+        )
+        logger.error(
+            "Найдены значения вне диапазона %s перед записью в PostgreSQL | task=%s | table=%s | overflow_rows=%s | overflow_columns=%s | diagnostics_csv=%s",
+            range_name,
+            task_name,
+            table_name,
+            len(overflow_rows.index),
+            overflow_columns,
+            diagnostics_path,
+        )
+        logger.error(
+            "Предпросмотр строк с переполнением диапазона %s | task=%s | preview_rows=%s",
+            range_name,
+            task_name,
+            _safe_records_preview(
+                overflow_rows,
+                preview_columns=preview_columns,
+                max_rows=50,
+            ),
+        )
+        raise ValueError(
+            f"Перед записью в PostgreSQL найдены значения вне диапазона {range_name}. "
+            "Подробности сохранены в диагностический CSV-файл."
+        )
+
+
 def _filter_invalid_article_id_before_upsert(
     df: pd.DataFrame,
     task_name: str,
@@ -43,8 +248,9 @@ def _filter_invalid_article_id_before_upsert(
     """
     Удаляет строки с невалидным article_id перед upsert.
 
-    Функция не меняет исходный DataFrame inplace, а возвращает очищенную копию.
-    Если колонка article_id отсутствует, выбрасывается ValueError.
+    Функция защищает сценарий записи артикульной аналитики в PostgreSQL:
+    исключает строки с пустым, нулевым или нечисловым `article_id`, чтобы
+    итоговая таблица не получала технически некорректные ключи.
     """
     if "article_id" not in df.columns:
         raise ValueError(
@@ -141,8 +347,10 @@ def _log_duplicate_keys_before_upsert(
     """
     Проверяет DataFrame на дубли по unique_keys перед upsert.
 
-    Если найдены дубли, функция логирует подробности, сохраняет диагностический CSV
-    и выбрасывает ValueError.
+    Функция обслуживает защитный сценарий записи в PostgreSQL: если итоговый
+    набор содержит несколько строк на один и тот же уникальный ключ таблицы,
+    сохраняет диагностику и прерывает запись до возникновения неинформативной
+    ошибки `ON CONFLICT DO UPDATE`.
     """
     missing_keys = [column for column in unique_keys if column not in df.columns]
     if missing_keys:
@@ -239,8 +447,14 @@ def _log_duplicate_keys_before_upsert(
 
 
 def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> None:
-    """Запускает построение артикульного анализа по дням."""
+    """
+    Запускает полный сценарий построения и записи артикульного анализа по дням.
 
+    Функция собирает витрину `orders_articles_analyze`, очищает невалидные ключи,
+    проверяет дубли и подготавливает batch запись в PostgreSQL. Перед upsert
+    дополнительно выполняет защитную диагностику integer-диапазонов, чтобы
+    заранее ловить переполнения схемы и логировать проблемные строки.
+    """
     current_stage = "initialization"
     logger.info(
         "Запущена задача orders_article_analyze_run | days_ago_total=%s | days_to=%s",
@@ -265,10 +479,13 @@ def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> Non
                 day,
                 day,
             )
-            print(f"--- 🗓️ Обработка данных за {day} дн. назад ---")
+            print(f"--- Обработка данных за {day} дн. назад ---")
 
             current_stage = f"day_{day}_build_dataset"
-            logger.info("Начата сборка DataFrame для дня | step=build_dataset | day=%s", day)
+            logger.info(
+                "Начата сборка DataFrame для дня | step=build_dataset | day=%s",
+                day,
+            )
             df = processor.build_dataset(days_ago=day, days_to=day)
             logger.info(
                 "DataFrame для дня собран | day=%s | rows=%s | columns=%s",
@@ -311,7 +528,21 @@ def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> Non
                 task_name="orders_article_analyze",
             )
 
-            print(f"✅ Запись в БД: {len(df)} строк за {day} дн. назад")
+            current_stage = f"day_{day}_check_integer_ranges_before_upsert"
+            logger.info(
+                "Начата диагностика integer-диапазонов перед записью в PostgreSQL | day=%s | table=%s",
+                day,
+                table,
+            )
+            _log_integer_range_diagnostics_before_upsert(
+                df=df,
+                schema_definition=scheme,
+                task_name="orders_article_analyze",
+                table_name=table,
+                unique_keys=unique_keys,
+            )
+
+            print(f"Запись в БД: {len(df)} строк за {day} дн. назад")
 
             current_stage = f"day_{day}_sync_data_to_postgres"
             logger.info(
@@ -335,7 +566,7 @@ def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> Non
             logger.info("Обработка дня завершена | day=%s", day)
 
         logger.info("Задача orders_article_analyze_run завершена успешно")
-        print("🏁 Артикульный анализ успешно завершен")
+        print("Артикульный анализ успешно завершен")
     except Exception as error:
         logger.exception(
             "Задача orders_article_analyze_run завершилась с ошибкой | current_stage=%s | error_type=%s | error=%s",

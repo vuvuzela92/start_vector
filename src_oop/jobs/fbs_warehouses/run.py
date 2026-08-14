@@ -124,6 +124,47 @@ def _build_warehouse_rows_from_created_payload(
     return rows
 
 
+def _save_created_warehouse_summary_to_db(
+    summary_payload: dict[str, object],
+    warehouse_name: str,
+    wb_office_id: int | None,
+    warehouse_id: int | None,
+) -> dict[str, object]:
+    """Сохраняет результат создания WB-склада в `warehouses_fbs` сразу после успешного API-вызова.
+
+    Бизнес-сценарий: создание склада и фиксация его связки в нашей БД должны быть одной операцией,
+    чтобы пользователь не переносил вручную WB `warehouseId` и не путал его с `officeId`.
+    Если склад уже существует как логический склад системы, пользователь задает общий
+    `WB_FBS_OUR_WAREHOUSE_ID`; если это новый логический склад, система присваивает следующий ID.
+    """
+    repository = FBSWarehousesRepository()
+    resolved_warehouse_id = warehouse_id
+    if resolved_warehouse_id is None:
+        resolved_warehouse_id = repository.get_next_warehouse_id()
+
+    rows = _build_warehouse_rows_from_created_payload(
+        payload=summary_payload,
+        warehouse_id=resolved_warehouse_id,
+        warehouse_name=warehouse_name,
+        wb_office_id=wb_office_id,
+    )
+    save_result = repository.save(
+        dataframe=pd.DataFrame(rows),
+        warehouse_id=resolved_warehouse_id,
+    )
+    logger.info(
+        "Созданный FBS-склад автоматически записан в warehouses_fbs | warehouse_id=%s | rows=%s",
+        save_result.warehouse_id,
+        save_result.written_rows,
+    )
+    return {
+        "warehouse_id": save_result.warehouse_id,
+        "warehouse_name": warehouse_name,
+        "written_rows": save_result.written_rows,
+        "rows": rows,
+    }
+
+
 def _find_existing_warehouse_payload(
     source_path: Path,
     account: str,
@@ -247,10 +288,23 @@ async def create_fbs_warehouse_async(
         office_id=resolved_office_id,
         name=resolved_name,
     )
-    _print_summary(_summary_to_dict(summary))
+    summary_payload = _summary_to_dict(summary)
+    resolved_warehouse_id = _coerce_optional_int(
+        os.getenv(OUR_WAREHOUSE_ID_ENV),
+        "warehouse_id",
+    )
+    database_import = _save_created_warehouse_summary_to_db(
+        summary_payload=summary_payload,
+        warehouse_name=resolved_name,
+        wb_office_id=resolved_office_id,
+        warehouse_id=resolved_warehouse_id,
+    )
+    summary_payload["database_import"] = database_import
+    _print_summary(summary_payload)
     logger.info(
-        "Создание FBS-склада WB завершено | account=%s | retries_used=%s",
+        "Создание FBS-склада WB завершено и записано в БД | account=%s | warehouse_id=%s | retries_used=%s",
         resolved_account,
+        database_import["warehouse_id"],
         summary.retries_used,
     )
 
@@ -275,12 +329,17 @@ async def delete_fbs_warehouse_async(
         account=resolved_account,
         warehouse_id=resolved_warehouse_id,
     )
+    delete_result = FBSWarehousesRepository().mark_deleted(
+        account=resolved_account,
+        wb_warehouse_id=resolved_warehouse_id,
+    )
     _print_summary(_summary_to_dict(summary))
     logger.info(
-        "Удаление FBS-склада WB завершено | account=%s | warehouse_id=%s | retries_used=%s",
+        "Удаление FBS-склада WB завершено | account=%s | warehouse_id=%s | retries_used=%s | db_updated_rows=%s",
         resolved_account,
         resolved_warehouse_id,
         summary.retries_used,
+        delete_result.updated_rows,
     )
 
 

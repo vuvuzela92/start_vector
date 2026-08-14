@@ -25,6 +25,15 @@ class WarehouseSaveResult:
 
 
 @dataclass(slots=True)
+class WarehouseDeleteResult:
+    """Итог мягкого удаления FBS-склада в справочнике PostgreSQL."""
+
+    account: str
+    wb_warehouse_id: int
+    updated_rows: int
+
+
+@dataclass(slots=True)
 class WarehousesSyncResult:
     """Итог дозаполнения справочника FBS-складов данными из WB API."""
 
@@ -76,6 +85,48 @@ class FBSWarehousesRepository:
         return WarehouseSaveResult(
             written_rows=len(dataframe.index),
             warehouse_id=warehouse_id,
+        )
+
+    def mark_deleted(self, account: str, wb_warehouse_id: int) -> WarehouseDeleteResult:
+        """Помечает удаленный в WB склад как неактивный в `warehouses_fbs`.
+
+        Бизнес-сценарий: после удаления FBS-склада в личном кабинете WB мы сохраняем его строку
+        для истории связок, но исключаем из управления остатками через `status = 'deleted'`.
+        Это защищает будущие запросы остатков от обращения к складу, которого уже нет в WB.
+        """
+        self._ensure_table_exists()
+        update_sql = text(
+            f"""
+            UPDATE {TABLE_NAME}
+            SET
+                status = 'deleted',
+                deleted_at = COALESCE(deleted_at, now()),
+                updated_at = now()
+            WHERE account = :account
+              AND wb_warehouse_id = :wb_warehouse_id
+              AND status <> 'deleted'
+            """
+        )
+        with self.database_cls.get_engine().begin() as connection:
+            result = connection.execute(
+                update_sql,
+                {
+                    "account": account,
+                    "wb_warehouse_id": wb_warehouse_id,
+                },
+            )
+
+        updated_rows = int(result.rowcount or 0)
+        logger.info(
+            "FBS-склад помечен удаленным в справочнике warehouses_fbs | account=%s | wb_warehouse_id=%s | updated_rows=%s",
+            account,
+            wb_warehouse_id,
+            updated_rows,
+        )
+        return WarehouseDeleteResult(
+            account=account,
+            wb_warehouse_id=wb_warehouse_id,
+            updated_rows=updated_rows,
         )
 
     def update_existing_from_wb(

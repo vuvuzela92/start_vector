@@ -1,0 +1,67 @@
+﻿{
+  "operation": "list_warehouses",
+  "accounts_total": 1,
+  "retries_used": 0,
+  "results": [
+    {
+      "account": "СТАРТ5020",
+      "retries_used": 0,
+      "payload": [
+        {
+          "name": "Мой склад",
+          "officeId": 218,
+          "id": 1748583,
+          "cargoType": 1,
+          "deliveryType": 1,
+          "isDeleting": false,
+          "isProcessing": false
+        },
+        {
+          "name": "Наш склад: Казань",
+          "officeId": 3091602,
+          "id": 2017474,
+          "cargoType": 3,
+          "deliveryType": 1,
+          "isDeleting": false,
+          "isProcessing": false
+        },
+        {
+          "name": "Наш склад: Волгоград",
+          "officeId": 3098091,
+          "id": 2031957,
+          "cargoType": 1,
+          "deliveryType": 1,
+          "isDeleting": false,
+          "isProcessing": false
+        },
+        {
+          "name": "Наш склад: Шушары",
+          "officeId": 3053267,
+          "id": 2032058,
+          "cargoType": 3,
+          "deliveryType": 1,
+          "isDeleting": false,
+          "isProcessing": false
+        },
+        {
+          "name": "Наш склад: Екатеринбург",
+          "officeId": 3090292,
+          "id": 2032191,
+          "cargoType": 1,
+          "deliveryType": 1,
+          "isDeleting": false,
+          "isProcessing": false
+        },
+        {
+          "name": "Наш склад: Владивосток",
+          "officeId": 3061569,
+          "id": 2032526,
+          "cargoType": 1,
+          "deliveryType": 1,
+          "isDeleting": false,
+          "isProcessing": false
+        }
+      ]
+    }
+  ]
+}

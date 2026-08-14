@@ -54,6 +54,7 @@ from src_oop.jobs.fbs_warehouses.run import (
 )
 from src_oop.jobs.fbs_stocks.run import (
     apply_new_fbs_stocks_from_unit,
+    auto_refill_fbs_stocks_from_unit,
     update_fbs_stocks_in_unit,
 )
 from src_oop.jobs.logistic_ved.reverse_run import logistic_ved_reverse_run
@@ -245,6 +246,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "apply_new_fbs_stocks_from_unit": {
         "func": smart_run(apply_new_fbs_stocks_from_unit),
         "desc": "Отправка новых FBS-остатков из UNIT в WB",
+    },
+    "auto_refill_fbs_stocks_from_unit": {
+        "func": smart_run(auto_refill_fbs_stocks_from_unit),
+        "desc": "Cron-автопополнение FBS-остатков по минимальному остатку UNIT",
     },
     # UNIT: сервисные обновления справочников, статусов и ценовых витрин.
     "update_adv_participants_to_gs": {

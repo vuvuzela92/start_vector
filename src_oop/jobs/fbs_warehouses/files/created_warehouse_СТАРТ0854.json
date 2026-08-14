@@ -1,0 +1,32 @@
+﻿{
+  "operation": "create_warehouse",
+  "accounts_total": 1,
+  "retries_used": 0,
+  "results": [
+    {
+      "account": "СТАРТ0854",
+      "retries_used": 0,
+      "payload": {
+        "id": 2036475
+      }
+    }
+  ],
+  "database_import": {
+    "warehouse_id": 6,
+    "warehouse_name": "Наш склад: Владивосток",
+    "written_rows": 1,
+    "rows": [
+      {
+        "warehouse_id": 6,
+        "warehouse_name": "Наш склад: Владивосток",
+        "account": "СТАРТ0854",
+        "wb_warehouse_id": 2036475,
+        "wb_office_id": 3061569,
+        "status": "active",
+        "create_payload": {
+          "id": 2036475
+        }
+      }
+    ]
+  }
+}

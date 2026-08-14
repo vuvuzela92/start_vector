@@ -1,0 +1,20 @@
+﻿{
+  "operation": "import_existing_fbs_warehouse",
+  "source_path": "C:\\Users\\123\\Desktop\\start_vector\\src_oop\\jobs\\fbs_warehouses\\files\\synced_warehouses.json",
+  "warehouse_id": 2,
+  "warehouse_name": "Мой склад",
+  "written_rows": 1,
+  "row": {
+    "warehouse_id": 2,
+    "warehouse_name": "Мой склад",
+    "account": "СТАРТ0854",
+    "wb_warehouse_id": 2036059,
+    "wb_office_id": 218,
+    "status": "active",
+    "create_payload": {
+      "id": 2036059,
+      "name": "Мой склад",
+      "officeId": 218
+    }
+  }
+}

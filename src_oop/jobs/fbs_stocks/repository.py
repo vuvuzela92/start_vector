@@ -2,10 +2,26 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from src_oop.core.database import Database
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class FBSWarehouseInfo:
+    """Описание активного FBS-склада для диагностики операций с остатками.
+
+    Бизнес-сценарий: при ошибках WB по конкретному складу пользователю нужно видеть не только
+    технический `wb_warehouse_id`, но и наше название склада с `wb_office_id` из `warehouses_fbs`.
+    """
+
+    account: str
+    warehouse_id: int
+    warehouse_name: str
+    wb_warehouse_id: int
+    wb_office_id: int | None
 
 
 class FBSStocksRepository:
@@ -61,6 +77,38 @@ class FBSStocksRepository:
             if row.get("account") and row.get("warehouse_id") is not None
         }
         logger.info("Справочник FBS-складов загружен для остатков | rows=%s", len(result))
+        return result
+
+    def fetch_fbs_warehouse_details(self) -> dict[tuple[str, int], FBSWarehouseInfo]:
+        """Возвращает детали активных FBS-складов для понятных логов по ошибкам WB.
+
+        Бизнес-правило: остатками управляем по WB warehouse ID, но оператору удобнее разбирать
+        ограничения хранения по названию нашего склада и `wb_office_id`, сохраненным в БД.
+        """
+        rows = self.database_cls.read_sql_to_dict(
+            """
+            SELECT account, warehouse_id, warehouse_name, wb_warehouse_id, wb_office_id
+            FROM warehouses_fbs
+            WHERE status = 'active'
+              AND wb_warehouse_id IS NOT NULL
+            """
+        )
+        result: dict[tuple[str, int], FBSWarehouseInfo] = {}
+        for row in rows:
+            if not row.get("account") or row.get("wb_warehouse_id") is None:
+                continue
+            normalized_account = self.normalize_account(str(row["account"]))
+            wb_warehouse_id = int(row["wb_warehouse_id"])
+            result[(normalized_account, wb_warehouse_id)] = FBSWarehouseInfo(
+                account=normalized_account,
+                warehouse_id=int(row["warehouse_id"]),
+                warehouse_name=str(row.get("warehouse_name") or ""),
+                wb_warehouse_id=wb_warehouse_id,
+                wb_office_id=int(row["wb_office_id"])
+                if row.get("wb_office_id") is not None
+                else None,
+            )
+        logger.info("Детали FBS-складов загружены для диагностики остатков | rows=%s", len(result))
         return result
 
     @staticmethod

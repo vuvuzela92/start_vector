@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import pandas as pd
 
 from src_oop.jobs.purchase_price_update.processor import (
     DuplicateBusinessKeyError,
@@ -176,7 +177,7 @@ class PurchasePriceUpdateProcessorTests(unittest.TestCase):
                 "unit_price",
                 "price_per_item",
                 "price_diff_rub",
-                "supply_date",
+                "update_document_datetime",
                 "insert_date",
             ],
             list(report_dataframe.columns),
@@ -185,13 +186,11 @@ class PurchasePriceUpdateProcessorTests(unittest.TestCase):
 
     @staticmethod
     def _build_db_dataframe(rows: list[dict[str, object]]):
-        import pandas as pd
-
         base_rows = []
         for index, row in enumerate(rows, start=1):
             base_rows.append(
                 {
-                    "supply_date": pd.Timestamp("2026-07-20"),
+                    "update_document_datetime": pd.Timestamp("2026-07-20 10:00:00"),
                     "guid": f"guid-{index}",
                     "document_number": f"doc-{index}",
                     "local_vendor_code": row["local_vendor_code"],

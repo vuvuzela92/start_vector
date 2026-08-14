@@ -51,7 +51,7 @@ class PurchasePriceUpdateComparisonTests(unittest.TestCase):
     @staticmethod
     def _db_row(code: str, price: float, name: str) -> dict[str, object]:
         return {
-            "supply_date": pd.Timestamp("2026-07-20"),
+            "update_document_datetime": pd.Timestamp("2026-07-20 10:00:00"),
             "guid": f"guid-{code}",
             "document_number": f"doc-{code}",
             "local_vendor_code": code,
