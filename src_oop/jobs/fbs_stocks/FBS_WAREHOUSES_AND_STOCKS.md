@@ -1,8 +1,8 @@
 # Управление FBS-складами и остатками WB
 
-Документ описывает ручные команды для контура FBS-складов и остатков.
+Документ описывает актуальные ручные команды для контура FBS-складов и остатков.
 
-Важно: остатки читаются и обновляются только через тестовую таблицу Google Sheets:
+Важно: сценарии остатков работают только с тестовой Google Sheets-таблицей:
 
 ```text
 UNIT 2.0 (tested) управление остатками -> MAIN (tested)
@@ -10,13 +10,14 @@ UNIT 2.0 (tested) управление остатками -> MAIN (tested)
 
 ## Основные сущности
 
-`warehouses_fbs` в PostgreSQL хранит связь наших складов и складов WB:
+`warehouses_fbs` в PostgreSQL хранит связь между нашими логическими складами и складами WB по аккаунтам:
 
-- `warehouse_id` - наш общий идентификатор склада.
-- `warehouse_name` - наше название склада.
-- `account` - ЛК WB.
-- `wb_warehouse_id` - ID склада WB внутри конкретного ЛК.
-- `wb_office_id` - ID офиса WB, к которому привязан склад.
+- `warehouse_id` - наш общий внутренний идентификатор склада.
+- `warehouse_name` - название логического склада в нашей системе.
+- `account` - ЛК WB. В проекте нормализуется к `UPPERCASE`.
+- `wb_warehouse_id` - WB `warehouseId` внутри конкретного ЛК.
+- `wb_office_id` - WB `officeId`, к которому привязан склад.
+- `status` - для управления остатками используются только строки со значением `active`.
 
 Текущие складские соответствия в коде:
 
@@ -29,35 +30,35 @@ warehouse_id=5 -> Екатеринбург
 warehouse_id=6 -> Владивосток
 ```
 
-В сценариях остатков участвуют только активные строки `warehouses_fbs`, где `status = 'active'`.
-
-## Env-переменные
+## Основные env-переменные
 
 ```bash
-export WB_FBS_ACCOUNT="СТАРТ0854"              # один ЛК; если не задано, команды чтения работают по всем доступным данным
-export WB_FBS_OUTPUT_PATH="src_oop/jobs/fbs_warehouses/files/wb_warehouses.json"
+export WB_FBS_ACCOUNT="СТАРТ0854"                   # ограничить запуск одним ЛК
+export WB_FBS_ACCOUNTS="СТАРТ0854,СТАРТ5020"       # список ЛК для создания склада
+export WB_FBS_OUTPUT_PATH="src_oop/jobs/fbs_warehouses/files/result.json"
 
-export WB_FBS_OFFICE_ID="3091602"             # officeId WB для создания склада
+export WB_FBS_OFFICE_ID="3091602"                  # WB officeId для создания склада
 export WB_FBS_WAREHOUSE_NAME="Наш склад: Казань"
-export WB_FBS_WAREHOUSE_ID="2017474"          # WB warehouseId для удаления/импорта существующего склада
-export WB_FBS_OUR_WAREHOUSE_ID="1"            # наш warehouse_id из warehouses_fbs
-export WB_FBS_IMPORT_SOURCE_PATH="src_oop/jobs/fbs_warehouses/files/created_warehouse.json"
+export WB_FBS_WAREHOUSE_ID="2017474"               # WB warehouseId для удаления / импорта существующего склада
+export WB_FBS_OUR_WAREHOUSE_ID="1"                 # наш warehouse_id
+export WB_FBS_IMPORT_SOURCE_PATH="src_oop/jobs/fbs_warehouses/files/synced_warehouses.json"
 
-export WB_FBS_CREATE_MISSING_COLUMNS=true     # разрешить добавить недостающие колонки в тестовую UNIT-таблицу
-export WB_FBS_APPLY_STOCKS=true               # разрешить реальную отправку новых остатков в WB
+export WB_FBS_CREATE_MISSING_COLUMNS=true          # разрешить автоматически добавить служебные колонки в тестовую таблицу
+export WB_FBS_APPLY_STOCKS=true                    # разрешить реальную отправку остатков в WB
+export WB_FBS_AUTO_REFILL_APPLY=true               # разрешить отдельному cron-сценарию автопополнения реально писать в WB
 ```
 
-## Создание складов
+`WB_FBS_WAREHOUSE_ID` - это именно WB `warehouseId`. Для удаления нельзя использовать имя переменной `WAREHOUSE_ID_ENV`: это внутреннее имя константы в коде, а не env-переменная shell.
 
-## Получение данных по складам WB в файлы
+## Получение данных по складам WB
 
-Есть два разных списка:
+Есть три основные команды:
 
-- `list_wb_offices` - склады/офисы WB, из которых выбирается `officeId` для создания нашего FBS-склада.
-- `list_fbs_warehouses` - уже созданные FBS-склады продавца в конкретном ЛК.
-- `sync_fbs_warehouses_from_wb` - получает FBS-склады продавца и дополнительно дозаполняет уже известные строки `warehouses_fbs`.
+- `list_wb_offices` - получает офисы WB, из которых выбирается `officeId` для создания склада.
+- `list_fbs_warehouses` - получает уже созданные FBS-склады продавца в ЛК.
+- `sync_fbs_warehouses_from_wb` - получает действующие FBS-склады продавца, обновляет известные строки в `warehouses_fbs` и автоматически добавляет в БД склады, которых там еще нет.
 
-### Все офисы WB для выбора `officeId` по одному ЛК
+### Получить офисы WB для одного ЛК
 
 ```bash
 export WB_FBS_ACCOUNT="СТАРТ0854"
@@ -65,11 +66,7 @@ export WB_FBS_OUTPUT_PATH="src_oop/jobs/fbs_warehouses/files/wb_offices_СТАР
 python main.py list_wb_offices
 ```
 
-Результат сохранится в файл из `WB_FBS_OUTPUT_PATH`.
-
-### Все офисы WB для выбора `officeId` по всем ЛК
-
-Если `WB_FBS_ACCOUNT` не задан, команда пройдет по всем токенам из `tokens.json`.
+### Получить офисы WB по всем ЛК
 
 ```bash
 unset WB_FBS_ACCOUNT
@@ -77,7 +74,7 @@ export WB_FBS_OUTPUT_PATH="src_oop/jobs/fbs_warehouses/files/wb_offices_all_acco
 python main.py list_wb_offices
 ```
 
-### Все созданные FBS-склады продавца по одному ЛК
+### Получить текущие FBS-склады продавца для одного ЛК
 
 ```bash
 export WB_FBS_ACCOUNT="СТАРТ0854"
@@ -85,17 +82,7 @@ export WB_FBS_OUTPUT_PATH="src_oop/jobs/fbs_warehouses/files/fbs_warehouses_СТ
 python main.py list_fbs_warehouses
 ```
 
-### Все созданные FBS-склады продавца по всем ЛК
-
-```bash
-unset WB_FBS_ACCOUNT
-export WB_FBS_OUTPUT_PATH="src_oop/jobs/fbs_warehouses/files/fbs_warehouses_all_accounts.json"
-python main.py list_fbs_warehouses
-```
-
-### Получить FBS-склады и сверить их со справочником `warehouses_fbs`
-
-Для одного ЛК:
+### Синхронизировать `warehouses_fbs` с действующими складами WB
 
 ```bash
 export WB_FBS_ACCOUNT="СТАРТ0854"
@@ -103,35 +90,29 @@ export WB_FBS_OUTPUT_PATH="src_oop/jobs/fbs_warehouses/files/synced_warehouses_�
 python main.py sync_fbs_warehouses_from_wb
 ```
 
-Для всех ЛК:
+Что делает `sync_fbs_warehouses_from_wb` сейчас:
 
-```bash
-unset WB_FBS_ACCOUNT
-export WB_FBS_OUTPUT_PATH="src_oop/jobs/fbs_warehouses/files/synced_warehouses_all_accounts.json"
-python main.py sync_fbs_warehouses_from_wb
+- обновляет уже известные активные связки;
+- возвращает удаленные раньше строки в `active`, если склад снова есть в WB;
+- автоматически добавляет в БД действующие склады, которых еще нет в `warehouses_fbs`;
+- если на другом ЛК уже есть склад с тем же `warehouse_name`, использует тот же наш `warehouse_id`;
+- если название новое, создает новый `warehouse_id`;
+- пропускает склады, которые WB уже пометил как удаляемые.
+
+В JSON-результате проверяйте поля:
+
+```text
+updated_rows
+inserted_rows
+unmatched_warehouses
 ```
 
-В результате:
+## Создание складов
 
-- уже привязанные склады обновятся в `warehouses_fbs`;
-- новые или неизвестные склады попадут в `unmatched_warehouses`;
-- полный JSON сохранится в файл из `WB_FBS_OUTPUT_PATH`.
+### Создать склад в одном ЛК
 
-### 1. Получить офисы WB для одного ЛК
-
-```bash
-export WB_FBS_ACCOUNT="СТАРТ0854"
-export WB_FBS_OUTPUT_PATH="src_oop/jobs/fbs_warehouses/files/wb_offices_СТАРТ0854.json"
-python main.py list_wb_offices
-```
-
-Из результата выбрать `officeId`.
-
-### 2. Создать склад WB в одном ЛК
-
-Если создается склад, который уже есть в нашей системе на других ЛК, заранее задайте общий
-`WB_FBS_OUR_WAREHOUSE_ID`. Если это новый логический склад, не задавайте эту переменную:
-система возьмет следующий свободный `warehouse_id`.
+Если склад уже существует в нашей системе на других ЛК, заранее задайте `WB_FBS_OUR_WAREHOUSE_ID`.
+Если это новый логический склад, не задавайте эту переменную: система сама возьмет следующий `warehouse_id`.
 
 ```bash
 export WB_FBS_ACCOUNT="СТАРТ0854"
@@ -142,54 +123,42 @@ export WB_FBS_OUTPUT_PATH="src_oop/jobs/fbs_warehouses/files/created_warehouse_�
 python main.py create_fbs_warehouse
 ```
 
-Команда создает склад на WB и сразу записывает его в `warehouses_fbs`.
-В выводе проверяйте блок `database_import`:
+Команда:
 
-```json
-{
-  "database_import": {
-    "warehouse_id": 1,
-    "warehouse_name": "Наш склад: Казань",
-    "written_rows": 1
-  }
-}
-```
+- создает склад на WB;
+- сразу пишет его в `warehouses_fbs`;
+- пропускает создание, если для этого `account + warehouse_id` уже есть активная строка в БД.
 
-### 3. Записать созданный склад в `warehouses_fbs` из файла вручную
+В результате смотрите блок `database_import`.
 
-Обычно этот шаг больше не нужен. Используйте его только для старого файла создания или ручного
-восстановления записи, если склад уже создан на WB, но не попал в БД.
-
-### 4. Создать один и тот же склад на всех ЛК
-
-Сначала убедитесь, что выбранный `officeId` подходит для всех ЛК. Затем можно запускать цикл.
+### Создать один и тот же склад на выбранных ЛК
 
 ```bash
+export WB_FBS_ACCOUNTS="СТАРТ0854,СТАРТ5020"
 export WB_FBS_OFFICE_ID="3091602"
 export WB_FBS_WAREHOUSE_NAME="Наш склад: Казань"
 export WB_FBS_OUR_WAREHOUSE_ID="1"
-
-for account in $(python -c "from src_oop.core.utils_general import load_api_tokens; print('\n'.join(load_api_tokens().keys()))"); do
-  export WB_FBS_ACCOUNT="$account"
-  export WB_FBS_OUTPUT_PATH="src_oop/jobs/fbs_warehouses/files/created_warehouse_${account}.json"
-  python main.py create_fbs_warehouse
-done
+python main.py create_fbs_warehouse
 ```
 
-## Существующие склады WB
-
-### Получить список складов одного ЛК
+### Создать склад на всех ЛК
 
 ```bash
-export WB_FBS_ACCOUNT="СТАРТ0854"
-export WB_FBS_OUTPUT_PATH="src_oop/jobs/fbs_warehouses/files/synced_warehouses_СТАРТ0854.json"
-python main.py sync_fbs_warehouses_from_wb
+unset WB_FBS_ACCOUNT
+unset WB_FBS_ACCOUNTS
+export WB_FBS_OFFICE_ID="3091602"
+export WB_FBS_WAREHOUSE_NAME="Наш склад: Казань"
+export WB_FBS_OUR_WAREHOUSE_ID="1"
+python main.py create_fbs_warehouse
 ```
 
-Команда обновляет только уже известные строки `warehouses_fbs`.
-Непривязанные склады попадут в `unmatched_warehouses`.
+Если склад уже существует на части ЛК, эти аккаунты будут пропущены без повторного вызова WB API.
 
-### Добавить существующий WB-склад как новый наш склад
+### Ручной импорт из файла
+
+`import_created_fbs_warehouse` и `import_existing_fbs_warehouse` оставлены для ручного восстановления старых случаев, но в обычном сценарии после `create_fbs_warehouse` уже не нужны.
+
+Пример для существующего WB-склада:
 
 ```bash
 export WB_FBS_ACCOUNT="СТАРТ0854"
@@ -197,8 +166,6 @@ export WB_FBS_WAREHOUSE_ID="1748583"
 export WB_FBS_IMPORT_SOURCE_PATH="src_oop/jobs/fbs_warehouses/files/synced_warehouses_СТАРТ0854.json"
 python main.py import_existing_fbs_warehouse
 ```
-
-Если существующий WB-склад относится к уже созданному нашему складу, задайте `WB_FBS_OUR_WAREHOUSE_ID`.
 
 ## Удаление склада WB
 
@@ -210,30 +177,32 @@ export WB_FBS_WAREHOUSE_ID="2017474"
 python main.py delete_fbs_warehouse
 ```
 
-## Текущие остатки из WB в Google Sheets
+После успешного удаления строка в `warehouses_fbs` помечается как `deleted`.
 
-### Один ЛК
+## Обновление текущих остатков в тестовой таблице
+
+### Для одного ЛК
 
 ```bash
 export WB_FBS_ACCOUNT="СТАРТ0854"
 python main.py update_fbs_stocks_in_unit
 ```
 
-### Все ЛК
+### Для всех ЛК
 
 ```bash
 unset WB_FBS_ACCOUNT
 python main.py update_fbs_stocks_in_unit
 ```
 
-Если в тестовой таблице нет колонок складского блока, явно разрешите их создание:
+Если нужных колонок в тестовой таблице еще нет:
 
 ```bash
 export WB_FBS_CREATE_MISSING_COLUMNS=true
 python main.py update_fbs_stocks_in_unit
 ```
 
-Команда заполняет:
+Команда заполняет колонку:
 
 ```text
 ФБС общий остаток
@@ -241,25 +210,25 @@ python main.py update_fbs_stocks_in_unit
 
 `ФБС общий остаток` - это сумма остатков по всем активным внутренним FBS-складам аккаунта.
 
-## Отправка новых остатков в WB
+## Ручное применение новых остатков
 
-Новые значения пользователь заполняет в тестовой таблице:
+Пользователь управляет остатками через колонки:
 
 ```text
 Новый остаток для всех складов
 Новый остаток Вешки
 ```
 
-Пустые ячейки не отправляются. Значение должно быть целым неотрицательным числом.
+Правила:
 
-Правила применения:
+- `Новый остаток для всех складов` - указанное значение ставится на каждый активный внутренний склад.
+- `Новый остаток Вешки` - значение ставится только на Вешки, а остальные активные внутренние склады приводятся к `0`.
+- Если заполнены обе колонки в одной строке, сценарий завершится ошибкой.
+- После успешной реальной отправки управляющая ячейка очищается.
+- После реальной отправки сценарий ждет, пока WB начнет отдавать новые значения, и затем перечитывает `ФБС общий остаток`.
+- Если новых команд в таблице нет, но `WB_FBS_APPLY_STOCKS=true`, сценарий все равно делает актуализацию `ФБС общий остаток`.
 
-- `Новый остаток для всех складов` - указанное значение устанавливается на каждый активный внутренний склад.
-- `Новый остаток Вешки` - указанное значение устанавливается на склад Вешки, а остальные активные внутренние склады приводятся к `0`.
-- Если в одной строке заполнены оба поля, команда останавливается с ошибкой: нужно оставить значение только в одной управляющей колонке.
-- После успешной реальной отправки управляющая ячейка очищается, а `ФБС общий остаток` перечитывается из WB.
-
-### Dry-run для одного ЛК
+### Dry-run
 
 ```bash
 export WB_FBS_ACCOUNT="СТАРТ0854"
@@ -267,7 +236,7 @@ unset WB_FBS_APPLY_STOCKS
 python main.py apply_new_fbs_stocks_from_unit
 ```
 
-### Реальная отправка для одного ЛК
+### Реальная отправка
 
 ```bash
 export WB_FBS_ACCOUNT="СТАРТ0854"
@@ -275,30 +244,63 @@ export WB_FBS_APPLY_STOCKS=true
 python main.py apply_new_fbs_stocks_from_unit
 ```
 
-### Dry-run по всем ЛК
+`apply_new_fbs_stocks_from_unit` сейчас запускает два шага подряд:
 
-```bash
-unset WB_FBS_ACCOUNT
-unset WB_FBS_APPLY_STOCKS
-python main.py apply_new_fbs_stocks_from_unit
+- обработку ручных управляющих колонок;
+- затем проверку автопополнения по `Минимальный остаток` и листу `Сопост`.
+
+Оба шага используют один и тот же режим:
+
+- при `WB_FBS_APPLY_STOCKS=true` реально пишут в WB;
+- без этого флага работают как dry-run.
+
+## Автопополнение остатков
+
+В тестовой таблице участвуют поля:
+
+```text
+ФБС общий остаток
+Минимальный остаток
 ```
 
-### Реальная отправка по всем ЛК
+И лист:
+
+```text
+Сопост -> wild / Добавляем
+```
+
+Логика:
+
+- cron читает строки с положительным `Минимальный остаток`;
+- `ФБС общий остаток` делится на число активных внутренних складов аккаунта;
+- если средний остаток на один склад меньше `Минимальный остаток`, берется значение `Добавляем` по `wild`;
+- это значение ставится на каждый активный внутренний склад;
+- после реальной отправки заново обновляется `ФБС общий остаток`.
+
+### Отдельный dry-run сценарий автопополнения
 
 ```bash
-unset WB_FBS_ACCOUNT
-export WB_FBS_APPLY_STOCKS=true
-python main.py apply_new_fbs_stocks_from_unit
+export WB_FBS_ACCOUNT="СТАРТ0854"
+unset WB_FBS_AUTO_REFILL_APPLY
+python main.py auto_refill_fbs_stocks_from_unit
+```
+
+### Отдельный реальный запуск автопополнения
+
+```bash
+export WB_FBS_ACCOUNT="СТАРТ0854"
+export WB_FBS_AUTO_REFILL_APPLY=true
+python main.py auto_refill_fbs_stocks_from_unit
 ```
 
 ## Безопасный порядок работы
 
-1. Создать или синхронизировать склады WB.
-2. Проверить, что `warehouses_fbs` содержит нужные пары `account + warehouse_id`.
-3. Обновить текущие остатки в тестовой таблице: `update_fbs_stocks_in_unit`.
-4. Заполнить `Новый остаток для всех складов` или `Новый остаток Вешки`.
-5. Запустить dry-run: `apply_new_fbs_stocks_from_unit`.
-6. Если план корректный, установить `WB_FBS_APPLY_STOCKS=true` и повторить запуск.
+1. Сначала получить или синхронизировать склады WB.
+2. Проверить, что в `warehouses_fbs` есть нужные пары `account + warehouse_id + wb_warehouse_id`.
+3. Обновить `ФБС общий остаток` через `update_fbs_stocks_in_unit`.
+4. Для ручного сценария заполнить `Новый остаток для всех складов` или `Новый остаток Вешки`.
+5. Выполнить dry-run нужной команды.
+6. Только после проверки результата включить `WB_FBS_APPLY_STOCKS=true` или `WB_FBS_AUTO_REFILL_APPLY=true`.
 
 
 ## Мой сценарий добавления одного склада, для одного аккаунта (не трогать)

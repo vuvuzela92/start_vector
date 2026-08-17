@@ -264,7 +264,7 @@ class WBOrderFeedClient:
         if retry_after:
             try:
                 return min(max(float(retry_after), 0.0), self.retry_max_sleep_seconds)
-            except TypeError, ValueError:
+            except (TypeError, ValueError):
                 try:
                     retry_at = parsedate_to_datetime(str(retry_after))
                     now = datetime.now(tz=retry_at.tzinfo)
@@ -272,7 +272,7 @@ class WBOrderFeedClient:
                         max((retry_at - now).total_seconds(), 0.0),
                         self.retry_max_sleep_seconds,
                     )
-                except TypeError, ValueError, OverflowError:
+                except (TypeError, ValueError, OverflowError):
                     pass
         delay = self.retry_base_sleep_seconds * (2 ** max(attempt - 1, 0))
         return min(delay, self.retry_max_sleep_seconds)
