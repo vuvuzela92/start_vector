@@ -98,7 +98,7 @@ class WBOrderFeedClient:
                         raise self._api_error(response.status, account, payload)
                     response.raise_for_status()
                     return self._parse_page(account, offset, payload, attempt - 1)
-            except OrderFeedAPIError, OrderFeedResponseValidationError:
+            except (OrderFeedAPIError, OrderFeedResponseValidationError):
                 raise
             except aiohttp.ClientResponseError:
                 raise
