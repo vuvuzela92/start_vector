@@ -37,6 +37,8 @@ class FBSStockUpdateResult:
     wb_warehouse_id: int
     sent_rows: int
     skipped_restricted_rows: int = 0
+    skipped_not_found_rows: int = 0
+    skipped_not_found_chrt_ids: tuple[int, ...] = ()
     retries_used: int = 0
 
 
@@ -120,10 +122,17 @@ class WBFBSStocksClient:
         ]
         retries_used = 0
         skipped_restricted_rows = 0
+        skipped_not_found_rows = 0
+        skipped_not_found_chrt_ids: set[int] = set()
 
         for chunk_start in range(0, len(prepared_stocks), self.chrt_ids_chunk_size):
             chunk = prepared_stocks[chunk_start : chunk_start + self.chrt_ids_chunk_size]
-            chunk_retries, chunk_skipped_restricted = await self._request_update_stocks_chunk(
+            (
+                chunk_retries,
+                chunk_skipped_restricted,
+                chunk_skipped_not_found,
+                chunk_not_found_chrt_ids,
+            ) = await self._request_update_stocks_chunk(
                 session=session,
                 account=account,
                 token=token,
@@ -134,20 +143,25 @@ class WBFBSStocksClient:
             )
             retries_used += chunk_retries
             skipped_restricted_rows += chunk_skipped_restricted
+            skipped_not_found_rows += chunk_skipped_not_found
+            skipped_not_found_chrt_ids.update(chunk_not_found_chrt_ids)
 
         logger.info(
-            "Новые FBS-остатки отправлены в WB | account=%s | wb_warehouse_id=%s | rows=%s | skipped_restricted_rows=%s | retries_used=%s",
+            "Новые FBS-остатки отправлены в WB | account=%s | wb_warehouse_id=%s | rows=%s | skipped_restricted_rows=%s | skipped_not_found_rows=%s | retries_used=%s",
             account,
             wb_warehouse_id,
-            len(prepared_stocks) - skipped_restricted_rows,
+            len(prepared_stocks) - skipped_restricted_rows - skipped_not_found_rows,
             skipped_restricted_rows,
+            skipped_not_found_rows,
             retries_used,
         )
         return FBSStockUpdateResult(
             account=account,
             wb_warehouse_id=wb_warehouse_id,
-            sent_rows=len(prepared_stocks) - skipped_restricted_rows,
+            sent_rows=len(prepared_stocks) - skipped_restricted_rows - skipped_not_found_rows,
             skipped_restricted_rows=skipped_restricted_rows,
+            skipped_not_found_rows=skipped_not_found_rows,
+            skipped_not_found_chrt_ids=tuple(sorted(skipped_not_found_chrt_ids)),
             retries_used=retries_used,
         )
 
@@ -160,18 +174,22 @@ class WBFBSStocksClient:
         stocks: Sequence[dict[str, int]],
         warehouse_name: str | None = None,
         wb_office_id: int | None = None,
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, int, set[int]]:
         """Выполняет один chunk PUT-запрос обновления остатков WB с защитой от временных сбоев.
 
         Бизнес-правило: ограничение `CargoWarehouseRestrictionMGT` означает, что конкретный товар
         нельзя грузить на выбранный склад. Такие chrtId пропускаются без retry, чтобы один складовой
-        запрет WB не блокировал обновление остальных складов и товаров.
+        запрет WB не блокировал обновление остальных складов и товаров. Код `NotFound` означает,
+        что товар WB больше недоступен для этого FBS-сценария, например удален или отправлен в
+        корзину через сайт, поэтому такие chrtId тоже исключаются без retry.
         """
         headers = {"Authorization": token}
         timeout = aiohttp.ClientTimeout(total=self.request_timeout_seconds)
         url = STOCKS_URL_TEMPLATE.format(warehouse_id=wb_warehouse_id)
         prepared_stocks = list(stocks)
         skipped_restricted_rows = 0
+        skipped_not_found_rows = 0
+        skipped_not_found_chrt_ids: set[int] = set()
         last_status: int | None = None
         last_payload: dict | list | None = None
 
@@ -207,7 +225,40 @@ class WBFBSStocksClient:
                                 before_count - len(prepared_stocks),
                             )
                             if not prepared_stocks:
-                                return attempt - 1, skipped_restricted_rows
+                                return (
+                                    attempt - 1,
+                                    skipped_restricted_rows,
+                                    skipped_not_found_rows,
+                                    skipped_not_found_chrt_ids,
+                                )
+                            continue
+                        not_found_chrt_ids = self._extract_not_found_chrt_ids(payload)
+                        if response.status == 409 and not_found_chrt_ids:
+                            before_count = len(prepared_stocks)
+                            prepared_stocks = [
+                                stock
+                                for stock in prepared_stocks
+                                if int(stock["chrtId"]) not in not_found_chrt_ids
+                            ]
+                            skipped_rows = before_count - len(prepared_stocks)
+                            skipped_not_found_rows += skipped_rows
+                            skipped_not_found_chrt_ids.update(not_found_chrt_ids)
+                            logger.warning(
+                                "FBS-остатки исключены для склада WB: товар не найден и, вероятно, удален или находится в корзине | account=%s | warehouse_name=%s | wb_warehouse_id=%s | wb_office_id=%s | code=NotFound | chrt_ids=%s | skipped_rows=%s",
+                                account,
+                                warehouse_name,
+                                wb_warehouse_id,
+                                wb_office_id,
+                                sorted(not_found_chrt_ids),
+                                skipped_rows,
+                            )
+                            if not prepared_stocks:
+                                return (
+                                    attempt - 1,
+                                    skipped_restricted_rows,
+                                    skipped_not_found_rows,
+                                    skipped_not_found_chrt_ids,
+                                )
                             continue
                         await self._sleep_for_retry(
                             account=account,
@@ -228,7 +279,12 @@ class WBFBSStocksClient:
                         wb_warehouse_id=wb_warehouse_id,
                         action="обновлении FBS-остатков",
                     )
-                    return attempt - 1, skipped_restricted_rows
+                    return (
+                        attempt - 1,
+                        skipped_restricted_rows,
+                        skipped_not_found_rows,
+                        skipped_not_found_chrt_ids,
+                    )
             except PermissionError:
                 raise
             except (
@@ -458,6 +514,31 @@ class WBFBSStocksClient:
                 if chrt_id is not None:
                     restricted_chrt_ids.add(chrt_id)
         return restricted_chrt_ids
+
+    def _extract_not_found_chrt_ids(self, payload: dict | list | None) -> set[int]:
+        """Извлекает chrtId, которые WB больше не видит в FBS-контуре товара.
+
+        Бизнес-правило: код `NotFound` означает, что артикул уже не должен участвовать в FBS-
+        сценариях, например товар удален или убран в корзину через сайт WB. Повторять такие
+        запросы на том же складе бессмысленно, поэтому chrtId исключаются сразу.
+        """
+        payload_items = payload if isinstance(payload, list) else [payload]
+        not_found_chrt_ids: set[int] = set()
+        for item in payload_items:
+            if not isinstance(item, dict):
+                continue
+            if item.get("code") != "NotFound":
+                continue
+            data_items = item.get("data")
+            if not isinstance(data_items, list):
+                continue
+            for data_item in data_items:
+                if not isinstance(data_item, dict):
+                    continue
+                chrt_id = self._extract_int(data_item, ("chrtId", "chrtID", "chrt_id"))
+                if chrt_id is not None:
+                    not_found_chrt_ids.add(chrt_id)
+        return not_found_chrt_ids
 
     def _calculate_retry_sleep_seconds(self, attempt: int, status: int | None) -> int:
         """Рассчитывает backoff для защиты чтения остатков от 429 и временных ошибок WB."""

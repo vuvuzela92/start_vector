@@ -32,24 +32,29 @@ async def apply_new_fbs_stocks_from_unit_async() -> None:
     logger.info("Старт отправки новых FBS-остатков из UNIT в WB.")
     summary = await service.apply_new_fbs_stocks()
     logger.info(
-        "Сценарий новых FBS-остатков завершен | requested_rows=%s | prepared_rows=%s | skipped_rows=%s | wb_requests=%s | cleared_cells=%s | refreshed_columns=%s | applied=%s",
+        "Сценарий новых FBS-остатков завершен | requested_rows=%s | prepared_rows=%s | skipped_rows=%s | wb_requests=%s | cleared_cells=%s | excluded_rows=%s | refreshed_columns=%s | applied=%s",
         summary.requested_rows,
         summary.prepared_rows,
         summary.skipped_rows,
         summary.wb_requests,
         summary.cleared_cells,
+        summary.excluded_rows,
         summary.refreshed_columns,
         summary.applied,
     )
     logger.info("Старт автопополнения FBS-остатков после ручной отправки UNIT.")
-    auto_refill_summary = await service.auto_refill_fbs_stocks(apply=summary.applied)
+    auto_refill_summary = await service.auto_refill_fbs_stocks(
+        apply=summary.applied,
+        excluded_row_numbers=set(summary.auto_refill_excluded_row_numbers),
+    )
     logger.info(
-        "Сценарий автопополнения FBS-остатков после ручной отправки завершен | checked_rows=%s | triggered_rows=%s | prepared_rows=%s | skipped_rows=%s | wb_requests=%s | refreshed_columns=%s | applied=%s",
+        "Сценарий автопополнения FBS-остатков после ручной отправки завершен | checked_rows=%s | triggered_rows=%s | prepared_rows=%s | skipped_rows=%s | wb_requests=%s | excluded_rows=%s | refreshed_columns=%s | applied=%s",
         auto_refill_summary.checked_rows,
         auto_refill_summary.triggered_rows,
         auto_refill_summary.prepared_rows,
         auto_refill_summary.skipped_rows,
         auto_refill_summary.wb_requests,
+        auto_refill_summary.excluded_rows,
         auto_refill_summary.refreshed_columns,
         auto_refill_summary.applied,
     )
@@ -65,12 +70,13 @@ async def auto_refill_fbs_stocks_from_unit_async() -> None:
     logger.info("Старт автопополнения FBS-остатков из UNIT в WB.")
     summary = await FBSStocksService().auto_refill_fbs_stocks()
     logger.info(
-        "Сценарий автопополнения FBS-остатков завершен | checked_rows=%s | triggered_rows=%s | prepared_rows=%s | skipped_rows=%s | wb_requests=%s | refreshed_columns=%s | applied=%s",
+        "Сценарий автопополнения FBS-остатков завершен | checked_rows=%s | triggered_rows=%s | prepared_rows=%s | skipped_rows=%s | wb_requests=%s | excluded_rows=%s | refreshed_columns=%s | applied=%s",
         summary.checked_rows,
         summary.triggered_rows,
         summary.prepared_rows,
         summary.skipped_rows,
         summary.wb_requests,
+        summary.excluded_rows,
         summary.refreshed_columns,
         summary.applied,
     )

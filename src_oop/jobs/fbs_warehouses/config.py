@@ -31,8 +31,15 @@ MAX_RETRIES = 5
 RETRY_BASE_SLEEP_SECONDS = 5
 RETRY_MAX_SLEEP_SECONDS = 120
 
+# Короткие повторы для PostgreSQL нужны ручным сценариям, где разовый обрыв соединения
+# не должен сразу останавливать создание или удаление FBS-склада.
+DB_MAX_RETRIES = 3
+DB_RETRY_BASE_SLEEP_SECONDS = 2
+DB_RETRY_MAX_SLEEP_SECONDS = 15
+
 # Env-параметры позволяют запускать операции через текущий task registry без расширения CLI.
 ACCOUNT_ENV = "WB_FBS_ACCOUNT"
+ACCOUNTS_ENV = "WB_FBS_ACCOUNTS"
 OFFICE_ID_ENV = "WB_FBS_OFFICE_ID"
 WAREHOUSE_NAME_ENV = "WB_FBS_WAREHOUSE_NAME"
 WAREHOUSE_ID_ENV = "WB_FBS_WAREHOUSE_ID"

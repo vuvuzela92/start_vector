@@ -188,7 +188,12 @@ class WBFBSWarehousesClient:
                             f"WB отклонил токен при операции со складами: account={account}"
                         )
 
-                    response.raise_for_status()
+                    self._raise_for_status_safely(
+                        response=response,
+                        payload=payload,
+                        account=account,
+                        request_name=request_name,
+                    )
                     return WBRequestResult(payload=payload, retries_used=attempt - 1)
             except PermissionError:
                 raise
@@ -202,13 +207,13 @@ class WBFBSWarehousesClient:
                 if attempt >= self.max_retries:
                     raise RuntimeError(
                         "Запрос WB для управления FBS-складами завершился ошибкой после всех повторов: "
-                        f"account={account} request={request_name} error={type(error).__name__}: {error}"
+                        f"account={account} request={request_name} error_type={type(error).__name__}"
                     ) from error
                 await self._sleep_for_retry(
                     account=account,
                     request_name=request_name,
                     attempt=attempt,
-                    error=error,
+                    error_type=type(error).__name__,
                 )
 
         raise RuntimeError(
@@ -236,21 +241,40 @@ class WBFBSWarehousesClient:
         request_name: str,
         attempt: int,
         status: int | None = None,
-        error: Exception | None = None,
+        error_type: str | None = None,
     ) -> None:
         """Выдерживает паузу между повторами, чтобы соблюсти лимиты WB при операциях со складами."""
         sleep_seconds = self._calculate_retry_sleep_seconds(attempt=attempt, status=status)
         logger.warning(
-            "Повторяем запрос WB по FBS-складам | account=%s | request=%s | attempt=%s/%s | status=%s | error=%s | sleep_seconds=%s",
+            "Повторяем запрос WB по FBS-складам | account=%s | request=%s | attempt=%s/%s | status=%s | error_type=%s | sleep_seconds=%s",
             account,
             request_name,
             attempt,
             self.max_retries,
             status,
-            repr(error) if error else None,
+            error_type,
             sleep_seconds,
         )
         await asyncio.sleep(sleep_seconds)
+
+    def _raise_for_status_safely(
+        self,
+        response: aiohttp.ClientResponse,
+        payload: dict | list | None,
+        account: str,
+        request_name: str,
+    ) -> None:
+        """Поднимает HTTP-ошибку WB по складам без вывода токенов и HTTP headers.
+
+        Бизнес-правило: оператору нужны статус и безопасное тело ответа WB, но не служебные headers,
+        где может находиться токен авторизации.
+        """
+        if response.status < 400:
+            return
+        raise RuntimeError(
+            "WB вернул ошибку при операции со складами: "
+            f"account={account} request={request_name} status={response.status} payload={payload}"
+        )
 
     def _calculate_retry_sleep_seconds(self, attempt: int, status: int | None) -> int:
         """Рассчитывает backoff для защиты сценария управления складами от 429 и временных ошибок WB."""

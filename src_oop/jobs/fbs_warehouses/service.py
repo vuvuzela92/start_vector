@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 import aiohttp
@@ -43,7 +43,7 @@ class FBSWarehousesService:
         self.client = client or WBFBSWarehousesClient()
         self.tokens_loader = tokens_loader or load_api_tokens
 
-    async def list_offices(self, account: str | None = None) -> WarehousesOperationSummary:
+    async def list_offices(self, account: str | Sequence[str] | None = None) -> WarehousesOperationSummary:
         """Получает офисы WB, чтобы пользователь мог выбрать `officeId` для создания FBS-склада."""
         tokens_by_account = self._resolve_tokens(account=account)
         summary = WarehousesOperationSummary(
@@ -60,7 +60,10 @@ class FBSWarehousesService:
                 self._append_result(summary, account_name, result.payload, result.retries_used)
         return summary
 
-    async def list_warehouses(self, account: str | None = None) -> WarehousesOperationSummary:
+    async def list_warehouses(
+        self,
+        account: str | Sequence[str] | None = None,
+    ) -> WarehousesOperationSummary:
         """Получает FBS-склады продавца, чтобы сверить `warehouseId` перед удалением или обновлением остатков."""
         tokens_by_account = self._resolve_tokens(account=account)
         summary = WarehousesOperationSummary(
@@ -79,25 +82,55 @@ class FBSWarehousesService:
 
     async def create_warehouse(
         self,
-        account: str,
+        account: str | Sequence[str] | None,
         office_id: int,
         name: str,
+        skip_existing_by_account: dict[str, dict[str, object]] | None = None,
     ) -> WarehousesOperationSummary:
-        """Создает FBS-склад продавца в выбранном кабинете WB по заранее выбранному офису WB."""
+        """Создает FBS-склад продавца по выбранному офису WB в одном или нескольких кабинетах.
+
+        Бизнес-правило: если для аккаунта уже есть активная связка нашего `warehouse_id` в
+        `warehouses_fbs`, WB API не вызывается, чтобы не создавать дубли складов.
+        """
         if not name.strip():
             raise ValueError("Название FBS-склада WB не может быть пустым.")
 
-        token = self._resolve_single_token(account=account)
-        summary = WarehousesOperationSummary(operation="create_warehouse", accounts_total=1)
+        tokens_by_account = self._resolve_tokens(account=account)
+        summary = WarehousesOperationSummary(
+            operation="create_warehouse",
+            accounts_total=len(tokens_by_account),
+        )
+        normalized_skip = skip_existing_by_account or {}
         async with aiohttp.ClientSession() as session:
-            result = await self.client.create_warehouse(
-                session=session,
-                account=account.strip(),
-                token=token,
-                office_id=office_id,
-                name=name.strip(),
-            )
-            self._append_result(summary, account.strip(), result.payload, result.retries_used)
+            for account_name, token in tokens_by_account.items():
+                existing_payload = normalized_skip.get(account_name.casefold())
+                if existing_payload is not None:
+                    logger.info(
+                        "Создание FBS-склада пропущено: активный склад уже есть в warehouses_fbs | account=%s | warehouse_id=%s | wb_warehouse_id=%s",
+                        account_name,
+                        existing_payload.get("warehouse_id"),
+                        existing_payload.get("wb_warehouse_id"),
+                    )
+                    self._append_result(
+                        summary,
+                        account_name,
+                        {
+                            "status": "skipped_existing",
+                            "reason": "active_warehouse_exists",
+                            "existing": existing_payload,
+                        },
+                        retries_used=0,
+                    )
+                    continue
+
+                result = await self.client.create_warehouse(
+                    session=session,
+                    account=account_name,
+                    token=token,
+                    office_id=office_id,
+                    name=name.strip(),
+                )
+                self._append_result(summary, account_name, result.payload, result.retries_used)
         return summary
 
     async def delete_warehouse(
@@ -111,42 +144,78 @@ class FBSWarehousesService:
         async with aiohttp.ClientSession() as session:
             result = await self.client.delete_warehouse(
                 session=session,
-                account=account.strip(),
+                account=self._normalize_account_name(account),
                 token=token,
                 warehouse_id=warehouse_id,
             )
-            self._append_result(summary, account.strip(), result.payload, result.retries_used)
+            self._append_result(
+                summary,
+                self._normalize_account_name(account),
+                result.payload,
+                result.retries_used,
+            )
         return summary
 
-    def _resolve_tokens(self, account: str | None) -> dict[str, str]:
-        """Загружает WB-токены и при необходимости ограничивает ручную операцию одним кабинетом."""
+    def _resolve_tokens(self, account: str | Sequence[str] | None) -> dict[str, str]:
+        """Загружает WB-токены и при необходимости ограничивает операцию списком кабинетов.
+
+        Бизнес-сценарий: создание складов можно запускать на одном ЛК, на списке ЛК или на всех
+        аккаунтах из токенов. Для каждого указанного ЛК наличие токена обязательно. Названия ЛК
+        приводятся к uppercase, чтобы `старт0854`, `Старт0854` и `СТАРТ0854` считались одним ЛК.
+        """
         loaded_tokens = self.tokens_loader()
         if not isinstance(loaded_tokens, Mapping):
             raise TypeError("load_api_tokens() должен возвращать Mapping account -> token.")
 
         tokens_by_account = {
-            account_name.strip(): token.strip()
+            self._normalize_account_name(account_name): token.strip()
             for account_name, token in loaded_tokens.items()
             if isinstance(account_name, str)
             and account_name.strip()
             and isinstance(token, str)
             and token.strip()
         }
+        tokens_by_lookup = {
+            account_name.casefold(): (account_name, token)
+            for account_name, token in tokens_by_account.items()
+        }
 
         if account is None:
             return tokens_by_account
 
-        normalized_account = account.strip()
-        if normalized_account in tokens_by_account:
-            return {normalized_account: tokens_by_account[normalized_account]}
+        requested_accounts = (
+            [self._normalize_account_name(account)]
+            if isinstance(account, str)
+            else [
+                self._normalize_account_name(account_name)
+                for account_name in account
+                if account_name.strip()
+            ]
+        )
+        selected_tokens: dict[str, str] = {}
+        missing_accounts: list[str] = []
+        for account_name in requested_accounts:
+            resolved_token = tokens_by_lookup.get(account_name.casefold())
+            if resolved_token is not None:
+                resolved_account, token = resolved_token
+                selected_tokens[resolved_account] = token
+            else:
+                missing_accounts.append(account_name)
 
-        raise ValueError(f"Аккаунт '{account}' не найден в токенах WB.")
+        if missing_accounts:
+            raise ValueError(f"Аккаунты не найдены в токенах WB: {missing_accounts}")
+        return selected_tokens
 
     def _resolve_single_token(self, account: str) -> str:
         """Возвращает один токен WB, защищая создание и удаление складов от запуска по всем кабинетам."""
         if not account.strip():
             raise ValueError("Для создания или удаления FBS-склада нужно указать аккаунт WB.")
-        return self._resolve_tokens(account=account)[account.strip()]
+        resolved_tokens = self._resolve_tokens(account=account)
+        return next(iter(resolved_tokens.values()))
+
+    def _normalize_account_name(self, account: str) -> str:
+        """Приводит название ЛК к единому виду для поиска токена и записи складов в БД."""
+        return account.strip().upper()
 
     def _append_result(
         self,

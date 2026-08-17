@@ -10,6 +10,7 @@ import pandas as pd
 
 from src_oop.jobs.fbs_warehouses.config import (
     ACCOUNT_ENV,
+    ACCOUNTS_ENV,
     IMPORT_SOURCE_PATH_ENV,
     OFFICE_ID_ENV,
     OUR_WAREHOUSE_ID_ENV,
@@ -45,6 +46,11 @@ def _coerce_required_str(value: str | None, parameter_name: str) -> str:
     raise ValueError(f"Параметр {parameter_name} обязателен.")
 
 
+def _normalize_account_name(account: str) -> str:
+    """Приводит ЛК к uppercase для единого хранения и поиска FBS-складов по аккаунтам."""
+    return account.strip().upper()
+
+
 def _coerce_optional_int(value: int | str | None, parameter_name: str) -> int | None:
     """Приводит необязательный числовой параметр WB к int, сохраняя пустое значение как неизвестное."""
     if value is None:
@@ -59,6 +65,22 @@ def _coerce_optional_int(value: int | str | None, parameter_name: str) -> int | 
         except ValueError as error:
             raise ValueError(f"Параметр {parameter_name} должен быть целым числом.") from error
     raise TypeError(f"Параметр {parameter_name} должен иметь тип int, str или None.")
+
+
+def _parse_accounts_list(value: str | None) -> list[str] | None:
+    """Разбирает список ЛК из env для массового создания FBS-склада.
+
+    Бизнес-сценарий: пользователь может создать один логический склад только на выбранных ЛК,
+    передав `WB_FBS_ACCOUNTS="ЛК1,ЛК2"`, не затрагивая остальные аккаунты из токенов.
+    """
+    if value is None or not value.strip():
+        return None
+    accounts = [
+        _normalize_account_name(account)
+        for account in value.split(",")
+        if account.strip()
+    ]
+    return accounts or None
 
 
 def _print_summary(summary_payload: dict[str, object]) -> None:
@@ -102,6 +124,8 @@ def _build_warehouse_rows_from_created_payload(
         create_payload = result.get("payload")
         if not isinstance(account, str) or not isinstance(create_payload, dict):
             continue
+        if create_payload.get("status") == "skipped_existing":
+            continue
         wb_warehouse_id = create_payload.get("id")
         if not isinstance(wb_warehouse_id, int):
             raise ValueError(
@@ -111,7 +135,7 @@ def _build_warehouse_rows_from_created_payload(
             {
                 "warehouse_id": warehouse_id,
                 "warehouse_name": warehouse_name,
-                "account": account.strip(),
+                "account": _normalize_account_name(account),
                 "wb_warehouse_id": wb_warehouse_id,
                 "wb_office_id": wb_office_id,
                 "status": "active",
@@ -119,8 +143,6 @@ def _build_warehouse_rows_from_created_payload(
             }
         )
 
-    if not rows:
-        raise ValueError("В JSON создания склада нет строк, пригодных для записи.")
     return rows
 
 
@@ -148,6 +170,17 @@ def _save_created_warehouse_summary_to_db(
         warehouse_name=warehouse_name,
         wb_office_id=wb_office_id,
     )
+    if not rows:
+        logger.info(
+            "Запись созданного FBS-склада в warehouses_fbs не требуется: новых складов нет | warehouse_id=%s",
+            resolved_warehouse_id,
+        )
+        return {
+            "warehouse_id": resolved_warehouse_id,
+            "warehouse_name": warehouse_name,
+            "written_rows": 0,
+            "rows": [],
+        }
     save_result = repository.save(
         dataframe=pd.DataFrame(rows),
         warehouse_id=resolved_warehouse_id,
@@ -182,7 +215,10 @@ def _find_existing_warehouse_payload(
     for account_result in results:
         if not isinstance(account_result, dict):
             continue
-        if account_result.get("account") != account:
+        result_account = account_result.get("account")
+        if not isinstance(result_account, str):
+            continue
+        if _normalize_account_name(result_account) != _normalize_account_name(account):
             continue
 
         warehouses = account_result.get("unmatched_warehouses", [])
@@ -198,7 +234,12 @@ def _find_existing_warehouse_payload(
 
 async def list_wb_offices_async(account: str | None = None) -> None:
     """Запускает получение офисов WB для выбора `officeId` при создании FBS-склада продавца."""
-    resolved_account = account or os.getenv(ACCOUNT_ENV)
+    account_value = account or os.getenv(ACCOUNT_ENV)
+    resolved_account = (
+        _normalize_account_name(account_value)
+        if account_value
+        else None
+    )
     logger.info("Старт получения офисов WB для FBS-склада | account=%s", resolved_account)
     summary = await FBSWarehousesService().list_offices(account=resolved_account)
     _print_summary(_summary_to_dict(summary))
@@ -211,7 +252,12 @@ async def list_wb_offices_async(account: str | None = None) -> None:
 
 async def list_fbs_warehouses_async(account: str | None = None) -> None:
     """Запускает получение FBS-складов продавца, чтобы увидеть текущие `warehouseId`."""
-    resolved_account = account or os.getenv(ACCOUNT_ENV)
+    account_value = account or os.getenv(ACCOUNT_ENV)
+    resolved_account = (
+        _normalize_account_name(account_value)
+        if account_value
+        else None
+    )
     logger.info("Старт получения FBS-складов WB | account=%s", resolved_account)
     summary = await FBSWarehousesService().list_warehouses(account=resolved_account)
     _print_summary(_summary_to_dict(summary))
@@ -223,8 +269,16 @@ async def list_fbs_warehouses_async(account: str | None = None) -> None:
 
 
 async def sync_fbs_warehouses_from_wb_async(account: str | None = None) -> None:
-    """Дозаполняет warehouses_fbs актуальными данными WB по складам текущего аккаунта."""
-    resolved_account = _coerce_required_str(account or os.getenv(ACCOUNT_ENV), "account")
+    """Синхронизирует warehouses_fbs с действующими WB-складами текущего аккаунта.
+
+    Бизнес-сценарий: задача получает список складов из WB, обновляет уже известные
+    связки и автоматически добавляет действующие склады, которых еще нет в БД.
+    Для нового склада используется существующий `warehouse_id` по названию склада,
+    а если такое название не найдено, создается новый внутренний ID.
+    """
+    resolved_account = _normalize_account_name(
+        _coerce_required_str(account or os.getenv(ACCOUNT_ENV), "account")
+    )
     logger.info(
         "Старт синхронизации справочника FBS-складов из WB | account=%s",
         resolved_account,
@@ -253,6 +307,7 @@ async def sync_fbs_warehouses_from_wb_async(account: str | None = None) -> None:
                     "account": result.account,
                     "api_rows": result.api_rows,
                     "updated_rows": result.updated_rows,
+                    "inserted_rows": result.inserted_rows,
                     "unmatched_rows": len(result.unmatched_warehouses),
                     "unmatched_warehouses": result.unmatched_warehouses,
                 }
@@ -272,27 +327,49 @@ async def create_fbs_warehouse_async(
     office_id: int | str | None = None,
     name: str | None = None,
 ) -> None:
-    """Запускает создание FBS-склада WB по выбранному офису для будущего управления остатками."""
-    resolved_account = _coerce_required_str(account or os.getenv(ACCOUNT_ENV), "account")
+    """Запускает создание FBS-склада WB по выбранному офису для будущего управления остатками.
+
+    Бизнес-сценарий: если задан `WB_FBS_ACCOUNTS`, склад создается только на перечисленных ЛК; если
+    список и `WB_FBS_ACCOUNT` не заданы, склад создается на всех ЛК из токенов. Для каждого ЛК перед
+    вызовом WB API проверяется `warehouses_fbs`; если активная связка уже есть, аккаунт пропускается
+    без повторного создания склада.
+    """
+    account_value = account or os.getenv(ACCOUNT_ENV)
+    account_filter: str | list[str] | None = (
+        _normalize_account_name(account_value)
+        if account_value
+        else None
+    )
+    if account_filter is None:
+        account_filter = _parse_accounts_list(os.getenv(ACCOUNTS_ENV))
     resolved_office_id = _coerce_required_int(office_id or os.getenv(OFFICE_ID_ENV), "office_id")
     resolved_name = _coerce_required_str(name or os.getenv(WAREHOUSE_NAME_ENV), "name")
-
-    logger.info(
-        "Старт создания FBS-склада WB | account=%s | office_id=%s | name=%s",
-        resolved_account,
-        resolved_office_id,
-        resolved_name,
-    )
-    summary = await FBSWarehousesService().create_warehouse(
-        account=resolved_account,
-        office_id=resolved_office_id,
-        name=resolved_name,
-    )
-    summary_payload = _summary_to_dict(summary)
+    repository = FBSWarehousesRepository()
     resolved_warehouse_id = _coerce_optional_int(
         os.getenv(OUR_WAREHOUSE_ID_ENV),
         "warehouse_id",
     )
+    if resolved_warehouse_id is None:
+        resolved_warehouse_id = repository.get_next_warehouse_id()
+    existing_by_account = repository.fetch_active_warehouses_by_logical_id(
+        warehouse_id=resolved_warehouse_id,
+    )
+
+    logger.info(
+        "Старт создания FBS-склада WB | account=%s | office_id=%s | name=%s | warehouse_id=%s | existing_accounts=%s",
+        account_filter,
+        resolved_office_id,
+        resolved_name,
+        resolved_warehouse_id,
+        len(existing_by_account),
+    )
+    summary = await FBSWarehousesService().create_warehouse(
+        account=account_filter,
+        office_id=resolved_office_id,
+        name=resolved_name,
+        skip_existing_by_account=existing_by_account,
+    )
+    summary_payload = _summary_to_dict(summary)
     database_import = _save_created_warehouse_summary_to_db(
         summary_payload=summary_payload,
         warehouse_name=resolved_name,
@@ -303,7 +380,7 @@ async def create_fbs_warehouse_async(
     _print_summary(summary_payload)
     logger.info(
         "Создание FBS-склада WB завершено и записано в БД | account=%s | warehouse_id=%s | retries_used=%s",
-        resolved_account,
+        account_filter,
         database_import["warehouse_id"],
         summary.retries_used,
     )
@@ -314,7 +391,9 @@ async def delete_fbs_warehouse_async(
     warehouse_id: int | str | None = None,
 ) -> None:
     """Запускает удаление FBS-склада WB, который больше не нужен для управления остатками."""
-    resolved_account = _coerce_required_str(account or os.getenv(ACCOUNT_ENV), "account")
+    resolved_account = _normalize_account_name(
+        _coerce_required_str(account or os.getenv(ACCOUNT_ENV), "account")
+    )
     resolved_warehouse_id = _coerce_required_int(
         warehouse_id or os.getenv(WAREHOUSE_ID_ENV),
         "warehouse_id",
@@ -451,7 +530,9 @@ def import_existing_fbs_warehouse(
     Это нужно, чтобы будущая загрузка остатков управляла складом через общий
     бизнес-ID, а в WB отправляла аккаунтный `wb_warehouse_id`.
     """
-    resolved_account = _coerce_required_str(account or os.getenv(ACCOUNT_ENV), "account")
+    resolved_account = _normalize_account_name(
+        _coerce_required_str(account or os.getenv(ACCOUNT_ENV), "account")
+    )
     resolved_source_path = Path(
         source_path or os.getenv(IMPORT_SOURCE_PATH_ENV) or DEFAULT_SYNCED_WAREHOUSES_PATH
     )

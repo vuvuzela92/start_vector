@@ -28,6 +28,7 @@ from src_oop.jobs.fbs_stocks.config import (
 )
 
 logger = logging.getLogger(__name__)
+NBSP_CHARACTER = "\u00a0"
 
 
 @dataclass(slots=True)
@@ -430,6 +431,48 @@ class FBSStocksGoogleSheetsClient:
         )
         return len(unique_ranges)
 
+    def clear_excluded_article_controls(self, row_numbers: list[int]) -> int:
+        """Исключает строки удаленных товаров из FBS-сценариев, очищая их управляющие ячейки.
+
+        Бизнес-сценарий: если WB отвечает `NotFound`, товар мог быть удален или перемещен в корзину
+        через сайт. Чтобы cron и ручная отправка не пытались бесконечно обновлять такой артикул,
+        мы очищаем одноразовые команды новых остатков и `Минимальный остаток` в этой строке.
+        """
+        if not row_numbers:
+            logger.info("Исключение строк удаленных товаров из UNIT пропущено: нет подходящих строк.")
+            return 0
+
+        headers = self.worksheet.row_values(HEADER_ROW_INDEX)
+        self._validate_headers(
+            headers,
+            (
+                NEW_STOCK_ALL_WAREHOUSES_COLUMN,
+                NEW_STOCK_VESHKI_COLUMN,
+                MIN_STOCK_COLUMN,
+            ),
+        )
+
+        ranges: list[str] = []
+        control_columns = (
+            NEW_STOCK_ALL_WAREHOUSES_COLUMN,
+            NEW_STOCK_VESHKI_COLUMN,
+            MIN_STOCK_COLUMN,
+        )
+        for row_number in sorted(set(row_numbers)):
+            for column_name in control_columns:
+                column_index = headers.index(column_name) + 1
+                ranges.append(rowcol_to_a1(row_number, column_index))
+
+        unique_ranges = sorted(set(ranges))
+        self.worksheet.batch_clear(unique_ranges)
+        logger.warning(
+            "Строки удаленных товаров исключены из FBS-сценариев в UNIT | sheet=%s | rows=%s | cells=%s",
+            self.worksheet.title,
+            len(set(row_numbers)),
+            len(unique_ranges),
+        )
+        return len(set(row_numbers))
+
     def _validate_headers(self, headers: list[str], required_columns: tuple[str, ...]) -> None:
         """Проверяет наличие колонок UNIT, чтобы не записать остатки в неверный диапазон."""
         missing_columns = [column for column in required_columns if column not in headers]
@@ -441,7 +484,7 @@ class FBSStocksGoogleSheetsClient:
 
     def _coerce_article_id(self, value: str) -> int | None:
         """Приводит артикул UNIT к int, пропуская пустые и служебные строки."""
-        prepared_value = str(value).strip().replace(" ", "")
+        prepared_value = self._normalize_numeric_text(value)
         if not prepared_value.isdigit():
             return None
         return int(prepared_value)
@@ -453,7 +496,7 @@ class FBSStocksGoogleSheetsClient:
         column_name: str,
     ) -> int | None:
         """Приводит новый остаток UNIT к неотрицательному int для безопасной отправки в WB."""
-        prepared_value = str(value).strip().replace(" ", "").replace(",", ".")
+        prepared_value = self._normalize_numeric_text(value).replace(",", ".")
         if prepared_value == "":
             return None
         try:
@@ -474,7 +517,7 @@ class FBSStocksGoogleSheetsClient:
         Бизнес-правило: пустое значение означает, что строка не участвует в автопополнении. Дробные
         и отрицательные значения не используются, чтобы cron не отправил в WB неоднозначный остаток.
         """
-        prepared_value = str(value).strip().replace(" ", "").replace(",", ".")
+        prepared_value = self._normalize_numeric_text(value).replace(",", ".")
         if prepared_value == "":
             return None
         try:
@@ -484,3 +527,12 @@ class FBSStocksGoogleSheetsClient:
         if amount < 0 or not amount.is_integer():
             return None
         return int(amount)
+
+    def _normalize_numeric_text(self, value: str) -> str:
+        """Нормализует число из Google Sheets перед разбором остатков и лимитов.
+
+        Бизнес-сценарий: пользователи могут вводить значения с разделителями тысяч, и Google
+        Sheets сохраняет их как обычные или неразрывные пробелы. Сценарий должен одинаково
+        понимать `1000`, `1 000` и `1 000`, чтобы не останавливать запуск из-за формата ячейки.
+        """
+        return str(value).strip().replace(" ", "").replace(NBSP_CHARACTER, "")

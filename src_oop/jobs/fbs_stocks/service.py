@@ -15,6 +15,7 @@ from src_oop.jobs.fbs_stocks.config import (
     AUTO_REFILL_APPLY_ENV,
     APPLY_STOCKS_ENV,
     CREATE_MISSING_COLUMNS_ENV,
+    NEW_STOCK_VESHKI_COLUMN,
     REFRESH_VERIFY_ATTEMPTS,
     REFRESH_VERIFY_SLEEP_SECONDS,
     TARGET_WAREHOUSES,
@@ -51,7 +52,9 @@ class FBSStocksApplySummary:
     unchanged_rows: int = 0
     wb_requests: int = 0
     cleared_cells: int = 0
+    excluded_rows: int = 0
     refreshed_columns: int = 0
+    auto_refill_excluded_row_numbers: tuple[int, ...] = ()
     applied: bool = False
 
 
@@ -64,6 +67,7 @@ class FBSStocksAutoRefillSummary:
     prepared_rows: int = 0
     skipped_rows: int = 0
     wb_requests: int = 0
+    excluded_rows: int = 0
     refreshed_columns: int = 0
     applied: bool = False
 
@@ -146,8 +150,18 @@ class FBSStocksService:
 
         new_stock_rows = self.sheets_client.read_new_stock_rows()
         new_stock_rows = self._filter_new_stock_rows_by_account(new_stock_rows)
+        veshki_priority_row_numbers = tuple(
+            sorted(
+                {
+                    row.row_number
+                    for row in new_stock_rows
+                    if row.source_column == NEW_STOCK_VESHKI_COLUMN
+                }
+            )
+        )
         summary = FBSStocksApplySummary(
             requested_rows=len(new_stock_rows),
+            auto_refill_excluded_row_numbers=veshki_priority_row_numbers,
             applied=self._should_apply_stocks() if apply is None else apply,
         )
         if not new_stock_rows:
@@ -192,6 +206,7 @@ class FBSStocksService:
                 tokens_by_account=tokens_by_account,
             )
             sent_successful_groups: set[tuple[str, int]] = set()
+            not_found_chrt_ids_by_group: dict[tuple[str, int], set[int]] = {}
             for (normalized_account, wb_warehouse_id), stocks_by_chrt_id in update_plan.items():
                 token = tokens_by_account.get(normalized_account)
                 if token is None:
@@ -223,8 +238,23 @@ class FBSStocksService:
                     continue
                 summary.wb_requests += 1
                 successful_groups.add((normalized_account, wb_warehouse_id))
+                if result.skipped_not_found_chrt_ids:
+                    not_found_chrt_ids_by_group[(normalized_account, wb_warehouse_id)] = set(
+                        result.skipped_not_found_chrt_ids
+                    )
                 if result.sent_rows > 0:
                     sent_successful_groups.add((normalized_account, wb_warehouse_id))
+
+        excluded_rows = self._find_fully_not_found_new_stock_rows(
+            new_stock_rows=new_stock_rows,
+            chrt_ids_by_article=chrt_ids_by_article,
+            warehouses=warehouses,
+            not_found_chrt_ids_by_group=not_found_chrt_ids_by_group,
+        )
+        if excluded_rows:
+            summary.excluded_rows = self.sheets_client.clear_excluded_article_controls(
+                [row.row_number for row in excluded_rows]
+            )
 
         if successful_groups:
             successfully_applied_rows = self._filter_successfully_applied_rows(
@@ -244,18 +274,23 @@ class FBSStocksService:
             summary.refreshed_columns = refresh_summary.updated_columns
 
         logger.info(
-            "Отправка FBS-остатков WB завершена | requested_rows=%s | prepared_rows=%s | skipped_rows=%s | unchanged_rows=%s | wb_requests=%s | cleared_cells=%s | refreshed_columns=%s",
+            "Отправка FBS-остатков WB завершена | requested_rows=%s | prepared_rows=%s | skipped_rows=%s | unchanged_rows=%s | wb_requests=%s | cleared_cells=%s | excluded_rows=%s | refreshed_columns=%s",
             summary.requested_rows,
             summary.prepared_rows,
             summary.skipped_rows,
             summary.unchanged_rows,
             summary.wb_requests,
             summary.cleared_cells,
+            summary.excluded_rows,
             summary.refreshed_columns,
         )
         return summary
 
-    async def auto_refill_fbs_stocks(self, apply: bool | None = None) -> FBSStocksAutoRefillSummary:
+    async def auto_refill_fbs_stocks(
+        self,
+        apply: bool | None = None,
+        excluded_row_numbers: set[int] | None = None,
+    ) -> FBSStocksAutoRefillSummary:
         """Автоматически пополняет FBS-остатки, если средний остаток склада ниже минимума.
 
         Бизнес-сценарий: cron проверяет строки UNIT. Если текущая сумма FBS по активным внутренним
@@ -265,6 +300,10 @@ class FBSStocksService:
         `ФБС общий остаток`, чтобы подтвердить результат выгрузки.
         """
         rows = self._filter_auto_refill_rows_by_account(self.sheets_client.read_auto_refill_rows())
+        rows = self._exclude_rows_from_auto_refill(
+            rows=rows,
+            excluded_row_numbers=excluded_row_numbers or set(),
+        )
         summary = FBSStocksAutoRefillSummary(
             checked_rows=len(rows),
             applied=self._should_apply_auto_refill() if apply is None else apply,
@@ -322,6 +361,7 @@ class FBSStocksService:
             return summary
 
         sent_successful_groups: set[tuple[str, int]] = set()
+        not_found_chrt_ids_by_group: dict[tuple[str, int], set[int]] = {}
         async with aiohttp.ClientSession() as session:
             for (normalized_account, wb_warehouse_id), stocks_by_chrt_id in update_plan.items():
                 token = tokens_by_account.get(normalized_account)
@@ -353,8 +393,23 @@ class FBSStocksService:
                     )
                     continue
                 summary.wb_requests += 1
+                if result.skipped_not_found_chrt_ids:
+                    not_found_chrt_ids_by_group[(normalized_account, wb_warehouse_id)] = set(
+                        result.skipped_not_found_chrt_ids
+                    )
                 if result.sent_rows > 0:
                     sent_successful_groups.add((normalized_account, wb_warehouse_id))
+
+        excluded_rows = self._find_fully_not_found_auto_refill_rows(
+            rows=rows,
+            chrt_ids_by_article=chrt_ids_by_article,
+            warehouses=warehouses,
+            not_found_chrt_ids_by_group=not_found_chrt_ids_by_group,
+        )
+        if excluded_rows:
+            summary.excluded_rows = self.sheets_client.clear_excluded_article_controls(
+                [row.row_number for row in excluded_rows]
+            )
 
         if sent_successful_groups:
             await self._wait_until_sent_stocks_are_visible(
@@ -366,12 +421,13 @@ class FBSStocksService:
             summary.refreshed_columns = refresh_summary.updated_columns
 
         logger.info(
-            "Автопополнение FBS-остатков завершено | checked_rows=%s | triggered_rows=%s | prepared_rows=%s | skipped_rows=%s | wb_requests=%s | refreshed_columns=%s | applied=%s",
+            "Автопополнение FBS-остатков завершено | checked_rows=%s | triggered_rows=%s | prepared_rows=%s | skipped_rows=%s | wb_requests=%s | excluded_rows=%s | refreshed_columns=%s | applied=%s",
             summary.checked_rows,
             summary.triggered_rows,
             summary.prepared_rows,
             summary.skipped_rows,
             summary.wb_requests,
+            summary.excluded_rows,
             summary.refreshed_columns,
             summary.applied,
         )
@@ -784,6 +840,95 @@ class FBSStocksService:
             )
         return successfully_applied_rows
 
+    def _find_fully_not_found_new_stock_rows(
+        self,
+        new_stock_rows: list[UnitNewStockRow],
+        chrt_ids_by_article: dict[int, int],
+        warehouses: dict[tuple[str, int], int],
+        not_found_chrt_ids_by_group: dict[tuple[str, int], set[int]],
+    ) -> list[UnitNewStockRow]:
+        """Находит строки ручного управления, где товар не найден на всех целевых складах ЛК.
+
+        Бизнес-правило: только полное подтверждение `NotFound` по всем ожидаемым складским группам
+        позволяет считать товар удаленным или перемещенным в корзину. В этом случае строку нужно
+        исключить из дальнейших FBS-сценариев, чтобы не повторять безрезультатные запросы.
+        """
+        excluded_rows: list[UnitNewStockRow] = []
+        rows_by_source_cell: dict[tuple[int, str], list[UnitNewStockRow]] = {}
+        for row in new_stock_rows:
+            rows_by_source_cell.setdefault((row.row_number, row.source_column), []).append(row)
+
+        for source_rows in rows_by_source_cell.values():
+            chrt_id = chrt_ids_by_article.get(source_rows[0].article_id)
+            if chrt_id is None:
+                continue
+
+            expected_groups: set[tuple[str, int]] = set()
+            for row in source_rows:
+                normalized_account = self.repository.normalize_account(row.account)
+                wb_warehouse_id = warehouses.get((normalized_account, row.warehouse_id))
+                if wb_warehouse_id is not None:
+                    expected_groups.add((normalized_account, wb_warehouse_id))
+
+            if not expected_groups:
+                continue
+            if all(chrt_id in not_found_chrt_ids_by_group.get(group, set()) for group in expected_groups):
+                excluded_rows.extend(source_rows)
+                logger.warning(
+                    "Строка нового FBS-остатка будет исключена из UNIT: товар не найден на всех целевых складах ЛК | row=%s | account=%s | article_id=%s | chrt_id=%s | groups=%s",
+                    source_rows[0].row_number,
+                    self.repository.normalize_account(source_rows[0].account),
+                    source_rows[0].article_id,
+                    chrt_id,
+                    len(expected_groups),
+                )
+
+        return excluded_rows
+
+    def _find_fully_not_found_auto_refill_rows(
+        self,
+        rows: list[UnitAutoRefillRow],
+        chrt_ids_by_article: dict[int, int],
+        warehouses: dict[tuple[str, int], int],
+        not_found_chrt_ids_by_group: dict[tuple[str, int], set[int]],
+    ) -> list[UnitAutoRefillRow]:
+        """Находит строки автопополнения, где товар не найден на всех активных складах аккаунта.
+
+        Бизнес-правило: если cron видит `NotFound` по всем активным внутренним складам строки,
+        товар больше не должен участвовать ни в автопополнении, ни в ручных управляющих командах
+        этой строки, потому что WB уже не принимает по нему FBS-остатки.
+        """
+        excluded_rows: list[UnitAutoRefillRow] = []
+        for row in rows:
+            chrt_id = chrt_ids_by_article.get(row.article_id)
+            if chrt_id is None:
+                continue
+            normalized_account = self.repository.normalize_account(row.account)
+            expected_groups = {
+                (normalized_account, wb_warehouse_id)
+                for target_warehouse in TARGET_WAREHOUSES
+                if (
+                    wb_warehouse_id := warehouses.get(
+                        (normalized_account, target_warehouse.warehouse_id)
+                    )
+                )
+                is not None
+            }
+            if not expected_groups:
+                continue
+            if all(chrt_id in not_found_chrt_ids_by_group.get(group, set()) for group in expected_groups):
+                excluded_rows.append(row)
+                logger.warning(
+                    "Строка автопополнения будет исключена из UNIT: товар не найден на всех активных складах ЛК | row=%s | account=%s | article_id=%s | chrt_id=%s | groups=%s",
+                    row.row_number,
+                    normalized_account,
+                    row.article_id,
+                    chrt_id,
+                    len(expected_groups),
+                )
+
+        return excluded_rows
+
     def _resolve_tokens(self) -> dict[str, str]:
         """Загружает WB-токены и нормализует имена аккаунтов под колонку `ЛК` в UNIT."""
         loaded_tokens = self.tokens_loader()
@@ -871,6 +1016,32 @@ class FBSStocksService:
             len(rows),
             len(filtered_rows),
         )
+        return filtered_rows
+
+    def _exclude_rows_from_auto_refill(
+        self,
+        rows: list[UnitAutoRefillRow],
+        excluded_row_numbers: set[int],
+    ) -> list[UnitAutoRefillRow]:
+        """Исключает строки из автопополнения, если в этом же прогоне уже сработал ручной сценарий Вешек.
+
+        Бизнес-правило: `Новый остаток Вешки` имеет приоритет над `Минимальный остаток` в рамках одного
+        запуска. Если строка уже отправила целевой остаток на `Мой склад` и обнулила остальные внутренние
+        склады, автопополнение не должно в этом же прогоне вернуть товар на все склады обратно.
+        """
+        if not excluded_row_numbers:
+            return rows
+
+        filtered_rows = [
+            row for row in rows if row.row_number not in excluded_row_numbers
+        ]
+        skipped_rows = len(rows) - len(filtered_rows)
+        if skipped_rows:
+            logger.info(
+                "Строки автопополнения пропущены из-за ручного сценария Вешек в этом же прогоне | rows=%s | row_numbers=%s",
+                skipped_rows,
+                sorted(excluded_row_numbers),
+            )
         return filtered_rows
 
     def _filter_auto_refill_rows_by_account(
