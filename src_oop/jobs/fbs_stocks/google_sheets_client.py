@@ -238,6 +238,39 @@ class FBSStocksGoogleSheetsClient:
         )
         return 1
 
+    def has_pending_new_stock_commands(self) -> bool:
+        """Проверяет, есть ли в UNIT хотя бы одна ручная команда на изменение FBS-остатка.
+
+        Бизнес-сценарий: cron может запускать `apply_new_fbs_stocks_from_unit` регулярно. Если
+        пользователь не заполнил `Новый остаток для всех складов` или `Новый остаток Вешки`,
+        сценарий не должен готовить пустую отправку в WB и может сразу перейти к актуализации
+        `ФБС общий остаток`.
+        """
+        headers = self.worksheet.row_values(HEADER_ROW_INDEX)
+        self._validate_headers(
+            headers,
+            (NEW_STOCK_ALL_WAREHOUSES_COLUMN, NEW_STOCK_VESHKI_COLUMN),
+        )
+
+        all_column_index = headers.index(NEW_STOCK_ALL_WAREHOUSES_COLUMN) + 1
+        veshki_column_index = headers.index(NEW_STOCK_VESHKI_COLUMN) + 1
+        all_values = self.worksheet.col_values(all_column_index)[DATA_START_ROW - 1 :]
+        veshki_values = self.worksheet.col_values(veshki_column_index)[DATA_START_ROW - 1 :]
+
+        for raw_value in [*all_values, *veshki_values]:
+            if self._normalize_numeric_text(raw_value) != "":
+                logger.info(
+                    "В UNIT найдены ручные команды новых FBS-остатков | sheet=%s",
+                    self.worksheet.title,
+                )
+                return True
+
+        logger.info(
+            "В UNIT не найдены ручные команды новых FBS-остатков | sheet=%s",
+            self.worksheet.title,
+        )
+        return False
+
     def read_new_stock_rows(self) -> list[UnitNewStockRow]:
         """Читает управляющие колонки новых остатков и разворачивает их в команды по складам.
 
@@ -273,12 +306,13 @@ class FBSStocksGoogleSheetsClient:
                 column_name=NEW_STOCK_VESHKI_COLUMN,
             )
             if all_amount is not None and veshki_amount is not None:
-                raise ValueError(
-                    "В UNIT одновременно заполнены два сценария нового FBS-остатка: "
-                    f"row={unit_row.row_number} columns="
-                    f"{NEW_STOCK_ALL_WAREHOUSES_COLUMN!r}, {NEW_STOCK_VESHKI_COLUMN!r}. "
-                    "Оставьте значение только в одной управляющей колонке."
+                logger.warning(
+                    "В UNIT одновременно заполнены два сценария нового FBS-остатка: применяем только Вешки | row=%s | ignored_column=%s | priority_column=%s",
+                    unit_row.row_number,
+                    NEW_STOCK_ALL_WAREHOUSES_COLUMN,
+                    NEW_STOCK_VESHKI_COLUMN,
                 )
+                all_amount = None
             if all_amount is not None:
                 new_stock_rows.extend(
                     self._build_all_warehouses_rows(

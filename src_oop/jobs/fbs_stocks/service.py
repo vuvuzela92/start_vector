@@ -142,11 +142,22 @@ class FBSStocksService:
         активный внутренний склад. `Новый остаток Вешки` ставит значение на склад Вешки, а остальные
         активные внутренние склады обнуляет. По умолчанию выполняется dry-run; после реальной
         успешной отправки исходные управляющие ячейки очищаются, а `ФБС общий остаток` перечитывается
-        из WB. Если новых команд уже нет, но включена реальная отправка, сценарий работает как
-        актуализация текущего общего FBS-остатка.
+        из WB. Если новых команд уже нет, сценарий не отправляет пустые запросы записи в WB, а
+        переключается в режим актуализации текущего `ФБС общий остаток`.
         """
         if self._should_create_missing_columns():
             self.sheets_client.ensure_stock_management_columns()
+
+        summary = FBSStocksApplySummary(
+            applied=self._should_apply_stocks() if apply is None else apply,
+        )
+        if not self.sheets_client.has_pending_new_stock_commands():
+            logger.info(
+                "Ручные команды новых FBS-остатков не найдены: запускается только актуализация общего остатка."
+            )
+            refresh_summary = await self.update_current_fbs_stocks()
+            summary.refreshed_columns = refresh_summary.updated_columns
+            return summary
 
         new_stock_rows = self.sheets_client.read_new_stock_rows()
         new_stock_rows = self._filter_new_stock_rows_by_account(new_stock_rows)
@@ -159,16 +170,14 @@ class FBSStocksService:
                 }
             )
         )
-        summary = FBSStocksApplySummary(
-            requested_rows=len(new_stock_rows),
-            auto_refill_excluded_row_numbers=veshki_priority_row_numbers,
-            applied=self._should_apply_stocks() if apply is None else apply,
-        )
+        summary.requested_rows = len(new_stock_rows)
+        summary.auto_refill_excluded_row_numbers = veshki_priority_row_numbers
         if not new_stock_rows:
-            logger.info("Отправка FBS-остатков пропущена: в UNIT нет новых остатков.")
-            if summary.applied:
-                refresh_summary = await self.update_current_fbs_stocks()
-                summary.refreshed_columns = refresh_summary.updated_columns
+            logger.info(
+                "Ручные команды FBS-остатков не подготовлены после фильтрации: выполняется только актуализация общего остатка."
+            )
+            refresh_summary = await self.update_current_fbs_stocks()
+            summary.refreshed_columns = refresh_summary.updated_columns
             return summary
 
         chrt_ids_by_article = self.repository.fetch_chrt_ids_by_articles(
