@@ -9,7 +9,12 @@ logger = logging.getLogger(__name__)
 
 
 async def update_fbs_stocks_in_unit_async() -> None:
-    """Запускает обновление текущих FBS-остатков WB в тестовой UNIT-таблице."""
+    """Запускает обновление текущих FBS-остатков WB в тестовой UNIT-таблице.
+
+    Бизнес-сценарий: задача перечитывает фактические остатки по всем активным
+    внутренним складам аккаунта и обновляет поле `ФБС общий остаток` в UNIT,
+    чтобы ручные и автоматические сценарии опирались на актуальные данные WB.
+    """
     logger.info("Старт обновления FBS-остатков в UNIT.")
     summary = await FBSStocksService().update_current_fbs_stocks()
     logger.info(
@@ -22,11 +27,13 @@ async def update_fbs_stocks_in_unit_async() -> None:
 
 
 async def apply_new_fbs_stocks_from_unit_async() -> None:
-    """Запускает единый сценарий отправки и автопополнения FBS-остатков из UNIT.
+    """Запускает только ручной сценарий отправки новых FBS-остатков из UNIT.
 
-    Бизнес-сценарий: сначала обрабатываются ручные управляющие поля UNIT, затем выполняется проверка
-    автопополнения по `Минимальный остаток` и `Сопост -> Добавляем`. Оба шага используют один режим
-    применения: при `WB_FBS_APPLY_STOCKS=true` отправляют данные в WB, иначе работают как dry-run.
+    Бизнес-сценарий: задача читает управляющие поля `Новый остаток для всех
+    складов` и `Новый остаток Вешки`, отправляет новые остатки в WB, затем
+    очищает успешно примененные ячейки и обновляет `ФБС общий остаток` из WB.
+    Проверка `Минимальный остаток` и автопополнение выполняются отдельной
+    задачей, чтобы ручная команда не смешивалась с cron-логикой.
     """
     service = FBSStocksService()
     logger.info("Старт отправки новых FBS-остатков из UNIT в WB.")
@@ -42,30 +49,14 @@ async def apply_new_fbs_stocks_from_unit_async() -> None:
         summary.refreshed_columns,
         summary.applied,
     )
-    logger.info("Старт автопополнения FBS-остатков после ручной отправки UNIT.")
-    auto_refill_summary = await service.auto_refill_fbs_stocks(
-        apply=summary.applied,
-        excluded_row_numbers=set(summary.auto_refill_excluded_row_numbers),
-    )
-    logger.info(
-        "Сценарий автопополнения FBS-остатков после ручной отправки завершен | checked_rows=%s | triggered_rows=%s | prepared_rows=%s | skipped_rows=%s | wb_requests=%s | excluded_rows=%s | refreshed_columns=%s | applied=%s",
-        auto_refill_summary.checked_rows,
-        auto_refill_summary.triggered_rows,
-        auto_refill_summary.prepared_rows,
-        auto_refill_summary.skipped_rows,
-        auto_refill_summary.wb_requests,
-        auto_refill_summary.excluded_rows,
-        auto_refill_summary.refreshed_columns,
-        auto_refill_summary.applied,
-    )
 
 
 async def auto_refill_fbs_stocks_from_unit_async() -> None:
     """Запускает cron-сценарий автопополнения FBS-остатков из UNIT.
 
-    Бизнес-сценарий: задача проверяет средний остаток на внутренний склад относительно колонки
-    `Минимальный остаток` и при необходимости устанавливает значение `Добавляем` из листа `Сопост`
-    на каждом активном FBS-складе.
+    Бизнес-сценарий: задача проверяет средний остаток на внутренний склад
+    относительно колонки `Минимальный остаток` и при необходимости устанавливает
+    значение `Добавляем` из листа `Сопост` на каждом активном FBS-складе.
     """
     logger.info("Старт автопополнения FBS-остатков из UNIT в WB.")
     summary = await FBSStocksService().auto_refill_fbs_stocks()
@@ -83,15 +74,28 @@ async def auto_refill_fbs_stocks_from_unit_async() -> None:
 
 
 def update_fbs_stocks_in_unit() -> None:
-    """Синхронный entrypoint для реестра задач, обновляющий FBS-остатки в UNIT."""
+    """Синхронный entrypoint для обновления текущих FBS-остатков в UNIT.
+
+    Бизнес-сценарий: запускает сервис чтения текущих остатков WB и записи
+    актуального `ФБС общий остаток` в тестовую таблицу UNIT.
+    """
     asyncio.run(update_fbs_stocks_in_unit_async())
 
 
 def apply_new_fbs_stocks_from_unit() -> None:
-    """Синхронный entrypoint для отправки новых FBS-остатков из UNIT в WB."""
+    """Синхронный entrypoint для ручной отправки новых FBS-остатков из UNIT.
+
+    Бизнес-сценарий: запускает только ручное применение значений из колонок
+    `Новый остаток для всех складов` и `Новый остаток Вешки`, без автопополнения
+    по минимальному остатку в этом же прогоне.
+    """
     asyncio.run(apply_new_fbs_stocks_from_unit_async())
 
 
 def auto_refill_fbs_stocks_from_unit() -> None:
-    """Синхронный entrypoint для cron-автопополнения FBS-остатков из UNIT."""
+    """Синхронный entrypoint для cron-автопополнения FBS-остатков из UNIT.
+
+    Бизнес-сценарий: запускает отдельную проверку минимального остатка и при
+    необходимости массово пополняет внутренние склады по данным листа `Сопост`.
+    """
     asyncio.run(auto_refill_fbs_stocks_from_unit_async())
