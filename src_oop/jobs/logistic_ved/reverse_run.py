@@ -23,18 +23,23 @@ from __future__ import annotations
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from time import sleep
 from zoneinfo import ZoneInfo
 
 import gspread
+import pandas as pd
 from gspread.utils import rowcol_to_a1
 
+from src_oop.core.database import Database
 from src_oop.core.logger import setup_logger
 from src_oop.core.my_gspread import GoogleTabs
 from src_oop.jobs.logistic_ved.config import (
     LOGISTIC_TO_CHINA_SYNC_COLS,
+    SUPPLY_ACCEPTANCE_STATUS_QUERY,
     delivery_calculation_china,
     ved_logistics_2026,
 )
@@ -46,6 +51,8 @@ ORDER_LINE_ID_COLUMN = "ORDER_LINE_ID"
 STATUS_COLUMN = "Статус"
 WILD_COLUMN = "wild"
 ORDER_QTY_COLUMN = "Кол-во к заказу"
+TRUCK_NUMBER_COLUMN = "Номер Трака"
+TRANSPORT_NUMBER_COLUMN = "Номер ТС"
 DATA_CHECK_COLUMN = "Сверка данных"
 DATA_CHECK_MESSAGE = "Сверьте wild и количество"
 DATA_CHECK_STATUS_MESSAGE = "Сверьте wild, количество и статус"
@@ -69,6 +76,7 @@ UNDERLOAD_STATUS = "недозагрузка"
 CUSTOMS_ZBK_STATUS = "Таможня ЗБК".lower()
 AT_SUBMISSION_STATUS = "На подаче".lower()
 INSPECTION_PROBLEM_STATUS = "осмотр/ досмотр/ проблема"
+ACCEPTANCE_DISCREPANCY_STATUS = "расхождения при приемке"
 
 # Группа исходных статусов закупщиков, которые считаются эквивалентами общего состояния "в пути".
 SOURCE_STATUSES_IN_TRANSIT_GROUP = {
@@ -140,6 +148,8 @@ TARGET_DATA_ROW_INDEX = 4
 BATCH_UPDATE_CHUNK_SIZE = 500
 # Ячейка с датой и временем последней успешной обратной синхронизации в таблице закупщиков.
 LAST_SYNC_CELL = "B1"
+# Ключ автоматической приемки: номер трака, номер ТС и wild.
+AcceptanceKey = tuple[str, str, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +173,35 @@ class ReverseSyncUpdates:
         return len(self.source_updates) + len(self.target_updates)
 
 
+@dataclass(frozen=True, slots=True)
+class AcceptanceStatusResult:
+    """Результат финальной автопроверки приемки для одной строки ОТЧЁТ_2.0.
+
+    Бизнес-логика:
+    - строка получает статус ``принят складом`` только при полном совпадении
+      трака, автомобиля, wild и количества с данными БД;
+    - если ключ совпал, но количество нет, строка получает статус
+      ``расхождения при приемке``;
+    - если ключ не найден или найден неоднозначно, статус не меняется.
+    """
+
+    status: str | None
+    matched: bool
+    quantity_mismatch: bool
+    duplicate_matches: bool
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptanceStatusSummary:
+    """Сводка по финальной автопроверке приемки для логов сценария."""
+
+    checked_rows: int
+    matched_rows: int
+    accepted_rows: int
+    discrepancy_rows: int
+    duplicate_rows: int
+
+
 @dataclass(slots=True)
 class LogisticVedReverseUpdater:
     """Возвращает логистические данные и результаты сверки обратно закупщикам.
@@ -174,6 +213,7 @@ class LogisticVedReverseUpdater:
 
     source_connector: GoogleTabs = field(init=False, repr=False)
     target_connector: GoogleTabs = field(init=False, repr=False)
+    database_cls: type[Database] = field(default=Database, repr=False)
 
     def __post_init__(self) -> None:
         """Инициализирует подключения к таблице закупщиков и таблице логистов."""
@@ -227,6 +267,11 @@ class LogisticVedReverseUpdater:
             source_headers=source_headers,
             target_headers=target_headers,
             source_row_positions=source_row_positions,
+            target_rows_by_key=target_rows_by_key,
+        )
+        updates = self._append_final_acceptance_updates(
+            updates=updates,
+            target_headers=target_headers,
             target_rows_by_key=target_rows_by_key,
         )
 
@@ -485,6 +530,57 @@ class LogisticVedReverseUpdater:
             target_updates=target_updates,
         )
 
+    def _append_final_acceptance_updates(
+        self,
+        updates: ReverseSyncUpdates,
+        target_headers: list[str],
+        target_rows_by_key: dict[str, TargetRowSnapshot],
+    ) -> ReverseSyncUpdates:
+        """Добавляет в конец сценария финальную автопроверку приемки по всем строкам ОТЧЁТ_2.0.
+
+        Бизнес-логика:
+        эта проверка должна выполняться после всей основной обратной синхронизации,
+        потому что она относится не к обмену полями с закупщиками, а к финальному
+        определению статуса приемки внутри рабочей таблицы логистов. Проверяются
+        все строки данных ОТЧЁТ_2.0, а не только строки, участвовавшие в обмене
+        с Заказы белые ТЕСТ в текущем прогоне.
+        """
+        acceptance_lookup = self._load_supply_acceptance_lookup()
+        acceptance_updates, summary = self._build_final_acceptance_updates(
+            target_headers=target_headers,
+            target_rows_by_key=target_rows_by_key,
+            acceptance_lookup=acceptance_lookup,
+        )
+
+        if not acceptance_updates:
+            logger.info(
+                "Финальная автопроверка приемки завершена без изменений: checked_rows=%s matched_rows=%s duplicate_rows=%s",
+                summary.checked_rows,
+                summary.matched_rows,
+                summary.duplicate_rows,
+            )
+            return updates
+
+        target_update_map = {
+            str(update["range"]): update for update in updates.target_updates
+        }
+        for update in acceptance_updates:
+            target_update_map[str(update["range"])] = update
+
+        logger.info(
+            "Финальная автопроверка приемки подготовила изменения: checked_rows=%s matched_rows=%s accepted_rows=%s discrepancy_rows=%s duplicate_rows=%s target_updates_added=%s",
+            summary.checked_rows,
+            summary.matched_rows,
+            summary.accepted_rows,
+            summary.discrepancy_rows,
+            summary.duplicate_rows,
+            len(acceptance_updates),
+        )
+        return ReverseSyncUpdates(
+            source_updates=updates.source_updates,
+            target_updates=list(target_update_map.values()),
+        )
+
     def _build_source_rows_map(
         self,
         source_values: list[list[str]],
@@ -502,6 +598,178 @@ class LogisticVedReverseUpdater:
             }
 
         return rows_map
+
+    def _load_supply_acceptance_lookup(self) -> dict[AcceptanceKey, list[Decimal | None]]:
+        """Читает из БД эталонные связки приемки и строит индекс для финальной проверки.
+
+        Бизнес-логика:
+        автоматическая приемка у логистов должна опираться на фактические данные
+        прихода из БД. Для надежного совпадения используется связка из номера
+        трака, номера автомобиля и wild. Количество сравнивается отдельно уже
+        после совпадения ключа.
+        """
+        dataframe = self.database_cls.read_sql_to_dataframe(SUPPLY_ACCEPTANCE_STATUS_QUERY)
+        logger.info(
+            "Из БД прочитаны строки для финальной автопроверки приемки: rows=%s",
+            len(dataframe.index),
+        )
+
+        acceptance_lookup: dict[AcceptanceKey, list[Decimal | None]] = {}
+        for row in dataframe.to_dict(orient="records"):
+            key = self._build_acceptance_key(
+                truck_number=row.get("truck_number", ""),
+                transport_number=row.get("transport_number", ""),
+                wild=row.get("local_vendor_code", ""),
+            )
+            if not all(key):
+                continue
+
+            acceptance_lookup.setdefault(key, []).append(
+                self._normalize_quantity_for_match(row.get("quantity", ""))
+            )
+
+        duplicate_keys = sum(1 for quantities in acceptance_lookup.values() if len(quantities) > 1)
+        logger.info(
+            "Подготовлен индекс приемки из БД для логистов: unique_keys=%s duplicate_keys=%s",
+            len(acceptance_lookup),
+            duplicate_keys,
+        )
+        return acceptance_lookup
+
+    def _build_final_acceptance_updates(
+        self,
+        target_headers: list[str],
+        target_rows_by_key: dict[str, TargetRowSnapshot],
+        acceptance_lookup: dict[AcceptanceKey, list[Decimal | None]],
+    ) -> tuple[list[dict[str, object]], AcceptanceStatusSummary]:
+        """Готовит точечные обновления статуса приемки для всех строк ОТЧЁТ_2.0.
+
+        Бизнес-правило:
+        - если совпали ``Номер Трака + Номер ТС + wild`` и количество, ставим
+          ``принят складом``;
+        - если совпал ключ, но количество не совпало, ставим
+          ``расхождения при приемке``;
+        - если ключ не совпал или совпадение неоднозначно, текущий статус
+          логистов не меняем.
+        """
+        target_header_map = {header: index + 1 for index, header in enumerate(target_headers)}
+        update_map: dict[str, dict[str, object]] = {}
+        summary = self._build_empty_acceptance_summary()
+
+        for order_line_id, target_snapshot in target_rows_by_key.items():
+            summary = AcceptanceStatusSummary(
+                checked_rows=summary.checked_rows + 1,
+                matched_rows=summary.matched_rows,
+                accepted_rows=summary.accepted_rows,
+                discrepancy_rows=summary.discrepancy_rows,
+                duplicate_rows=summary.duplicate_rows,
+            )
+            result = self._resolve_acceptance_status(
+                target_row=target_snapshot.values,
+                order_line_id=order_line_id,
+                acceptance_lookup=acceptance_lookup,
+            )
+            summary = self._accumulate_acceptance_summary(summary, result)
+            if result.status is None:
+                continue
+
+            current_status = self._normalize_string(target_snapshot.values.get(STATUS_COLUMN, ""))
+            if current_status == result.status:
+                continue
+
+            self._add_update(
+                update_map=update_map,
+                row_number=target_snapshot.row_number,
+                column_number=target_header_map[STATUS_COLUMN],
+                value=result.status,
+            )
+
+        return list(update_map.values()), summary
+
+    def _resolve_acceptance_status(
+        self,
+        target_row: dict[str, object],
+        order_line_id: str,
+        acceptance_lookup: dict[AcceptanceKey, list[Decimal | None]],
+    ) -> AcceptanceStatusResult:
+        """Определяет итоговый статус приемки для строки логистов по данным БД.
+
+        Метод обслуживает финальный этап логистического сценария: после всех
+        обменов с закупщиками он проверяет, подтверждена ли приемка фактическими
+        данными из БД. Статус меняется только при полном совпадении ключа и,
+        при необходимости, количества.
+        """
+        acceptance_key = self._build_acceptance_key(
+            truck_number=target_row.get(TRUCK_NUMBER_COLUMN, ""),
+            transport_number=target_row.get(TRANSPORT_NUMBER_COLUMN, ""),
+            wild=target_row.get(WILD_COLUMN, ""),
+        )
+        if not all(acceptance_key):
+            return AcceptanceStatusResult(
+                status=None,
+                matched=False,
+                quantity_mismatch=False,
+                duplicate_matches=False,
+            )
+
+        matched_quantities = acceptance_lookup.get(acceptance_key)
+        if not matched_quantities:
+            return AcceptanceStatusResult(
+                status=None,
+                matched=False,
+                quantity_mismatch=False,
+                duplicate_matches=False,
+            )
+
+        if len(matched_quantities) > 1:
+            logger.warning(
+                "Финальная автопроверка приемки пропущена: по связке найдено несколько строк в БД. Нужна ручная проверка: truck=%s transport=%s wild=%s order_line_id=%s matches=%s",
+                acceptance_key[0],
+                acceptance_key[1],
+                acceptance_key[2],
+                order_line_id,
+                len(matched_quantities),
+            )
+            return AcceptanceStatusResult(
+                status=None,
+                matched=True,
+                quantity_mismatch=False,
+                duplicate_matches=True,
+            )
+
+        target_quantity = self._normalize_quantity_for_match(target_row.get(ORDER_QTY_COLUMN, ""))
+        database_quantity = matched_quantities[0]
+        if target_quantity is None or database_quantity is None:
+            logger.warning(
+                "Финальная автопроверка приемки переведена в статус расхождения из-за некорректного количества: truck=%s transport=%s wild=%s order_line_id=%s target_quantity=%s database_quantity=%s",
+                acceptance_key[0],
+                acceptance_key[1],
+                acceptance_key[2],
+                order_line_id,
+                target_row.get(ORDER_QTY_COLUMN, ""),
+                database_quantity,
+            )
+            return AcceptanceStatusResult(
+                status=ACCEPTANCE_DISCREPANCY_STATUS,
+                matched=True,
+                quantity_mismatch=True,
+                duplicate_matches=False,
+            )
+
+        if target_quantity != database_quantity:
+            return AcceptanceStatusResult(
+                status=ACCEPTANCE_DISCREPANCY_STATUS,
+                matched=True,
+                quantity_mismatch=True,
+                duplicate_matches=False,
+            )
+
+        return AcceptanceStatusResult(
+            status=ACCEPTED_BY_WAREHOUSE_STATUS,
+            matched=True,
+            quantity_mismatch=False,
+            duplicate_matches=False,
+        )
 
     def _apply_updates(self, updates: ReverseSyncUpdates) -> None:
         """Применяет подготовленные изменения сначала к закупщикам, затем к логистам."""
@@ -559,10 +827,10 @@ class LogisticVedReverseUpdater:
 
     @staticmethod
     def _normalize_string(value: object) -> str:
-        """Приводит значение к строке без внешних пробелов."""
+        """Приводит значение к строке без внешних пробелов и скрытых переносов."""
         if value is None:
             return ""
-        return str(value).strip()
+        return re.sub(r"\s+", " ", str(value)).strip()
 
     @staticmethod
     def _sheet_cell_value(value: object) -> object:
@@ -593,6 +861,54 @@ class LogisticVedReverseUpdater:
         if numeric_value.is_integer():
             return str(int(numeric_value))
         return str(numeric_value)
+
+    def _build_acceptance_key(
+        self,
+        truck_number: object,
+        transport_number: object,
+        wild: object,
+    ) -> AcceptanceKey:
+        """Собирает нормализованный ключ автоприемки из трака, автомобиля и wild."""
+        return (
+            self._normalize_string(truck_number),
+            self._normalize_string(transport_number),
+            self._normalize_string(wild),
+        )
+
+    def _normalize_quantity_for_match(self, value: object) -> Decimal | None:
+        """Приводит количество к единому числовому виду для сверки с БД.
+
+        Бизнес-логика:
+        количество в ОТЧЁТ_2.0 и PostgreSQL может визуально отличаться по
+        формату записи. Для решения о приемке сравнивается именно числовое
+        значение, а не исходная строка.
+        """
+        if value is None or pd.isna(value):
+            return None
+        if isinstance(value, Decimal):
+            return value
+        if isinstance(value, int):
+            return Decimal(value)
+        if isinstance(value, float):
+            return Decimal(str(value))
+
+        normalized_value = self._normalize_string(value).replace("\xa0", "").replace(" ", "")
+        if normalized_value == "":
+            return None
+
+        normalized_value = normalized_value.replace(",", ".")
+        normalized_value = re.sub(r"[^0-9.\-]", "", normalized_value)
+        if normalized_value in {"", "-", ".", "-."}:
+            return None
+
+        try:
+            return Decimal(normalized_value)
+        except InvalidOperation:
+            logger.warning(
+                "Не удалось привести количество к числу для финальной автопроверки приемки: raw_value=%s",
+                value,
+            )
+            return None
 
     def _get_data_check_message(
         self,
@@ -626,6 +942,32 @@ class LogisticVedReverseUpdater:
         if has_data_mismatch:
             return DATA_CHECK_MESSAGE
         return None
+
+    @staticmethod
+    def _build_empty_acceptance_summary() -> AcceptanceStatusSummary:
+        """Создает нулевую сводку по финальной автопроверке приемки."""
+        return AcceptanceStatusSummary(
+            checked_rows=0,
+            matched_rows=0,
+            accepted_rows=0,
+            discrepancy_rows=0,
+            duplicate_rows=0,
+        )
+
+    @staticmethod
+    def _accumulate_acceptance_summary(
+        summary: AcceptanceStatusSummary,
+        result: AcceptanceStatusResult,
+    ) -> AcceptanceStatusSummary:
+        """Добавляет результат одной строки в общую сводку автопроверки приемки."""
+        return AcceptanceStatusSummary(
+            checked_rows=summary.checked_rows,
+            matched_rows=summary.matched_rows + int(result.matched),
+            accepted_rows=summary.accepted_rows + int(result.status == ACCEPTED_BY_WAREHOUSE_STATUS),
+            discrepancy_rows=summary.discrepancy_rows
+            + int(result.status == ACCEPTANCE_DISCREPANCY_STATUS),
+            duplicate_rows=summary.duplicate_rows + int(result.duplicate_matches),
+        )
 
     @staticmethod
     def _add_update(

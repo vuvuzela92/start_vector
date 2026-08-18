@@ -15,6 +15,8 @@
   где логисты ведут свою часть процесса.
 """
 
+from sqlalchemy import text
+
 # Колонки, которые прямая синхронизация читает из таблицы закупщиков
 # и обновляет в таблице логистов по ключу ORDER_LINE_ID.
 CHINA_COLS = [
@@ -60,3 +62,27 @@ ved_logistics_2026 = {
     "title": "Логистика ВЭД 2026",
     "report_sheet": "ОТЧЁТ_2.0",
 }
+
+# SQL-запрос для автоматической сверки приемки с данными из PostgreSQL.
+# Из таблицы приходов забираются только валидные строки с заполненными
+# номером автомобиля, номером трака и wild. Документы, начинающиеся с "К",
+# исключаются, потому что по ним не нужно вести количественный учет.
+SUPPLY_ACCEPTANCE_STATUS_QUERY = text(
+    """
+    SELECT
+           btrim(s.transport_number) AS transport_number,
+           btrim(s.truck_number) AS truck_number,
+           btrim(s.local_vendor_code) AS local_vendor_code,
+           s.quantity
+    FROM supply_to_sellers_warehouse s
+    WHERE s.is_valid IS TRUE
+      AND s.truck_number IS NOT NULL
+      AND btrim(s.truck_number) <> ''
+      AND s.transport_number IS NOT NULL
+      AND btrim(s.transport_number) <> ''
+      AND s.local_vendor_code IS NOT NULL
+      AND btrim(s.local_vendor_code) <> ''
+      AND s.document_number IS NOT NULL
+      AND NOT starts_with(s.document_number, 'К');
+    """
+)
