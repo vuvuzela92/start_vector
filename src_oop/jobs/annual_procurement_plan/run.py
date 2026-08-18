@@ -4,16 +4,41 @@ from src_oop.core.utils_general import clean_currency_value
 # Импорт внешних библиотек
 import pandas as pd
 
+def _select_orders_columns(df_source: pd.DataFrame, required_columns: list[str]) -> pd.DataFrame:
+    """Возвращает набор колонок заказа для выгрузки в годовой план закупа.
+
+    Вспомогательная функция защищает основной сценарий переноса заказов в
+    вкладку ``БД_ЗАКАЗЫ``: если одна из ожидаемых колонок временно отсутствует
+    в листе-источнике, она создается пустой, чтобы обновление не прерывалось и
+    структура выгрузки оставалась стабильной.
+    """
+    df_result = df_source.copy()
+    missing_columns = [column for column in required_columns if column not in df_result.columns]
+
+    for column in missing_columns:
+        df_result[column] = ""
+
+    return df_result[required_columns]
+
+
 def transport_data_to_annual_procurement_plan():
+    """Переносит заказы из рабочих листов в вкладку ``БД_ЗАКАЗЫ`` годового плана.
+
+    Сценарий объединяет данные из листов ``Заказы белые ТЕСТ`` и ``Заказы``,
+    сохраняет только бизнес-значимые колонки заказа, очищает сумму заказа,
+    исключает отмененные и завершенные статусы и формирует итоговую выгрузку
+    для дальнейшей работы закупки и аналитики. Поле ``Поставщик`` также
+    включается в итоговую структуру выгрузки.
+    """
     # Создаем экземпляр класса и получаем данные
     plan = AnnualProcurementPlan()
     df_white_orders = plan.get_white_orders_data()
     # Выбираем нужные колонки
     choosen_orders_columns = plan.choosen_orders_columns
-    df_white_orders_short = df_white_orders[choosen_orders_columns]
+    df_white_orders_short = _select_orders_columns(df_white_orders, choosen_orders_columns)
     # Получаем датафрейм от листа Заказы в таблице Расчет поставки Китай_по обороту
     df_orders = plan.get_orders_data()
-    df_orders_short = df_orders[choosen_orders_columns]
+    df_orders_short = _select_orders_columns(df_orders, choosen_orders_columns)
     # Объединяем датафреймы вертикально
     df_merge = pd.concat([
         df_white_orders_short.reset_index(drop=True), 
