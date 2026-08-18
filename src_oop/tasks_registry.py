@@ -63,6 +63,7 @@ from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 from src_oop.jobs.orders_feed.run import order_feed
 from src_oop.jobs.purchase_price_update.run import purchase_price_update_run
 from src_oop.jobs.returns_to_customers.run import returns_to_customers
+from src_oop.jobs.sales_analyze.run import update_sales_warehouse_analytics
 from src_oop.jobs.unit.competitors import update_competitors_prices
 from src_oop.jobs.unit.update_adv_participants import update_adv_participants_to_gs
 from src_oop.jobs.unit.update_wild_statuses import update_wild_statuses
@@ -215,6 +216,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "wms_stocks_run": {
         "func": smart_run(wms_stocks_run),
         "desc": "Выгрузка данных об остатках из WMS",
+    },
+    "update_sales_warehouse_analytics": {
+        "func": smart_run(update_sales_warehouse_analytics),
+        "desc": "Выгрузка аналитики продаж по нашим складам в Google Sheets",
     },
     "list_wb_offices": {
         "func": smart_run(list_wb_offices),
