@@ -16,6 +16,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 GOOGLE_WRITE_RETRY_ATTEMPTS = 4
 GOOGLE_WRITE_RETRY_STATUS_CODES = (429, 500, 502, 503, 504)
+GOOGLE_CONNECT_RETRY_ATTEMPTS = 5
 
 
 def _json_safe_cell(value):
@@ -94,13 +95,15 @@ class GoogleTabs:
         self.sheet_title = sheet_title
         self._safe_connect()
 
-    def _safe_connect(self, retries=5, delay=2):
+    def _safe_connect(self, retries: int = GOOGLE_CONNECT_RETRY_ATTEMPTS, delay: int = 2):
         """Подключается к таблице и листу с ограниченными повторами открытия.
 
         Бизнес-сценарий:
-        сценарии выгрузок не должны падать из-за кратковременного `503` на
-        этапе открытия Google Sheets, поэтому клиент делает несколько попыток
-        подключения перед окончательной ошибкой.
+        сценарии выгрузок не должны падать из-за кратковременного `429`,
+        `5xx` или сетевого сбоя на этапе открытия Google Sheets, поэтому
+        клиент делает несколько попыток подключения перед окончательной
+        ошибкой. Это особенно важно для cron-задач, которые могут попасть в
+        минутные квоты чтения Google Sheets.
         """
 
         self.gc = gspread.service_account(filename=self.creds_file)
@@ -111,19 +114,63 @@ class GoogleTabs:
                 self.table = table
                 self.sheet_title = table.worksheet(self.sheet_title)
 
-                print(f"Успешное подключение к {self.table_title} -> {self.sheet_title.title}")
+                logger.info(
+                    "Успешное подключение к Google Sheets | table=%s | sheet=%s",
+                    self.table_title,
+                    self.sheet_title.title,
+                )
                 return
 
             except gspread.exceptions.APIError as error:
-                if "503" in str(error):
-                    print(f"[Попытка {attempt}/{retries}] APIError 503, повтор через {delay} сек.")
-                    time.sleep(delay)
-                else:
+                if not self._is_retryable_google_error(error):
                     raise
+                if attempt == retries:
+                    logger.exception(
+                        "Подключение к Google Sheets исчерпало все попытки после API-ошибки | table=%s | sheet=%s | attempts=%s",
+                        self.table_title,
+                        self.sheet_title,
+                        retries,
+                    )
+                    raise
+
+                wait_seconds = self._get_google_retry_delay_seconds(error=error, attempt=attempt)
+                status_code = self._get_google_error_status_code(error)
+                logger.warning(
+                    "Google Sheets временно недоступен при подключении, повторяем попытку | table=%s | sheet=%s | status_code=%s | attempt=%s/%s | wait_seconds=%s",
+                    self.table_title,
+                    self.sheet_title,
+                    status_code,
+                    attempt,
+                    retries,
+                    wait_seconds,
+                )
+                time.sleep(max(wait_seconds, delay))
             except gspread.exceptions.WorksheetNotFound:
                 raise RuntimeError(
                     f"Ошибка: Лист '{self.sheet_title}' не найден в таблице '{self.table_title}'"
                 )
+            except requests.exceptions.RequestException as error:
+                if attempt == retries:
+                    logger.exception(
+                        "Подключение к Google Sheets исчерпало все попытки после сетевой ошибки | table=%s | sheet=%s | attempts=%s | error_type=%s",
+                        self.table_title,
+                        self.sheet_title,
+                        retries,
+                        type(error).__name__,
+                    )
+                    raise
+
+                wait_seconds = self._get_google_network_retry_delay_seconds(attempt=attempt)
+                logger.warning(
+                    "Сетевая ошибка при подключении к Google Sheets, повторяем попытку | table=%s | sheet=%s | attempt=%s/%s | wait_seconds=%s | error_type=%s",
+                    self.table_title,
+                    self.sheet_title,
+                    attempt,
+                    retries,
+                    wait_seconds,
+                    type(error).__name__,
+                )
+                time.sleep(max(wait_seconds, delay))
 
         raise RuntimeError(
             f"Не удалось открыть таблицу '{self.table_title}' после {retries} попыток."
