@@ -64,6 +64,7 @@ from src_oop.jobs.orders_feed.run import order_feed
 from src_oop.jobs.purchase_price_update.run import purchase_price_update_run
 from src_oop.jobs.returns_to_customers.run import returns_to_customers
 from src_oop.jobs.sales_analyze.run import update_sales_warehouse_analytics
+from src_oop.jobs.seller_balance.run import seller_balance_run
 from src_oop.jobs.unit.competitors import update_competitors_prices
 from src_oop.jobs.unit.update_adv_participants import update_adv_participants_to_gs
 from src_oop.jobs.unit.update_wild_statuses import update_wild_statuses
@@ -120,6 +121,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "desc": "Обновление данных для кредитного анализа Вектор",
     },
     # Бухгалтерские и регламентные выгрузки.
+    "seller_balance_run": {
+        "func": smart_run(seller_balance_run),
+        "desc": "Выгрузка баланса продавцов WB в Google Sheets ДДС во вкладку Переменные.",
+    },
     "add_new_items_run": {
         "func": smart_run(add_new_items_run),
         "desc": "OOP transfer of new items to UNIT, autopilot, competitors and products",
