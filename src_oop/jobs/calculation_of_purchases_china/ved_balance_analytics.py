@@ -229,6 +229,10 @@ class VedBalanceAnalyticsService:
         в конфигурации текущего этапа. Остальные платежные поля остаются
         пустыми, чтобы итоговая структура оставалась совместимой с white-
         аналитикой, но не создавала фиктивных значений.
+
+        Для отдельных этапов допускаются точечные бизнес-исключения.
+        Например, страхование груза попадает в платежную аналитику только
+        если его статус не означает, что расход уже оплачен.
         """
         payment_columns = payment_config["columns"]
         self.validate_required_columns(df_source, list(payment_columns.values()))
@@ -246,6 +250,21 @@ class VedBalanceAnalyticsService:
         # перевозчик, а конкретный декларант из шапки `ОТЧЁТ_2.0`.
         if stage_name == "Брокерское оформление":
             df_payment["Поставщик"] = df_source["Декларант"].to_numpy()
+
+        if stage_name == "Страхование груза":
+            insurance_status = (
+                df_payment["Статус_по_этапу"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .str.lower()
+            )
+            # В платежный календарь нужны только еще не оплаченные расходы
+            # на страхование, поэтому уже оплаченные строки исключаем сразу
+            # на этапе разворота VED-этапа.
+            df_payment = df_payment.loc[
+                ~insurance_status.isin({"оплачен", "оплачено"})
+            ].copy()
 
         if "Сумма_оплаты" not in df_payment.columns:
             df_payment["Сумма_оплаты"] = pd.NA
