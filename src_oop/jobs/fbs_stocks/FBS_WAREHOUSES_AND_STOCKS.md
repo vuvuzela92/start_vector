@@ -46,6 +46,7 @@ export WB_FBS_IMPORT_SOURCE_PATH="src_oop/jobs/fbs_warehouses/files/synced_wareh
 export WB_FBS_CREATE_MISSING_COLUMNS=true          # разрешить автоматически добавить служебные колонки в тестовую таблицу
 export WB_FBS_APPLY_STOCKS=true                    # разрешить реальную отправку остатков в WB
 export WB_FBS_AUTO_REFILL_APPLY=true               # разрешить отдельному cron-сценарию автопополнения реально писать в WB
+export WB_FBS_AUTO_REFILL_VESHKI_ONLY=true         # автопополнение только на Вешки до значения Минимальный остаток
 ```
 
 `WB_FBS_WAREHOUSE_ID` - это именно WB `warehouseId`. Для удаления нельзя использовать имя переменной `WAREHOUSE_ID_ENV`: это внутреннее имя константы в коде, а не env-переменная shell.
@@ -280,8 +281,9 @@ python main.py apply_new_fbs_stocks_from_unit
 
 - cron читает строки с положительным `Минимальный остаток`;
 - `ФБС общий остаток` делится на число активных внутренних складов аккаунта;
-- если средний остаток на один склад меньше `Минимальный остаток`, берется значение `Добавляем` по `wild`;
-- это значение ставится на каждый активный внутренний склад;
+- если средний остаток на один склад меньше `Минимальный остаток`, то:
+  - в обычном режиме берется значение `Добавляем` по `wild` и ставится на каждый активный внутренний склад;
+  - при `WB_FBS_AUTO_REFILL_VESHKI_ONLY=true` на Вешки ставится значение из `Минимальный остаток`, а остальные активные склады по этой строке приводятся к `0`;
 - после реальной отправки заново обновляется `ФБС общий остаток`.
 
 ### Отдельный dry-run сценарий автопополнения
@@ -289,6 +291,7 @@ python main.py apply_new_fbs_stocks_from_unit
 ```bash
 export WB_FBS_ACCOUNT="СТАРТ0854"
 unset WB_FBS_AUTO_REFILL_APPLY
+unset WB_FBS_AUTO_REFILL_VESHKI_ONLY
 python main.py auto_refill_fbs_stocks_from_unit
 ```
 
@@ -297,6 +300,16 @@ python main.py auto_refill_fbs_stocks_from_unit
 ```bash
 export WB_FBS_ACCOUNT="СТАРТ0854"
 export WB_FBS_AUTO_REFILL_APPLY=true
+unset WB_FBS_AUTO_REFILL_VESHKI_ONLY
+python main.py auto_refill_fbs_stocks_from_unit
+```
+
+### Режим автопополнения только на Вешки
+
+```bash
+export WB_FBS_ACCOUNT="СТАРТ0854"
+export WB_FBS_AUTO_REFILL_APPLY=true
+export WB_FBS_AUTO_REFILL_VESHKI_ONLY=true
 python main.py auto_refill_fbs_stocks_from_unit
 ```
 

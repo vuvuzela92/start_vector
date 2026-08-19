@@ -13,6 +13,7 @@ from src_oop.jobs.fbs_stocks.client import WBFBSStocksClient
 from src_oop.jobs.fbs_warehouses.config import ACCOUNT_ENV
 from src_oop.jobs.fbs_stocks.config import (
     AUTO_REFILL_APPLY_ENV,
+    AUTO_REFILL_VESHKI_ONLY_ENV,
     APPLY_STOCKS_ENV,
     CREATE_MISSING_COLUMNS_ENV,
     NEW_STOCK_VESHKI_COLUMN,
@@ -304,15 +305,18 @@ class FBSStocksService:
 
         Бизнес-сценарий: cron проверяет строки UNIT. Если текущая сумма FBS по активным внутренним
         складам, деленная на количество этих складов, меньше значения `Минимальный остаток`, задача
-        берет `Добавляем` из `Сопост` по `wild` и устанавливает это значение на каждом активном
-        складе. После реальной отправки задача перечитывает WB и обновляет
-        `ФБС общий остаток`, чтобы подтвердить результат выгрузки.
+        по умолчанию берет `Добавляем` из `Сопост` по `wild` и устанавливает это значение на каждом
+        активном складе. Если включен флаг `WB_FBS_AUTO_REFILL_VESHKI_ONLY`, задача ставит значение
+        `Минимальный остаток` только на склад Вешки, а остальные активные внутренние склады
+        обнуляет. После реальной отправки задача перечитывает WB и обновляет `ФБС общий остаток`,
+        чтобы подтвердить результат выгрузки.
         """
         rows = self._filter_auto_refill_rows_by_account(self.sheets_client.read_auto_refill_rows())
         rows = self._exclude_rows_from_auto_refill(
             rows=rows,
             excluded_row_numbers=excluded_row_numbers or set(),
         )
+        veshki_only = self._should_auto_refill_veshki_only()
         summary = FBSStocksAutoRefillSummary(
             checked_rows=len(rows),
             applied=self._should_apply_auto_refill() if apply is None else apply,
@@ -349,11 +353,13 @@ class FBSStocksService:
             warehouses=warehouses,
             stocks_by_account_warehouse=stocks_by_account_warehouse,
             summary=summary,
+            veshki_only=veshki_only,
         )
         summary.prepared_rows = sum(len(stocks) for stocks in update_plan.values())
         if not update_plan:
             logger.info(
-                "Автопополнение FBS-остатков не требуется | checked_rows=%s | skipped_rows=%s",
+                "Автопополнение FBS-остатков не требуется | veshki_only=%s | checked_rows=%s | skipped_rows=%s",
+                veshki_only,
                 summary.checked_rows,
                 summary.skipped_rows,
             )
@@ -361,7 +367,8 @@ class FBSStocksService:
 
         if not summary.applied:
             logger.info(
-                "Dry-run автопополнения FBS-остатков WB | checked_rows=%s | triggered_rows=%s | prepared_rows=%s | groups=%s",
+                "Dry-run автопополнения FBS-остатков WB | veshki_only=%s | checked_rows=%s | triggered_rows=%s | prepared_rows=%s | groups=%s",
+                veshki_only,
                 summary.checked_rows,
                 summary.triggered_rows,
                 summary.prepared_rows,
@@ -430,7 +437,8 @@ class FBSStocksService:
             summary.refreshed_columns = refresh_summary.updated_columns
 
         logger.info(
-            "Автопополнение FBS-остатков завершено | checked_rows=%s | triggered_rows=%s | prepared_rows=%s | skipped_rows=%s | wb_requests=%s | excluded_rows=%s | refreshed_columns=%s | applied=%s",
+            "Автопополнение FBS-остатков завершено | veshki_only=%s | checked_rows=%s | triggered_rows=%s | prepared_rows=%s | skipped_rows=%s | wb_requests=%s | excluded_rows=%s | refreshed_columns=%s | applied=%s",
+            veshki_only,
             summary.checked_rows,
             summary.triggered_rows,
             summary.prepared_rows,
@@ -450,12 +458,16 @@ class FBSStocksService:
         warehouses: dict[tuple[str, int], int],
         stocks_by_account_warehouse: dict[tuple[str, int], dict[int, int]],
         summary: FBSStocksAutoRefillSummary,
+        veshki_only: bool,
     ) -> dict[tuple[str, int], dict[int, int]]:
-        """Формирует payload автопополнения, устанавливая `Добавляем` на каждом складе.
+        """Формирует payload автопополнения по выбранному варианту распределения.
 
         Бизнес-правило: `Минимальный остаток` задан на один внутренний склад, поэтому сравнение идет
-        по среднему остатку на активный склад. Если пополнение нужно, значение из `Сопост` в колонке
-        `Добавляем` становится целевым остатком для каждого активного склада аккаунта.
+        по среднему остатку на активный склад. Если пополнение нужно, то:
+        - при `veshki_only=False` значение из `Сопост` в колонке `Добавляем` становится целевым
+          остатком для каждого активного склада аккаунта;
+        - при `veshki_only=True` значение `Минимальный остаток` ставится только на Вешки, а остальные
+          активные склады получают `0`, чтобы весь страховой запас жил на одном складе.
         """
         update_plan: dict[tuple[str, int], dict[int, int]] = {}
         for row in rows:
@@ -469,10 +481,22 @@ class FBSStocksService:
                     wb_warehouse_id := warehouses.get(
                         (normalized_account, target_warehouse.warehouse_id)
                     )
-                )
+                    )
                 is not None
             ]
-            if chrt_id is None or add_amount is None or not active_wb_warehouse_ids:
+            if veshki_only:
+                veshki_wb_warehouse_id = warehouses.get((normalized_account, VESHKI_WAREHOUSE_ID))
+                if chrt_id is None or veshki_wb_warehouse_id is None or not active_wb_warehouse_ids:
+                    summary.skipped_rows += 1
+                    logger.warning(
+                        "Автопополнение FBS-остатков в режиме Вешки пропущено для строки UNIT: не хватает chrt_id, склада Вешки или активных складов | row=%s | account=%s | article_id=%s | wild=%s",
+                        row.row_number,
+                        normalized_account,
+                        row.article_id,
+                        row.wild,
+                    )
+                    continue
+            elif chrt_id is None or add_amount is None or not active_wb_warehouse_ids:
                 summary.skipped_rows += 1
                 logger.warning(
                     "Автопополнение FBS-остатков пропущено для строки UNIT: не хватает chrt_id, значения Добавляем или активных складов | row=%s | account=%s | article_id=%s | wild=%s",
@@ -496,6 +520,36 @@ class FBSStocksService:
                 continue
 
             summary.triggered_rows += 1
+            if veshki_only:
+                logger.info(
+                    "Подготовлено автопополнение FBS-остатков в режиме Вешки | row=%s | account=%s | article_id=%s | wild=%s | current_total=%s | sheet_total=%s | warehouses=%s | average_stock=%.2f | minimum_stock=%s | target_veshki_amount=%s",
+                    row.row_number,
+                    normalized_account,
+                    row.article_id,
+                    row.wild,
+                    current_total,
+                    row.sheet_total_stock,
+                    len(active_wb_warehouse_ids),
+                    average_stock,
+                    row.minimum_stock,
+                    row.minimum_stock,
+                )
+                for target_warehouse in TARGET_WAREHOUSES:
+                    wb_warehouse_id = warehouses.get(
+                        (normalized_account, target_warehouse.warehouse_id)
+                    )
+                    if wb_warehouse_id is None:
+                        continue
+                    target_amount = (
+                        row.minimum_stock
+                        if target_warehouse.warehouse_id == VESHKI_WAREHOUSE_ID
+                        else 0
+                    )
+                    update_plan.setdefault((normalized_account, wb_warehouse_id), {})[
+                        chrt_id
+                    ] = target_amount
+                continue
+
             logger.info(
                 "Подготовлено автопополнение FBS-остатков | row=%s | account=%s | article_id=%s | wild=%s | current_total=%s | sheet_total=%s | warehouses=%s | average_stock=%.2f | minimum_stock=%s | target_amount=%s",
                 row.row_number,
@@ -979,6 +1033,21 @@ class FBSStocksService:
         не включит реальную отправку через отдельный флаг автопополнения.
         """
         return os.getenv(AUTO_REFILL_APPLY_ENV, "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "y",
+            "да",
+        }
+
+    def _should_auto_refill_veshki_only(self) -> bool:
+        """Проверяет, нужно ли автопополнение вести только по складу Вешки.
+
+        Бизнес-правило: по умолчанию cron сохраняет старую логику распределения по всем активным
+        складам. Отдельный булев флаг нужен для сценария, когда страховой запас должен поддерживаться
+        только на складе Вешки, а остальные склады по этой строке должны оставаться пустыми.
+        """
+        return os.getenv(AUTO_REFILL_VESHKI_ONLY_ENV, "").strip().lower() in {
             "1",
             "true",
             "yes",
