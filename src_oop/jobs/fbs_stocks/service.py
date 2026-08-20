@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import aiohttp
 
@@ -29,6 +29,7 @@ from src_oop.jobs.fbs_stocks.google_sheets_client import (
     UnitStocksRow,
 )
 from src_oop.jobs.fbs_stocks.repository import FBSStocksRepository
+from src_oop.jobs.fbs_stocks.telegram.models import FBSNotificationEvent
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ class FBSStocksUpdateSummary:
     articles_with_chrt_id: int = 0
     wb_requests: int = 0
     updated_columns: int = 0
+    notification_events: list[FBSNotificationEvent] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -57,6 +59,7 @@ class FBSStocksApplySummary:
     refreshed_columns: int = 0
     auto_refill_excluded_row_numbers: tuple[int, ...] = ()
     applied: bool = False
+    notification_events: list[FBSNotificationEvent] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -71,6 +74,7 @@ class FBSStocksAutoRefillSummary:
     excluded_rows: int = 0
     refreshed_columns: int = 0
     applied: bool = False
+    notification_events: list[FBSNotificationEvent] = field(default_factory=list)
 
 
 class FBSStocksService:
@@ -117,6 +121,8 @@ class FBSStocksService:
             chrt_ids_by_article=chrt_ids_by_article,
             warehouses=warehouses,
             tokens_by_account=tokens_by_account,
+            job_name="update_fbs_stocks_in_unit",
+            notification_events=summary.notification_events,
         )
         summary.wb_requests = len(stocks_by_account_warehouse)
 
@@ -191,6 +197,8 @@ class FBSStocksService:
             new_stock_rows=new_stock_rows,
             chrt_ids_by_article=chrt_ids_by_article,
             warehouses=warehouses,
+            notification_events=summary.notification_events,
+            job_name="apply_new_fbs_stocks_from_unit",
         )
         summary.prepared_rows = sum(len(stocks) for stocks in update_plan.values())
         summary.skipped_rows = summary.requested_rows - summary.prepared_rows
@@ -245,9 +253,36 @@ class FBSStocksService:
                         "Отправка FBS-остатков WB завершилась ошибкой для одной группы, остальные группы обработаны | error_type=%s",
                         type(error).__name__,
                     )
+                    summary.notification_events.extend(
+                        self._build_group_failure_events(
+                            job_name="apply_new_fbs_stocks_from_unit",
+                            grouped_rows=self._rows_for_group(
+                                new_stock_rows=new_stock_rows,
+                                warehouses=warehouses,
+                                target_group=(normalized_account, wb_warehouse_id),
+                            ),
+                            warehouse_info=warehouse_info,
+                            reason_code="wb_update_failed",
+                            reason="Не удалось отправить остатки на WB",
+                            detail=f"Группа склада завершилась ошибкой после retry | error_type={type(error).__name__}",
+                        )
+                    )
                     continue
                 summary.wb_requests += 1
                 successful_groups.add((normalized_account, wb_warehouse_id))
+                summary.notification_events.extend(
+                    self._build_skip_events(
+                        job_name="apply_new_fbs_stocks_from_unit",
+                        grouped_rows=self._rows_for_group(
+                            new_stock_rows=new_stock_rows,
+                            warehouses=warehouses,
+                            target_group=(normalized_account, wb_warehouse_id),
+                        ),
+                        warehouse_info=warehouse_info,
+                        has_restriction=result.skipped_restricted_rows > 0,
+                        has_not_found=bool(result.skipped_not_found_chrt_ids),
+                    )
+                )
                 if result.skipped_not_found_chrt_ids:
                     not_found_chrt_ids_by_group[(normalized_account, wb_warehouse_id)] = set(
                         result.skipped_not_found_chrt_ids
@@ -345,6 +380,8 @@ class FBSStocksService:
             chrt_ids_by_article=chrt_ids_by_article,
             warehouses=warehouses,
             tokens_by_account=tokens_by_account,
+            job_name="auto_refill_fbs_stocks_from_unit",
+            notification_events=summary.notification_events,
         )
         update_plan = self._build_auto_refill_update_plan(
             rows=rows,
@@ -407,8 +444,44 @@ class FBSStocksService:
                         "Автопополнение FBS-остатков WB завершилось ошибкой для одной группы, остальные группы продолжают работу | error_type=%s",
                         type(error).__name__,
                     )
+                    summary.notification_events.extend(
+                        self._build_auto_refill_group_events(
+                            job_name="auto_refill_fbs_stocks_from_unit",
+                            rows=rows,
+                            warehouses=warehouses,
+                            target_group=(normalized_account, wb_warehouse_id),
+                            warehouse_info=warehouse_info,
+                            reason_code="wb_update_failed",
+                            reason="Не удалось отправить автопополнение на WB",
+                            detail=f"Группа склада завершилась ошибкой после retry | error_type={type(error).__name__}",
+                        )
+                    )
                     continue
                 summary.wb_requests += 1
+                summary.notification_events.extend(
+                    self._build_auto_refill_group_events(
+                        job_name="auto_refill_fbs_stocks_from_unit",
+                        rows=rows,
+                        warehouses=warehouses,
+                        target_group=(normalized_account, wb_warehouse_id),
+                        warehouse_info=warehouse_info,
+                        reason_code="cargo_restriction" if result.skipped_restricted_rows > 0 else "wb_not_found",
+                        reason=(
+                            "WB отклонил товар по типу склада"
+                            if result.skipped_restricted_rows > 0
+                            else "WB не нашел товар для FBS-обновления"
+                        ),
+                        detail=(
+                            "Товар не подходит под тип выбранного склада"
+                            if result.skipped_restricted_rows > 0
+                            else "Товар, вероятно, удален или находится в корзине"
+                        ),
+                        only_when=(
+                            result.skipped_restricted_rows > 0
+                            or bool(result.skipped_not_found_chrt_ids)
+                        ),
+                    )
+                )
                 if result.skipped_not_found_chrt_ids:
                     not_found_chrt_ids_by_group[(normalized_account, wb_warehouse_id)] = set(
                         result.skipped_not_found_chrt_ids
@@ -666,6 +739,8 @@ class FBSStocksService:
         chrt_ids_by_article: dict[int, int],
         warehouses: dict[tuple[str, int], int],
         tokens_by_account: dict[str, str],
+        job_name: str,
+        notification_events: list[FBSNotificationEvent] | None = None,
     ) -> dict[tuple[str, int], dict[int, int]]:
         """Загружает остатки WB по всем парам аккаунт-склад, которые нужны строкам UNIT."""
         chrt_ids_by_account: dict[str, set[int]] = {}
@@ -716,6 +791,19 @@ class FBSStocksService:
                     "Запрос FBS-остатков WB завершился ошибкой, сценарий продолжает остальные склады | error_type=%s",
                     type(result).__name__,
                 )
+                if notification_events is not None:
+                    notification_events.append(
+                        FBSNotificationEvent(
+                            job_name=job_name,
+                            severity="error",
+                            reason_code="wb_read_failed",
+                            reason="Не удалось прочитать остатки WB",
+                            detail=(
+                                "Чтение одного склада завершилось ошибкой, актуализация продолжила "
+                                f"остальные склады | error_type={type(result).__name__}"
+                            ),
+                        )
+                    )
                 continue
             stocks[(result.account, result.wb_warehouse_id)] = result.stocks_by_chrt_id
         return stocks
@@ -821,17 +909,48 @@ class FBSStocksService:
         new_stock_rows: list[UnitNewStockRow],
         chrt_ids_by_article: dict[int, int],
         warehouses: dict[tuple[str, int], int],
+        notification_events: list[FBSNotificationEvent],
+        job_name: str,
     ) -> dict[tuple[str, int], dict[int, int]]:
-        """Группирует новые остатки UNIT в payload-ы WB по аккаунту и складу."""
+        """Группирует новые остатки UNIT в payload-ы WB по аккаунту и складу.
+
+        Бизнес-сценарий: одна ручная команда в UNIT может раскладываться на несколько целевых
+        складов WB. При этом диагностические события должны оставаться человекочитаемыми:
+        отсутствие `chrt_id` или активного склада в БД нужно показать один раз на исходную
+        бизнес-строку, а не дублировать по каждому внутреннему складу.
+        """
         update_plan: dict[tuple[str, int], dict[int, int]] = {}
         missing_chrt_rows = 0
         missing_warehouse_rows: dict[tuple[str, int, str], int] = {}
+        seen_missing_chrt_events: set[tuple[str, int, int, str]] = set()
+        seen_missing_warehouse_events: set[tuple[str, int, int, str]] = set()
         for row in new_stock_rows:
             normalized_account = self.repository.normalize_account(row.account)
             chrt_id = chrt_ids_by_article.get(row.article_id)
             wb_warehouse_id = warehouses.get((normalized_account, row.warehouse_id))
             if chrt_id is None:
                 missing_chrt_rows += 1
+                missing_chrt_event_key = (
+                    normalized_account,
+                    row.row_number,
+                    row.article_id,
+                    row.source_column,
+                )
+                if missing_chrt_event_key not in seen_missing_chrt_events:
+                    seen_missing_chrt_events.add(missing_chrt_event_key)
+                    notification_events.append(
+                        FBSNotificationEvent(
+                            job_name=job_name,
+                            severity="warning",
+                            reason_code="missing_chrt_id",
+                            reason="Не найден chrt_id для отправки остатка",
+                            detail="Строка пропущена при подготовке payload",
+                            account=normalized_account,
+                            wild=row.wild or None,
+                            article_id=row.article_id,
+                            warehouse_name=row.warehouse_alias,
+                        )
+                    )
                 continue
             if wb_warehouse_id is None:
                 missing_warehouse_key = (
@@ -842,6 +961,27 @@ class FBSStocksService:
                 missing_warehouse_rows[missing_warehouse_key] = (
                     missing_warehouse_rows.get(missing_warehouse_key, 0) + 1
                 )
+                missing_warehouse_event_key = (
+                    normalized_account,
+                    row.row_number,
+                    row.warehouse_id,
+                    row.source_column,
+                )
+                if missing_warehouse_event_key not in seen_missing_warehouse_events:
+                    seen_missing_warehouse_events.add(missing_warehouse_event_key)
+                    notification_events.append(
+                        FBSNotificationEvent(
+                            job_name=job_name,
+                            severity="warning",
+                            reason_code="missing_active_warehouse",
+                            reason="Склад не найден среди активных записей warehouses_fbs",
+                            detail="Строка пропущена при подготовке payload",
+                            account=normalized_account,
+                            wild=row.wild or None,
+                            article_id=row.article_id,
+                            warehouse_name=row.warehouse_alias,
+                        )
+                    )
                 continue
             update_plan.setdefault((normalized_account, wb_warehouse_id), {})[chrt_id] = row.amount
 
@@ -859,6 +999,153 @@ class FBSStocksService:
                 rows_count,
             )
         return update_plan
+
+    def _rows_for_group(
+        self,
+        new_stock_rows: list[UnitNewStockRow],
+        warehouses: dict[tuple[str, int], int],
+        target_group: tuple[str, int],
+    ) -> list[UnitNewStockRow]:
+        """Возвращает строки UNIT, которые попали в одну складскую группу WB.
+
+        Бизнес-сценарий: если одна группа `account + wb_warehouse_id` упала, Telegram-уведомление
+        должно ссылаться на реальные строки UNIT, а не только на технический идентификатор склада.
+        """
+        normalized_account, wb_warehouse_id = target_group
+        return [
+            row
+            for row in new_stock_rows
+            if self.repository.normalize_account(row.account) == normalized_account
+            and warehouses.get((normalized_account, row.warehouse_id)) == wb_warehouse_id
+        ]
+
+    def _build_group_failure_events(
+        self,
+        job_name: str,
+        grouped_rows: list[UnitNewStockRow],
+        warehouse_info,
+        reason_code: str,
+        reason: str,
+        detail: str,
+    ) -> list[FBSNotificationEvent]:
+        """Строит article-level события для полного сбоя одной группы отправки WB.
+
+        Бизнес-сценарий: один сбой склада может затронуть сразу несколько SKU. Эти строки должны
+        дойти до Telegram и потом агрегироваться по `wild`, если проблема массовая.
+        """
+        return [
+            FBSNotificationEvent(
+                job_name=job_name,
+                severity="error",
+                reason_code=reason_code,
+                reason=reason,
+                detail=detail,
+                account=self.repository.normalize_account(row.account),
+                wild=row.wild or None,
+                article_id=row.article_id,
+                warehouse_name=warehouse_info.warehouse_name if warehouse_info else row.warehouse_alias,
+                wb_warehouse_id=warehouse_info.wb_warehouse_id if warehouse_info else None,
+                wb_office_id=warehouse_info.wb_office_id if warehouse_info else None,
+            )
+            for row in grouped_rows
+        ]
+
+    def _build_skip_events(
+        self,
+        job_name: str,
+        grouped_rows: list[UnitNewStockRow],
+        warehouse_info,
+        has_restriction: bool,
+        has_not_found: bool,
+    ) -> list[FBSNotificationEvent]:
+        """Строит события о частичных пропусках строк после ответа WB.
+
+        Бизнес-сценарий: даже если часть payload применилась успешно, пользователю нужно увидеть
+        товары, которые WB не принял из-за ограничений склада или отсутствия товара.
+        """
+        events: list[FBSNotificationEvent] = []
+        if has_restriction:
+            events.extend(
+                FBSNotificationEvent(
+                    job_name=job_name,
+                    severity="warning",
+                    reason_code="cargo_restriction",
+                    reason="WB отклонил товар по типу склада",
+                    detail="Товар не подходит под тип выбранного склада",
+                    account=self.repository.normalize_account(row.account),
+                    wild=row.wild or None,
+                    article_id=row.article_id,
+                    warehouse_name=warehouse_info.warehouse_name if warehouse_info else row.warehouse_alias,
+                    wb_warehouse_id=warehouse_info.wb_warehouse_id if warehouse_info else None,
+                    wb_office_id=warehouse_info.wb_office_id if warehouse_info else None,
+                )
+                for row in grouped_rows
+            )
+        if has_not_found:
+            events.extend(
+                FBSNotificationEvent(
+                    job_name=job_name,
+                    severity="warning",
+                    reason_code="wb_not_found",
+                    reason="WB не нашел товар для FBS-обновления",
+                    detail="Товар, вероятно, удален или находится в корзине",
+                    account=self.repository.normalize_account(row.account),
+                    wild=row.wild or None,
+                    article_id=row.article_id,
+                    warehouse_name=warehouse_info.warehouse_name if warehouse_info else row.warehouse_alias,
+                    wb_warehouse_id=warehouse_info.wb_warehouse_id if warehouse_info else None,
+                    wb_office_id=warehouse_info.wb_office_id if warehouse_info else None,
+                )
+                for row in grouped_rows
+            )
+        return events
+
+    def _build_auto_refill_group_events(
+        self,
+        job_name: str,
+        rows: list[UnitAutoRefillRow],
+        warehouses: dict[tuple[str, int], int],
+        target_group: tuple[str, int],
+        warehouse_info,
+        reason_code: str,
+        reason: str,
+        detail: str,
+        only_when: bool = True,
+    ) -> list[FBSNotificationEvent]:
+        """Строит события автопополнения для одной складской группы WB.
+
+        Бизнес-сценарий: сбои и частичные пропуски автопополнения должны сообщаться теми же
+        article-level событиями, что и ручная отправка, чтобы потом их можно было агрегировать по
+        `wild` или отдельным артикулам в Telegram.
+        """
+        if not only_when:
+            return []
+        normalized_account, wb_warehouse_id = target_group
+        matched_rows: list[UnitAutoRefillRow] = []
+        for row in rows:
+            if self.repository.normalize_account(row.account) != normalized_account:
+                continue
+            if any(
+                warehouses.get((normalized_account, target_warehouse.warehouse_id)) == wb_warehouse_id
+                for target_warehouse in TARGET_WAREHOUSES
+            ):
+                matched_rows.append(row)
+        return [
+            FBSNotificationEvent(
+                job_name=job_name,
+                severity="error" if reason_code == "wb_update_failed" else "warning",
+                reason_code=reason_code,
+                reason=reason,
+                detail=detail,
+                account=normalized_account,
+                wild=row.wild or None,
+                article_id=row.article_id,
+                warehouse_name=warehouse_info.warehouse_name if warehouse_info else None,
+                wb_warehouse_id=warehouse_info.wb_warehouse_id if warehouse_info else wb_warehouse_id,
+                wb_office_id=warehouse_info.wb_office_id if warehouse_info else None,
+            )
+            for row in matched_rows
+        ]
 
     def _filter_successfully_applied_rows(
         self,

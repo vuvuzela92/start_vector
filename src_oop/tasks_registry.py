@@ -43,6 +43,7 @@ from src_oop.jobs.fin_reports_analyze.run import (
     update_weekly_profit_report,
 )
 from src_oop.jobs.fbo_supplies.run import fbo_supplies_run
+from src_oop.jobs.funnel_sales.run import funnel_sales
 from src_oop.jobs.fbs_warehouses.run import (
     create_fbs_warehouse,
     delete_fbs_warehouse,
@@ -102,6 +103,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "order_feed": {
         "func": smart_run(order_feed),
         "desc": "Почасовое обновление WB Order Feed за доступные последние 31 сутки",
+    },
+    "funnel_sales": {
+        "func": smart_run(funnel_sales),
+        "desc": "Выгрузка ежедневной воронки продаж WB в PostgreSQL",
     },
     # Старый контур Google Sheets и управленческих витрин.
     "update_penalties_in_gs_purchase_russia": {

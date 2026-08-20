@@ -47,6 +47,7 @@ class UnitNewStockRow:
     row_number: int
     article_id: int
     account: str
+    wild: str
     warehouse_id: int
     warehouse_alias: str
     amount: int
@@ -249,13 +250,15 @@ class FBSStocksGoogleSheetsClient:
         headers = self.worksheet.row_values(HEADER_ROW_INDEX)
         self._validate_headers(
             headers,
-            (NEW_STOCK_ALL_WAREHOUSES_COLUMN, NEW_STOCK_VESHKI_COLUMN),
+            (NEW_STOCK_ALL_WAREHOUSES_COLUMN, NEW_STOCK_VESHKI_COLUMN, WILD_COLUMN),
         )
 
         all_column_index = headers.index(NEW_STOCK_ALL_WAREHOUSES_COLUMN) + 1
         veshki_column_index = headers.index(NEW_STOCK_VESHKI_COLUMN) + 1
+        wild_column_index = headers.index(WILD_COLUMN) + 1
         all_values = self.worksheet.col_values(all_column_index)[DATA_START_ROW - 1 :]
         veshki_values = self.worksheet.col_values(veshki_column_index)[DATA_START_ROW - 1 :]
+        wild_values = self.worksheet.col_values(wild_column_index)[DATA_START_ROW - 1 :]
 
         for raw_value in [*all_values, *veshki_values]:
             if self._normalize_numeric_text(raw_value) != "":
@@ -282,19 +285,23 @@ class FBSStocksGoogleSheetsClient:
         unit_rows, headers = self.read_unit_rows()
         self._validate_headers(
             headers,
-            (NEW_STOCK_ALL_WAREHOUSES_COLUMN, NEW_STOCK_VESHKI_COLUMN),
+            (NEW_STOCK_ALL_WAREHOUSES_COLUMN, NEW_STOCK_VESHKI_COLUMN, WILD_COLUMN),
         )
 
         all_column_index = headers.index(NEW_STOCK_ALL_WAREHOUSES_COLUMN) + 1
         veshki_column_index = headers.index(NEW_STOCK_VESHKI_COLUMN) + 1
+        wild_column_index = headers.index(WILD_COLUMN) + 1
         all_values = self.worksheet.col_values(all_column_index)[DATA_START_ROW - 1 :]
         veshki_values = self.worksheet.col_values(veshki_column_index)[DATA_START_ROW - 1 :]
+        wild_values = self.worksheet.col_values(wild_column_index)[DATA_START_ROW - 1 :]
 
         new_stock_rows: list[UnitNewStockRow] = []
         for unit_row in unit_rows:
             row_offset = unit_row.row_number - DATA_START_ROW
             raw_all_value = all_values[row_offset] if row_offset < len(all_values) else ""
             raw_veshki_value = veshki_values[row_offset] if row_offset < len(veshki_values) else ""
+            raw_wild_value = wild_values[row_offset] if row_offset < len(wild_values) else ""
+            prepared_wild = raw_wild_value.strip()
             all_amount = self._coerce_new_stock_amount(
                 value=raw_all_value,
                 row_number=unit_row.row_number,
@@ -317,6 +324,7 @@ class FBSStocksGoogleSheetsClient:
                 new_stock_rows.extend(
                     self._build_all_warehouses_rows(
                         unit_row=unit_row,
+                        wild=prepared_wild,
                         amount=all_amount,
                     )
                 )
@@ -329,6 +337,7 @@ class FBSStocksGoogleSheetsClient:
                         row_number=unit_row.row_number,
                         article_id=unit_row.article_id,
                         account=unit_row.account,
+                        wild=prepared_wild,
                         warehouse_id=target_warehouse.warehouse_id,
                         warehouse_alias=target_warehouse.warehouse_alias,
                         amount=veshki_amount
@@ -348,6 +357,7 @@ class FBSStocksGoogleSheetsClient:
     def _build_all_warehouses_rows(
         self,
         unit_row: UnitStocksRow,
+        wild: str,
         amount: int,
     ) -> list[UnitNewStockRow]:
         """Создает команды одинакового остатка для всех внутренних складов строки UNIT.
@@ -360,6 +370,7 @@ class FBSStocksGoogleSheetsClient:
                 row_number=unit_row.row_number,
                 article_id=unit_row.article_id,
                 account=unit_row.account,
+                wild=wild,
                 warehouse_id=target_warehouse.warehouse_id,
                 warehouse_alias=target_warehouse.warehouse_alias,
                 amount=amount,

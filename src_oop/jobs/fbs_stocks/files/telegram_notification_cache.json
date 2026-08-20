@@ -1,0 +1,5 @@
+{
+  "full_failure:apply_new_fbs_stocks_from_unit:все ЛК:NameError:Не удалось отправить новые FBS-остатки из UNIT": "2026-08-20T14:38:53.065585",
+  "partial_failure:apply_new_fbs_stocks_from_unit:все ЛК:missing_chrt_id:Не найден chrt_id для отправки остатка": "2026-08-20T14:41:15.478926",
+  "wild:apply_new_fbs_stocks_from_unit:вектор:wild462:missing_chrt_id:Не найден chrt_id для отправки остатка": "2026-08-20T14:41:15.478926"
+}

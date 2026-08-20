@@ -38,6 +38,7 @@ class FBSStockUpdateResult:
     sent_rows: int
     skipped_restricted_rows: int = 0
     skipped_not_found_rows: int = 0
+    skipped_restricted_chrt_ids: tuple[int, ...] = ()
     skipped_not_found_chrt_ids: tuple[int, ...] = ()
     retries_used: int = 0
 
@@ -123,6 +124,7 @@ class WBFBSStocksClient:
         retries_used = 0
         skipped_restricted_rows = 0
         skipped_not_found_rows = 0
+        skipped_restricted_chrt_ids: set[int] = set()
         skipped_not_found_chrt_ids: set[int] = set()
 
         for chunk_start in range(0, len(prepared_stocks), self.chrt_ids_chunk_size):
@@ -131,6 +133,7 @@ class WBFBSStocksClient:
                 chunk_retries,
                 chunk_skipped_restricted,
                 chunk_skipped_not_found,
+                chunk_restricted_chrt_ids,
                 chunk_not_found_chrt_ids,
             ) = await self._request_update_stocks_chunk(
                 session=session,
@@ -144,6 +147,7 @@ class WBFBSStocksClient:
             retries_used += chunk_retries
             skipped_restricted_rows += chunk_skipped_restricted
             skipped_not_found_rows += chunk_skipped_not_found
+            skipped_restricted_chrt_ids.update(chunk_restricted_chrt_ids)
             skipped_not_found_chrt_ids.update(chunk_not_found_chrt_ids)
 
         logger.info(
@@ -161,6 +165,7 @@ class WBFBSStocksClient:
             sent_rows=len(prepared_stocks) - skipped_restricted_rows - skipped_not_found_rows,
             skipped_restricted_rows=skipped_restricted_rows,
             skipped_not_found_rows=skipped_not_found_rows,
+            skipped_restricted_chrt_ids=tuple(sorted(skipped_restricted_chrt_ids)),
             skipped_not_found_chrt_ids=tuple(sorted(skipped_not_found_chrt_ids)),
             retries_used=retries_used,
         )
@@ -174,7 +179,7 @@ class WBFBSStocksClient:
         stocks: Sequence[dict[str, int]],
         warehouse_name: str | None = None,
         wb_office_id: int | None = None,
-    ) -> tuple[int, int, int, set[int]]:
+    ) -> tuple[int, int, int, set[int], set[int]]:
         """Выполняет один chunk PUT-запрос обновления остатков WB с защитой от временных сбоев.
 
         Бизнес-правило: ограничение `CargoWarehouseRestrictionMGT` означает, что конкретный товар
@@ -189,6 +194,7 @@ class WBFBSStocksClient:
         prepared_stocks = list(stocks)
         skipped_restricted_rows = 0
         skipped_not_found_rows = 0
+        skipped_restricted_chrt_ids: set[int] = set()
         skipped_not_found_chrt_ids: set[int] = set()
         last_status: int | None = None
         last_payload: dict | list | None = None
@@ -214,6 +220,7 @@ class WBFBSStocksClient:
                                 for stock in prepared_stocks
                                 if int(stock["chrtId"]) not in restricted_chrt_ids
                             ]
+                            skipped_restricted_chrt_ids.update(restricted_chrt_ids)
                             skipped_restricted_rows += before_count - len(prepared_stocks)
                             logger.warning(
                                 "FBS-остатки пропущены для склада WB: товар не подходит под тип склада | account=%s | warehouse_name=%s | wb_warehouse_id=%s | wb_office_id=%s | code=CargoWarehouseRestrictionMGT | chrt_ids=%s | skipped_rows=%s",
@@ -229,6 +236,7 @@ class WBFBSStocksClient:
                                     attempt - 1,
                                     skipped_restricted_rows,
                                     skipped_not_found_rows,
+                                    skipped_restricted_chrt_ids,
                                     skipped_not_found_chrt_ids,
                                 )
                             continue
@@ -257,6 +265,7 @@ class WBFBSStocksClient:
                                     attempt - 1,
                                     skipped_restricted_rows,
                                     skipped_not_found_rows,
+                                    skipped_restricted_chrt_ids,
                                     skipped_not_found_chrt_ids,
                                 )
                             continue
@@ -283,6 +292,7 @@ class WBFBSStocksClient:
                         attempt - 1,
                         skipped_restricted_rows,
                         skipped_not_found_rows,
+                        skipped_restricted_chrt_ids,
                         skipped_not_found_chrt_ids,
                     )
             except PermissionError:
