@@ -14,6 +14,7 @@ from src_oop.jobs.autopilot_daily.config import (
     CREDS_PATH,
     CURRENT_METRIC_TO_BASE_COLUMN,
     ENABLE_WB_DAILY_PUBLIC_CARD_PARSING,
+    GROWTH_METRIC_TO_COLUMN,
     HISTORY_METRIC_TO_COLUMN,
     UNIT_MAIN_SHEET_TITLE,
     UNIT_TABLE_TITLE,
@@ -57,6 +58,7 @@ class AutopilotDailyService:
 
         current_metrics = self.repository.fetch_current_metrics()
         history_metrics = self.repository.fetch_history_metrics()
+        growth_metrics = self.repository.fetch_sales_growth_metrics()
         summary.current_rows = len(current_metrics.index)
         summary.history_rows = len(history_metrics.index)
 
@@ -65,6 +67,7 @@ class AutopilotDailyService:
             sheet_title=AUTOPILOT_SHEET_TITLE,
         )
         writer = AutopilotDailySheetsWriter(autopilot_connector.sheet_title)
+        writer.apply_percentage_format()
         articles = writer.read_articles()
         summary.articles_total = len(articles)
 
@@ -75,6 +78,7 @@ class AutopilotDailyService:
             summary,
         )
         self._write_history_metrics(writer, history_metrics, articles, summary)
+        self._write_growth_metrics(writer, growth_metrics, articles, summary)
         writer.update_status(datetime.now())
 
         current_positions = self.repository.fetch_current_avg_positions(articles)
@@ -141,6 +145,31 @@ class AutopilotDailyService:
         for metric_name in HISTORY_METRIC_TO_COLUMN:
             summary.metrics_attempted += 1
             result = writer.write_history_metric(history_metrics, metric_name, articles)
+            if result.written:
+                summary.metrics_written += 1
+            else:
+                summary.metrics_failed.append(metric_name)
+
+    def _write_growth_metrics(
+        self,
+        writer: AutopilotDailySheetsWriter,
+        growth_metrics: pd.DataFrame,
+        articles: list[int],
+        summary: AutopilotDailySummary,
+    ) -> None:
+        """Пишет расчетные показатели продаж и затрат в BE:BG и BX дневного ПУ.
+
+        Бизнес-логика:
+        `Рост продаж 2 дня`, `Рост продаж 2 недели` и `Дней подряд в просадке`
+        считаются из `orders_articles_analyze` отдельно от основного недельного
+        блока. `Динамика затрат` также считается из `orders_articles_analyze`
+        как отношение затрат из `BV` к затратам из `BU`. Если одна колонка не
+        записалась, сценарий фиксирует ошибку и продолжает остальные части
+        дневной актуализации.
+        """
+        for metric_name in GROWTH_METRIC_TO_COLUMN:
+            summary.metrics_attempted += 1
+            result = writer.write_growth_metric(growth_metrics, metric_name, articles)
             if result.written:
                 summary.metrics_written += 1
             else:

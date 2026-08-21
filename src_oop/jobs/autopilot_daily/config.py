@@ -122,6 +122,14 @@ HISTORY_METRIC_TO_COLUMN: dict[str, str] = {
     "avg_organic": "IH",
 }
 
+# Расчетные показатели роста продаж пишутся отдельно от недельного блока сумм.
+GROWTH_METRIC_TO_COLUMN: dict[str, str] = {
+    "sales_growth_2_days": "BE",
+    "sales_growth_2_weeks": "BF",
+    "sales_decline_streak_days": "BG",
+    "adv_spend_dynamics": "BX",
+}
+
 # Свободный остаток относится к текущему снимку UNIT и обновляется почасовым
 # сценарием в колонке текущего дня. Daily не должен заполнять завершенные дни этой метрики.
 DISABLED_PU_METRICS = {"unit_free_stock"}

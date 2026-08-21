@@ -182,6 +182,156 @@ class AutopilotDailyRepository:
         )
         return dataframe
 
+    def fetch_sales_growth_metrics(self) -> pd.DataFrame:
+        """Читает расчетные показатели продаж и затрат для колонок BE:BG и BX дневного ПУ.
+
+        Бизнес-логика:
+        `Рост продаж 2 дня` сравнивает сумму заказов за вчера с позавчера, а
+        `Рост продаж 2 недели` сравнивает последние 7 завершенных дней с
+        предыдущими 7 завершенными днями. Результат возвращается как доля для
+        процентного формата Google Sheets; при нулевой базе остается пропуск.
+        `Дней подряд в просадке` считает непрерывную серию завершенных дней,
+        заканчивающуюся вчера, где сумма заказов ниже предыдущего календарного
+        дня. Расчет ограничен последними 30 завершенными днями.
+        `Динамика затрат` показывает отношение рекламных затрат из колонки `BV`
+        к затратам из колонки `BU`, то есть вчерашнего завершенного дня к
+        позавчерашнему; при нулевой базе остается пропуск.
+        """
+        query = text(
+            """
+            WITH daily_sales AS (
+                SELECT
+                    article_id,
+                    date::date AS date,
+                    SUM(orders_sum_rub) AS orders_sum_rub,
+                    SUM(adv_spend) AS adv_spend
+                FROM orders_articles_analyze
+                WHERE date >= CURRENT_DATE - INTERVAL '31 days'
+                    AND date < CURRENT_DATE
+                GROUP BY article_id, date::date
+            ),
+            sales AS (
+                SELECT
+                    article_id,
+                    SUM(
+                        CASE
+                            WHEN date = CURRENT_DATE - INTERVAL '1 day'
+                            THEN orders_sum_rub
+                            ELSE 0
+                        END
+                    ) AS yesterday_orders_sum,
+                    SUM(
+                        CASE
+                            WHEN date = CURRENT_DATE - INTERVAL '2 days'
+                            THEN orders_sum_rub
+                            ELSE 0
+                        END
+                    ) AS day_before_orders_sum,
+                    SUM(
+                        CASE
+                            WHEN date = CURRENT_DATE - INTERVAL '1 day'
+                            THEN adv_spend
+                            ELSE 0
+                        END
+                    ) AS yesterday_adv_spend,
+                    SUM(
+                        CASE
+                            WHEN date = CURRENT_DATE - INTERVAL '2 days'
+                            THEN adv_spend
+                            ELSE 0
+                        END
+                    ) AS day_before_adv_spend,
+                    SUM(
+                        CASE
+                            WHEN date >= CURRENT_DATE - INTERVAL '7 days'
+                                AND date < CURRENT_DATE
+                            THEN orders_sum_rub
+                            ELSE 0
+                        END
+                    ) AS last_week_orders_sum,
+                    SUM(
+                        CASE
+                            WHEN date >= CURRENT_DATE - INTERVAL '14 days'
+                                AND date < CURRENT_DATE - INTERVAL '7 days'
+                            THEN orders_sum_rub
+                            ELSE 0
+                        END
+                    ) AS previous_week_orders_sum
+                FROM daily_sales
+                WHERE date >= CURRENT_DATE - INTERVAL '14 days'
+                GROUP BY article_id
+            ),
+            decline_flags AS (
+                SELECT
+                    article_id,
+                    date,
+                    CASE
+                        WHEN orders_sum_rub < LAG(orders_sum_rub) OVER (
+                            PARTITION BY article_id
+                            ORDER BY date
+                        )
+                        THEN 1
+                        ELSE 0
+                    END AS is_decline
+                FROM daily_sales
+            ),
+            decline_groups AS (
+                SELECT
+                    article_id,
+                    date,
+                    is_decline,
+                    SUM(CASE WHEN is_decline = 0 THEN 1 ELSE 0 END) OVER (
+                        PARTITION BY article_id
+                        ORDER BY date DESC
+                    ) AS stop_group
+                FROM decline_flags
+                WHERE date >= CURRENT_DATE - INTERVAL '30 days'
+            ),
+            decline_streak AS (
+                SELECT
+                    article_id,
+                    COUNT(*) FILTER (
+                        WHERE is_decline = 1
+                            AND stop_group = 0
+                    ) AS sales_decline_streak_days
+                FROM decline_groups
+                GROUP BY article_id
+            )
+            SELECT
+                sales.article_id,
+                CASE
+                    WHEN day_before_orders_sum = 0 THEN NULL
+                    ELSE ROUND(
+                        (yesterday_orders_sum - day_before_orders_sum)
+                        / day_before_orders_sum,
+                        5
+                    )
+                END AS sales_growth_2_days,
+                CASE
+                    WHEN previous_week_orders_sum = 0 THEN NULL
+                    ELSE ROUND(
+                        (last_week_orders_sum - previous_week_orders_sum)
+                        / previous_week_orders_sum,
+                        5
+                    )
+                END AS sales_growth_2_weeks,
+                COALESCE(decline_streak.sales_decline_streak_days, 0)
+                    AS sales_decline_streak_days,
+                CASE
+                    WHEN day_before_adv_spend = 0 THEN NULL
+                    ELSE ROUND(yesterday_adv_spend / day_before_adv_spend, 5)
+                END AS adv_spend_dynamics
+            FROM sales
+            LEFT JOIN decline_streak ON sales.article_id = decline_streak.article_id
+            """
+        )
+        dataframe = self.database_cls.read_sql_to_dataframe(query)
+        logger.info(
+            "Расчет роста продаж, дней просадки и динамики затрат для ПУ загружен из PostgreSQL: rows=%s",
+            len(dataframe.index),
+        )
+        return dataframe
+
     def fetch_current_avg_positions(self, articles: list[int]) -> pd.DataFrame:
         """Читает среднюю позицию за последние 6 дней и сортирует под ПУ.
 

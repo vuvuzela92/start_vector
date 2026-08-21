@@ -12,10 +12,15 @@ import pandas as pd
 import requests
 from gspread.utils import a1_to_rowcol, rowcol_to_a1
 
+from src_oop.jobs.autopilot.config import (
+    AUTOPILOT_DAILY_PERCENT_COLUMNS_RANGES,
+    AUTOPILOT_PERCENT_COLUMNS_FORMAT,
+)
 from src_oop.jobs.autopilot_daily.config import (
     CURRENT_METRIC_TO_BASE_COLUMN,
     DAILY_SHEET,
     DISABLED_PU_METRICS,
+    GROWTH_METRIC_TO_COLUMN,
     HISTORY_METRIC_TO_COLUMN,
 )
 
@@ -59,15 +64,49 @@ class AutopilotDailySheetsWriter:
         self.values_first_row = DAILY_SHEET.values_first_row
         self.today = today or date.today()
 
+    def apply_percentage_format(self) -> None:
+        """Применяет процентный формат к служебным колонкам ПУ.
+
+        Бизнес-логика:
+        столбцы `BE:BF` и `BX` должны отображать значения в процентах
+        независимо от того, какой сценарий последним обновлял лист
+        `Автопилот`. Ошибка форматирования не должна останавливать дневную
+        запись метрик.
+        """
+        for percent_range in AUTOPILOT_DAILY_PERCENT_COLUMNS_RANGES:
+            try:
+                self.worksheet.format(
+                    percent_range,
+                    AUTOPILOT_PERCENT_COLUMNS_FORMAT,
+                )
+                logger.info(
+                    "Процентный формат колонок дневного ПУ применен: range=%s",
+                    percent_range,
+                )
+            except Exception as error:
+                logger.warning(
+                    "Не удалось применить процентный формат колонок дневного ПУ, сценарий продолжает работу: "
+                    "range=%s error_type=%s",
+                    percent_range,
+                    type(error).__name__,
+                )
+
     def read_articles(self) -> list[int]:
         """Читает артикула ПУ в пользовательском порядке.
 
         Бизнес-логика:
         порядок первой колонки является главным порядком записи всех метрик.
-        Нечисловые и пустые строки пропускаются, чтобы служебные строки не
-        ломали дневную актуализацию.
+        Чтение защищено retry от временных ошибок Google Sheets 429/5xx и
+        сетевых обрывов. Нечисловые и пустые строки пропускаются, чтобы
+        служебные строки не ломали дневную актуализацию. Если колонку
+        артикулов не удалось прочитать после повторов, сценарий прерывается,
+        потому что без пользовательского порядка строк нельзя безопасно
+        записывать дневные метрики.
         """
-        raw_values = self.worksheet.col_values(DAILY_SHEET.articles_column_index)
+        raw_values = self._read_column_values_with_retry(
+            column_index=DAILY_SHEET.articles_column_index,
+            business_name="артикулы дневного ПУ",
+        )
         articles: list[int] = []
         for value in raw_values[self.values_first_row - 1 :]:
             text_value = str(value).strip()
@@ -75,6 +114,74 @@ class AutopilotDailySheetsWriter:
                 articles.append(int(text_value))
         logger.info("Артикулы для дневного ПУ прочитаны из Google Sheets: rows=%s", len(articles))
         return articles
+
+    def _read_column_values_with_retry(self, column_index: int, business_name: str) -> list[str]:
+        """Читает колонку Google Sheets с повтором временных ошибок.
+
+        Бизнес-логика:
+        чтение колонки артикулов задает порядок сопоставления всех дневных
+        метрик с ПУ. Временные ответы Google Sheets 429/5xx и сетевые сбои
+        ретраятся, чтобы не ронять сценарий из-за краткого сбоя API. После
+        исчерпания попыток ошибка пробрасывается выше: дневная актуализация не
+        должна продолжаться без надежно прочитанного порядка строк.
+        """
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                return self.worksheet.col_values(column_index)
+            except gspread.exceptions.APIError as error:
+                status_code = getattr(getattr(error, "response", None), "status_code", None)
+                if self._is_retryable_google_error(error) and attempt < max_retries:
+                    wait_seconds = self._retry_wait_seconds(attempt)
+                    logger.warning(
+                        "Google Sheets временно не отдал колонку для дневного ПУ, повторяем попытку: "
+                        "business_block=%s column_index=%s status_code=%s attempt=%s/%s wait_seconds=%s",
+                        business_name,
+                        column_index,
+                        status_code,
+                        attempt,
+                        max_retries,
+                        wait_seconds,
+                    )
+                    time.sleep(wait_seconds)
+                    continue
+                logger.error(
+                    "Не удалось прочитать колонку Google Sheets для дневного ПУ, сценарий прерывается: "
+                    "business_block=%s column_index=%s status_code=%s attempts=%s error_type=%s",
+                    business_name,
+                    column_index,
+                    status_code,
+                    max_retries,
+                    type(error).__name__,
+                )
+                raise
+            except requests.exceptions.RequestException as error:
+                if attempt < max_retries:
+                    wait_seconds = self._retry_wait_seconds(attempt)
+                    logger.warning(
+                        "Сетевое соединение с Google Sheets прервано при чтении колонки дневного ПУ, "
+                        "повторяем попытку: business_block=%s column_index=%s attempt=%s/%s "
+                        "wait_seconds=%s error_type=%s",
+                        business_name,
+                        column_index,
+                        attempt,
+                        max_retries,
+                        wait_seconds,
+                        type(error).__name__,
+                    )
+                    time.sleep(wait_seconds)
+                    continue
+                logger.error(
+                    "Не удалось прочитать колонку Google Sheets после сетевой ошибки, дневной сценарий "
+                    "прерывается: business_block=%s column_index=%s attempts=%s error_type=%s",
+                    business_name,
+                    column_index,
+                    max_retries,
+                    type(error).__name__,
+                )
+                raise
+
+        raise RuntimeError("Не удалось прочитать колонку Google Sheets после повторов.")
 
     def write_current_metric(
         self,
@@ -146,6 +253,44 @@ class AutopilotDailySheetsWriter:
         metric_frame = metric_frame.reindex(articles)
         rows = self._dataframe_to_rows(metric_frame)
         column = HISTORY_METRIC_TO_COLUMN[metric_name]
+        target_range = self._build_range(column, column, len(rows))
+        return self._update_range(metric_name, target_range, rows)
+
+    def write_growth_metric(
+        self,
+        dataframe: pd.DataFrame,
+        metric_name: str,
+        articles: list[int],
+    ) -> DailyMetricWriteResult:
+        """Пишет один расчетный показатель продаж в дневной ПУ.
+
+        Бизнес-логика:
+        колонки `BE:BF` показывают рост продаж по сумме заказов из
+        `orders_articles_analyze`, `BG` — количество дней подряд в просадке, а
+        `BX` — отношение затрат из `BV` к затратам из `BU`. Процентные метрики
+        приходят как доли и отображаются через формат Google Sheets; пропуски
+        сохраняются пустыми ячейками, чтобы не показывать ложный рост или
+        динамику при нулевой базе.
+        """
+        if metric_name not in GROWTH_METRIC_TO_COLUMN:
+            return DailyMetricWriteResult(
+                metric_name=metric_name,
+                written=False,
+                error_message=f"Для метрики роста продаж не задан диапазон: {metric_name}",
+            )
+        if dataframe.empty or metric_name not in dataframe.columns:
+            logger.info("Расчетная метрика продаж дневного ПУ пропущена: metric=%s", metric_name)
+            return DailyMetricWriteResult(metric_name=metric_name, written=True, rows=0)
+
+        metric_frame = dataframe[["article_id", metric_name]].set_index("article_id")
+        metric_frame = metric_frame.reindex(articles)
+        rows = self._dataframe_to_rows(metric_frame)
+        if metric_name == "sales_decline_streak_days":
+            rows = [
+                [int(row[0]) if row and row[0] != "" else ""]
+                for row in rows
+            ]
+        column = GROWTH_METRIC_TO_COLUMN[metric_name]
         target_range = self._build_range(column, column, len(rows))
         return self._update_range(metric_name, target_range, rows)
 
