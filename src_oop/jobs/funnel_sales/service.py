@@ -70,8 +70,9 @@ class FunnelSalesService:
     ) -> FunnelSalesRunSummary:
         """Запускает полный бизнес-сценарий обновления таблицы funnel_daily.
 
-        Если период не передан, повторяется legacy-поведение: загружаются
-        последние 28 завершённых дней, начиная со вчерашнего.
+        Если период не передан, сценарий загружает последние 28 дней, включая
+        текущую дату. Это поддерживает hourly-обновление текущего дня на cron,
+        чтобы витрина дополнялась новыми значениями без ручной передачи дат.
         """
         resolved_date_from, resolved_date_to = self._resolve_period(date_from, date_to)
         tokens_by_account = self._resolve_tokens(account=account)
@@ -203,10 +204,15 @@ class FunnelSalesService:
         date_from: date | None,
         date_to: date | None,
     ) -> tuple[date, date]:
-        """Определяет период выгрузки daily funnel с сохранением legacy-дефолта на 28 дней."""
+        """Определяет период выгрузки daily funnel по умолчанию на последние 28 дней.
+
+        Бизнес-логика: если явный период не передан, ежедневная воронка должна
+        включать текущий день, потому что hourly-cron обновляет витрину внутри
+        дня и не должен ждать закрытия суток для появления новых данных в БД.
+        """
         if date_from is None and date_to is None:
-            yesterday = date.today() - timedelta(days=1)
-            return yesterday - timedelta(days=DEFAULT_DAYS_BACK - 1), yesterday
+            today = date.today()
+            return today - timedelta(days=DEFAULT_DAYS_BACK - 1), today
 
         if date_from is None:
             date_from = date_to
