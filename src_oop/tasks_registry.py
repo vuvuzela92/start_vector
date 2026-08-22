@@ -18,6 +18,13 @@ from src_oop.jobs.annual_procurement_plan.run import (
 from src_oop.jobs.autopilot.run import autopilot_hourly_run, update_individual_info
 from src_oop.jobs.bukh_docs.run import get_bukh_docs_async
 from src_oop.jobs.bukh_docs.week_n_redeem_run import update_week_n_redeem
+from src_oop.jobs.bitrix_chat_control.run import (
+    bitrix_chat_control_create_tables,
+    daily_report,
+    sync_bitrix_chats,
+    telegram_bot,
+    weekly_report,
+)
 from src_oop.jobs.calculation_of_purchases_china.run import (
     transport_quarterly_plan_to_pivot,
     update_orders_white_balance_analytics,
@@ -124,6 +131,27 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "update_credit_data_vector": {
         "func": smart_run(update_credit_data_vector),
         "desc": "Обновление данных для кредитного анализа Вектор",
+    },
+    # Корпоративные чаты и управленческие Telegram-саммари.
+    "bitrix_chat_control_create_tables": {
+        "func": smart_run(bitrix_chat_control_create_tables),
+        "desc": "Создание таблиц и bootstrap monitored_chats для Bitrix chat control",
+    },
+    "sync_bitrix_chats": {
+        "func": smart_run(sync_bitrix_chats),
+        "desc": "Read-only синхронизация рабочих чатов Bitrix24 и обновление состояния проблем",
+    },
+    "daily_report": {
+        "func": smart_run(daily_report),
+        "desc": "Формирование и отправка ежедневного Telegram-отчёта по рабочим чатам Bitrix24",
+    },
+    "weekly_report": {
+        "func": smart_run(weekly_report),
+        "desc": "Формирование и отправка недельного Telegram-саммари по рабочим чатам Bitrix24",
+    },
+    "telegram_bot": {
+        "func": smart_run(telegram_bot),
+        "desc": "Запуск интерактивного Telegram-бота для Bitrix chat control",
     },
     # Бухгалтерские и регламентные выгрузки.
     "seller_balance_run": {

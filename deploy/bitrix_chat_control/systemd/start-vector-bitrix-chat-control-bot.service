@@ -1,0 +1,19 @@
+[Unit]
+Description=Start Vector Bitrix Chat Control Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vector
+Group=vector
+WorkingDirectory=/opt/start_vector
+EnvironmentFile=/etc/start-vector/bitrix-chat-control.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/start_vector/.venv/bin/python main.py telegram_bot
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

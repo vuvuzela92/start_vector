@@ -1,0 +1,16 @@
+[Unit]
+Description=Start Vector Bitrix Chat Control Sync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=vector
+Group=vector
+WorkingDirectory=/opt/start_vector
+EnvironmentFile=/etc/start-vector/bitrix-chat-control.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/start_vector/.venv/bin/python main.py sync_bitrix_chats
+
+[Install]
+WantedBy=multi-user.target

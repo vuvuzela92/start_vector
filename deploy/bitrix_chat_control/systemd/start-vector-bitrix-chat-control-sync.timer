@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Start Vector Bitrix Chat Control Sync every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=start-vector-bitrix-chat-control-sync.service
+
+[Install]
+WantedBy=timers.target

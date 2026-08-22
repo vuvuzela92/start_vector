@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Start Vector Bitrix Chat Control Weekly Report every Monday at 09:15 Moscow time
+
+[Timer]
+OnCalendar=Mon *-*-* 09:15:00
+Persistent=true
+Unit=start-vector-bitrix-chat-control-weekly-report.service
+
+[Install]
+WantedBy=timers.target

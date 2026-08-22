@@ -79,3 +79,4 @@ yarl==1.22.0
 openai
 pymupdf
 pdfplumber
+aiogram>=3,<4

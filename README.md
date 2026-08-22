@@ -10,6 +10,13 @@ src/modules/COMETA - модуль для работы с сервисом авт
 src/GOOGLE_SHEETS - модуль для работы с гугл-таблицами.
 src/WB - модуль для работы с API WB.
 
+## Server deployment
+
+Для server-ready контура `Bitrix Chat Control` с `systemd`, автозапуском и таймерами
+используйте инструкцию:
+
+`deploy/bitrix_chat_control/README.md`
+
 ### 1. Клонирование репозитория
 ```bash
 git clone git@github.com:vuvuzela92/start_vector.git
