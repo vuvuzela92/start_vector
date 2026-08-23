@@ -75,14 +75,6 @@ async def apply_new_fbs_stocks_from_unit_async() -> None:
         service = FBSStocksService()
         logger.info("Старт отправки новых FBS-остатков из UNIT в WB.")
         summary = await service.apply_new_fbs_stocks()
-        if not summary.applied:
-            await notifier.notify_dry_run(
-                job_name="apply_new_fbs_stocks_from_unit",
-                account_scope=_resolve_account_scope(),
-                checked_rows=summary.requested_rows,
-                prepared_rows=summary.prepared_rows,
-                skipped_rows=summary.skipped_rows,
-            )
         if summary.notification_events:
             await notifier.notify_events(
                 job_name="apply_new_fbs_stocks_from_unit",

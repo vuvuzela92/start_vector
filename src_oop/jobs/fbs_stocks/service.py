@@ -14,7 +14,6 @@ from src_oop.jobs.fbs_warehouses.config import ACCOUNT_ENV
 from src_oop.jobs.fbs_stocks.config import (
     AUTO_REFILL_APPLY_ENV,
     AUTO_REFILL_VESHKI_ONLY_ENV,
-    APPLY_STOCKS_ENV,
     CREATE_MISSING_COLUMNS_ENV,
     NEW_STOCK_VESHKI_COLUMN,
     REFRESH_VERIFY_ATTEMPTS,
@@ -142,22 +141,20 @@ class FBSStocksService:
         )
         return summary
 
-    async def apply_new_fbs_stocks(self, apply: bool | None = None) -> FBSStocksApplySummary:
+    async def apply_new_fbs_stocks(self) -> FBSStocksApplySummary:
         """Отправляет в WB новые остатки из управляющих колонок UNIT.
 
         Бизнес-сценарии: `Новый остаток для всех складов` ставит указанное значение на каждый
         активный внутренний склад. `Новый остаток Вешки` ставит значение на склад Вешки, а остальные
-        активные внутренние склады обнуляет. По умолчанию выполняется dry-run; после реальной
-        успешной отправки исходные управляющие ячейки очищаются, а `ФБС общий остаток` перечитывается
-        из WB. Если новых команд уже нет, сценарий не отправляет пустые запросы записи в WB, а
-        переключается в режим актуализации текущего `ФБС общий остаток`.
+        активные внутренние склады обнуляет. Каждая подготовленная команда сразу отправляется в WB;
+        после успешной отправки исходные управляющие ячейки очищаются, а `ФБС общий остаток`
+        перечитывается из WB. Если новых команд уже нет, сценарий не отправляет пустые запросы записи
+        в WB, а переключается в режим актуализации текущего `ФБС общий остаток`.
         """
         if self._should_create_missing_columns():
             self.sheets_client.ensure_stock_management_columns()
 
-        summary = FBSStocksApplySummary(
-            applied=self._should_apply_stocks() if apply is None else apply,
-        )
+        summary = FBSStocksApplySummary(applied=True)
         if not self.sheets_client.has_pending_new_stock_commands():
             logger.info(
                 "Ручные команды новых FBS-остатков не найдены: запускается только актуализация общего остатка."
@@ -202,16 +199,6 @@ class FBSStocksService:
         )
         summary.prepared_rows = sum(len(stocks) for stocks in update_plan.values())
         summary.skipped_rows = summary.requested_rows - summary.prepared_rows
-
-        if not summary.applied:
-            logger.info(
-                "Dry-run отправки FBS-остатков WB | requested_rows=%s | prepared_rows=%s | skipped_rows=%s | groups=%s",
-                summary.requested_rows,
-                summary.prepared_rows,
-                summary.skipped_rows,
-                len(update_plan),
-            )
-            return summary
 
         async with aiohttp.ClientSession() as session:
             (
@@ -1296,16 +1283,6 @@ class FBSStocksService:
     def _should_create_missing_columns(self) -> bool:
         """Проверяет явное разрешение на создание колонок, чтобы не менять структуру UNIT случайно."""
         return os.getenv(CREATE_MISSING_COLUMNS_ENV, "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "y",
-            "да",
-        }
-
-    def _should_apply_stocks(self) -> bool:
-        """Проверяет явное подтверждение отправки новых остатков в WB."""
-        return os.getenv(APPLY_STOCKS_ENV, "").strip().lower() in {
             "1",
             "true",
             "yes",

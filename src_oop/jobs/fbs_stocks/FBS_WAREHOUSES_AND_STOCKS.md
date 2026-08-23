@@ -44,7 +44,6 @@ export WB_FBS_OUR_WAREHOUSE_ID="1"                 # наш warehouse_id
 export WB_FBS_IMPORT_SOURCE_PATH="src_oop/jobs/fbs_warehouses/files/synced_warehouses.json"
 
 export WB_FBS_CREATE_MISSING_COLUMNS=true          # разрешить автоматически добавить служебные колонки в тестовую таблицу
-export WB_FBS_APPLY_STOCKS=true                    # разрешить реальную отправку остатков в WB
 export WB_FBS_AUTO_REFILL_APPLY=true               # разрешить отдельному cron-сценарию автопополнения реально писать в WB
 export WB_FBS_AUTO_REFILL_VESHKI_ONLY=true         # автопополнение только на Вешки до значения Минимальный остаток
 ```
@@ -229,19 +228,10 @@ python main.py update_fbs_stocks_in_unit
 - После реальной отправки сценарий ждет, пока WB начнет отдавать новые значения, и затем перечитывает `ФБС общий остаток`.
 - Если новых команд в таблице нет, сценарий не отправляет пустые запросы записи в WB и делает только актуализацию `ФБС общий остаток`.
 
-### Dry-run
+### Отправка новых остатков
 
 ```bash
 export WB_FBS_ACCOUNT="СТАРТ0854"
-unset WB_FBS_APPLY_STOCKS
-python main.py apply_new_fbs_stocks_from_unit
-```
-
-### Реальная отправка
-
-```bash
-export WB_FBS_ACCOUNT="СТАРТ0854"
-export WB_FBS_APPLY_STOCKS=true
 python main.py apply_new_fbs_stocks_from_unit
 ```
 
@@ -257,10 +247,7 @@ python main.py apply_new_fbs_stocks_from_unit
 - если пользователь заполнил одну из управляющих колонок, сценарий применяет новое значение;
 - если обе управляющие колонки пустые, сценарий работает как безопасная актуализация текущего `ФБС общий остаток` без записи в WB.
 
-Режим работы:
-
-- при `WB_FBS_APPLY_STOCKS=true` реально пишет в WB;
-- без этого флага работает как dry-run.
+Режим работы: задача всегда реально пишет подготовленные новые остатки в WB.
 
 ## Автопополнение остатков
 
@@ -323,8 +310,8 @@ python main.py auto_refill_fbs_stocks_from_unit
 2. Проверить, что в `warehouses_fbs` есть нужные пары `account + warehouse_id + wb_warehouse_id`.
 3. Обновить `ФБС общий остаток` через `update_fbs_stocks_in_unit`.
 4. Для ручного сценария заполнить `Новый остаток для всех складов` или `Новый остаток Вешки`.
-5. Выполнить dry-run нужной команды.
-6. Только после проверки результата включить `WB_FBS_APPLY_STOCKS=true` или `WB_FBS_AUTO_REFILL_APPLY=true`.
+5. Выполнить нужную команду после проверки управляющих значений в UNIT.
+6. Для отдельного cron-сценария автопополнения включить `WB_FBS_AUTO_REFILL_APPLY=true` только после проверки результата.
 
 
 ## Мой сценарий добавления одного склада, для одного аккаунта (не трогать)
