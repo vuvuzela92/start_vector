@@ -21,6 +21,7 @@ from src_oop.jobs.bukh_docs.week_n_redeem_run import update_week_n_redeem
 from src_oop.jobs.bitrix_chat_control.run import (
     bitrix_chat_control_create_tables,
     daily_report,
+    initialize_bitrix_chat_cursors,
     sync_bitrix_chats,
     telegram_bot,
     weekly_report,
@@ -136,6 +137,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "bitrix_chat_control_create_tables": {
         "func": smart_run(bitrix_chat_control_create_tables),
         "desc": "Создание таблиц и bootstrap monitored_chats для Bitrix chat control",
+    },
+    "initialize_bitrix_chat_cursors": {
+        "func": smart_run(initialize_bitrix_chat_cursors),
+        "desc": "Установка курсоров Bitrix на текущие сообщения без анализа старой истории",
     },
     "sync_bitrix_chats": {
         "func": smart_run(sync_bitrix_chats),

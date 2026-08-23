@@ -16,6 +16,7 @@ from src_oop.jobs.bitrix_chat_control.llm_client import BitrixChatLLMClient
 from src_oop.jobs.bitrix_chat_control.mcp_client import ReadonlyBitrixMCPClient
 from src_oop.jobs.bitrix_chat_control.models import (
     AnalysisRunStatus,
+    BitrixMessage,
     BitrixMessageInput,
 )
 from src_oop.jobs.bitrix_chat_control.rest_client import ReadonlyBitrixRESTClient
@@ -41,6 +42,55 @@ def bitrix_chat_control_create_tables() -> None:
         "Инициализация Bitrix chat control завершена | bootstrap_monitored_chats=%s",
         created_count,
     )
+
+
+async def initialize_bitrix_chat_cursors_async() -> int:
+    """Устанавливает курсор мониторинга на последние сообщения доступных чатов.
+
+    Этот одноразовый бизнес-сценарий переводит сервис из режима исторической
+    догрузки в режим наблюдения «с текущего момента». Он не удаляет локальную
+    историю и не меняет данные Bitrix24: для каждого чата сохраняется только
+    последний доступный REST идентификатор, после которого обычный sync будет
+    получать новые сообщения.
+    """
+    repository = BitrixChatControlRepository()
+    settings = BitrixChatControlSettings.from_env()
+    await refresh_monitored_chats_async(repository=repository, settings=settings)
+    bitrix_client = _build_runtime_bitrix_client(settings)
+    updated_count = 0
+
+    for chat in repository.list_active_chats():
+        dialog_payload = await bitrix_client.get_dialog(chat.bitrix_dialog_id)
+        last_message_id = _extract_dialog_last_message_id(dialog_payload)
+        if last_message_id is None:
+            logger.warning(
+                "Курсор Bitrix-чата не обновлён: в карточке чата нет последнего сообщения | chat_id=%s",
+                chat.bitrix_dialog_id,
+            )
+            continue
+
+        repository.update_chat_metadata(
+            chat.id,
+            name=_extract_dialog_name(dialog_payload) or chat.name,
+            last_synced_message_id=last_message_id,
+        )
+        updated_count += 1
+
+    logger.info(
+        "Курсоры Bitrix-чатов установлены на текущую границу | updated_chats=%s",
+        updated_count,
+    )
+    return updated_count
+
+
+def initialize_bitrix_chat_cursors() -> None:
+    """Синхронно устанавливает текущую границу мониторинга Bitrix-чатов для CLI.
+
+    Entrypoint запускают один раз перед включением периодического sync, когда
+    бизнес-правило требует отслеживать только будущие сообщения и не тратить
+    ресурсы на анализ накопленной старой истории.
+    """
+    asyncio.run(initialize_bitrix_chat_cursors_async())
 
 
 async def sync_bitrix_chats_async() -> None:
@@ -88,7 +138,7 @@ async def sync_bitrix_chats_async() -> None:
             )
             new_messages = repository.save_messages(prepared_messages)
             if new_messages:
-                last_message = max(new_messages, key=lambda item: item.message_datetime)
+                last_message = _select_last_message_for_cursor(new_messages)
                 repository.update_chat_metadata(
                     chat.id,
                     name=resolved_name,
@@ -284,6 +334,47 @@ def _extract_dialog_name(dialog_payload) -> str | None:
                 if nested_name:
                     return nested_name
     return None
+
+
+def _extract_dialog_last_message_id(dialog_payload) -> str | None:
+    """Извлекает максимальный идентификатор сообщения из карточки чата Bitrix.
+
+    Helper обслуживает инициализацию наблюдения с текущего момента. REST API
+    Bitrix использует числовой `last_message_id` как границу для `FIRST_ID`,
+    поэтому неверные или пустые значения не должны попасть в курсор sync.
+    """
+    if not isinstance(dialog_payload, dict):
+        return None
+
+    for key in ("last_message_id", "lastMessageId", "last_id", "lastId"):
+        value = dialog_payload.get(key)
+        if value is None:
+            continue
+        prepared_value = str(value).strip()
+        if prepared_value.isdigit():
+            return prepared_value
+
+    for nested_key in ("result", "dialog", "data"):
+        nested = dialog_payload.get(nested_key)
+        extracted_message_id = _extract_dialog_last_message_id(nested)
+        if extracted_message_id:
+            return extracted_message_id
+    return None
+
+
+def _select_last_message_for_cursor(messages: list[BitrixMessage]) -> BitrixMessage:
+    """Выбирает сообщение с максимальным числовым ID для следующего `FIRST_ID`.
+
+    Bitrix REST определяет границу инкрементальной загрузки именно по ID, а не
+    по дате сообщения. Fallback по дате сохраняет устойчивость к нестандартному
+    внешнему payload и защищает sync от остановки из-за повреждённого ID.
+    """
+    numeric_messages = [
+        message for message in messages if str(message.bitrix_message_id).isdigit()
+    ]
+    if numeric_messages:
+        return max(numeric_messages, key=lambda item: int(item.bitrix_message_id))
+    return max(messages, key=lambda item: item.message_datetime)
 
 
 def _prepare_messages(dialog_id: str, raw_messages) -> list[BitrixMessageInput]:
