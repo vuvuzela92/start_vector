@@ -3,7 +3,6 @@ import logging
 import pandas as pd
 
 from src_oop.jobs.calculation_of_purchases_china.config import (
-    delivery_calculation_china,
     payments_calendar,
 )
 from src_oop.jobs.calculation_of_purchases_china.orders_white_balance_analytics import (
@@ -18,15 +17,17 @@ logger = logging.getLogger(__name__)
 
 def _build_combined_balance_with_ved() -> tuple[pd.DataFrame, VedBalanceAnalyticsService]:
     """
-    Собирает объединенный DataFrame по white- и VED-части без записи в Google Sheets.
+    Собирает единый DataFrame платежного календаря без записи в Google Sheets.
 
     Возвращает:
         Кортеж из объединенного DataFrame и экземпляра `VedBalanceAnalyticsService`,
         который уже содержит вспомогательные методы подготовки и выгрузки результата.
 
     Зачем выделено отдельно:
-        Тестовый и production-режимы должны строить один и тот же combined DataFrame.
-        Отличаться между ними должен только целевой лист выгрузки.
+        Основной production-сценарий сначала считает white- и VED-части
+        отдельно, а затем объединяет их в единую структуру платежного
+        календаря. Вынесение в helper защищает этот шаг от дублирования
+        и позволяет держать orchestration в одном месте.
     """
     orders_service = OrdersWhiteBalanceAnalyticsService()
     ved_service = VedBalanceAnalyticsService()
@@ -94,61 +95,21 @@ def transport_quarterly_plan_to_pivot() -> None:
     logger.info("Поквартальный план перенесен в сводный лист по поставщикам.")
 
 
-def update_orders_white_balance_analytics() -> None:
-    """Запускает штатный расчет аналитики платежей по белым заказам."""
-    service = OrdersWhiteBalanceAnalyticsService()
-    df_balance = service.run()
-    logger.info("Аналитика платежей по белым заказам обновлена: shape=%s.", df_balance.shape)
-
-
-def update_test_balance_with_ved() -> None:
-    """
-    Выполняет тестовый pipeline объединения `balance_df` и `ved_balance_df`.
-
-    Что делает функция:
-    - считает обычный `balance_df` по белым заказам, но не выгружает его
-      в production-лист;
-    - отдельно считает `ved_balance_df` по таблице ВЭД;
-    - приводит VED-часть к структуре `balance_df`;
-    - объединяет оба результата через `pd.concat`;
-    - подготавливает служебные колонки итоговой аналитики;
-    - пишет объединенный DataFrame только в `delivery_calculation_china / test_sheet`.
-
-    Почему функция нужна отдельно:
-    - это изолированная точка запуска для отладки VED-логики;
-    - она не меняет поведение штатного `update_orders_white_balance_analytics`;
-    - ее удобно вызывать из CLI, не затрагивая production-выгрузку.
-
-    Что считается нормальным результатом:
-    - `balance_df` строится как раньше;
-    - `ved_balance_df` успешно приводится к той же структуре;
-    - в VED-части остаются только этапы с реальной `Сумма_оплаты > 0`;
-    - в логах нет критических ошибок валидации;
-    - тестовая выгрузка происходит только в `test_sheet`.
-    """
-    combined_balance_df, ved_service = _build_combined_balance_with_ved()
-
-    # Финальная запись идет только в тестовый лист, чтобы безопасно проверить
-    # объединенную логику без влияния на production-таблицу.
-    df_upload = ved_service.prepare_dataframe_for_upload(combined_balance_df)
-    ved_service.upload_to_test_sheet(df_upload)
-
-
 def update_payments_analyze_with_ved() -> None:
     """
-    Выполняет production pipeline объединения `balance_df` и `ved_balance_df`.
+    Обновляет production-лист платежного календаря по объединенной white + VED аналитике.
 
     Что делает функция:
-    - считает white-only часть без отдельной production-выгрузки;
-    - отдельно считает VED-часть;
-    - выравнивает VED по структуре white-аналитики;
+    - считает часть по белым заказам без промежуточной выгрузки;
+    - считает VED-часть по листу `ОТЧЁТ_2.0`;
+    - приводит VED-данные к общей структуре платежной аналитики;
     - объединяет обе части в один итоговый DataFrame;
-    - подготавливает служебные колонки итоговой аналитики;
-    - пишет combined результат в `payments_calendar / Аналитика_платежей`.
+    - добавляет служебные колонки для платежного календаря;
+    - записывает результат в `payments_calendar / Аналитика_платежей`.
 
-    Ограничение:
-        Функция не меняет white-only сценарий и не трогает тестовую combined-выгрузку.
-        Это отдельная production-команда для webhook и CLI.
+    Это основной и единственный актуальный entrypoint для CLI и webhook.
+    Старые вспомогательные режимы выгрузки убраны, чтобы в проекте
+    оставался один понятный сценарий обновления боевой аналитики.
     """
     combined_balance_df, ved_service = _build_combined_balance_with_ved()
     df_upload = ved_service.prepare_dataframe_for_upload(combined_balance_df)

@@ -3,7 +3,7 @@
 Отдельное FastAPI-приложение для запуска обновления аналитики платежей через webhook.
 
 API запускает существующую job командой из `PAYMENTS_ANALYZE_COMMAND` в директории `PAYMENTS_ANALYZE_PROJECT_DIR`.
-Текущий production webhook должен обновлять combined white + VED аналитику и писать ее в `payments_analyze_sheet`.
+Текущий production webhook должен обновлять объединенную аналитику white + VED и писать ее в `payments_calendar / Аналитика_платежей`.
 
 ## Структура
 
@@ -150,11 +150,9 @@ cd /app/project
 python main.py update_payments_analyze_with_ved
 ```
 
-## Режимы запуска аналитики
+## Актуальная команда запуска аналитики
 
-### Production combined mode
-
-Webhook теперь должен запускать production combined сценарий:
+Webhook и ручной запуск используют один и тот же поддерживаемый сценарий:
 
 ```bash
 python main.py update_payments_analyze_with_ved
@@ -163,29 +161,7 @@ python main.py update_payments_analyze_with_ved
 Результат выгружается в:
 
 ```text
-payments_analyze_sheet
-```
-
-### Test combined mode
-
-Для тестовой combined выгрузки остается отдельная команда:
-
-```bash
-python main.py update_test_balance_with_ved
-```
-
-Результат выгружается в:
-
-```text
-test_sheet
-```
-
-### White-only legacy mode
-
-Старый white-only сценарий сохранен как диагностический режим:
-
-```bash
-python main.py update_orders_white_balance_analytics
+payments_calendar / Аналитика_платежей
 ```
 
 ## Что обновить на сервере
