@@ -30,15 +30,23 @@ sudo setfacl -R -m u:hermes_runner:rX /opt/start_vector
 ```bash
 cd /opt/start_vector
 sudo install -o root -g root -m 755 deploy/hermes_task_runner/hermes_task_runner.py /usr/local/bin/run-start-vector-task
-sudo install -d -o root -g root -m 750 /etc/start-vector
+sudo install -d -o root -g vector -m 750 /etc/start-vector
 sudo install -o root -g root -m 640 deploy/hermes_task_runner/hermes-runner.conf.example /etc/start-vector/hermes-runner.conf
 sudo install -o root -g root -m 640 deploy/hermes_task_runner/hermes-allowed-tasks.txt.example /etc/start-vector/hermes-allowed-tasks.txt
+sudo setfacl -m u:hermes_runner:--x /etc/start-vector
+sudo setfacl -m u:hermes_runner:r-- /etc/start-vector/hermes-runner.conf
+sudo setfacl -m u:hermes_runner:r-- /etc/start-vector/hermes-allowed-tasks.txt
 ```
 
 Заполните `/etc/start-vector/hermes-runner.conf` реальными путями. Файл с секретами
 `ENV_FILE` должен быть вне репозитория, не доступен всем пользователям и доступен на
-чтение только `hermes_runner` (например, через отдельную группу без права записи). Не
-размещайте его в Git и не передавайте его содержимое Hermes.
+чтение только `hermes_runner` через ACL без права записи. Не размещайте его в Git и не
+передавайте его содержимое Hermes. Для нового env-файла используйте:
+
+```bash
+sudo install -o root -g root -m 640 /dev/null /etc/start-vector/<job>.env
+sudo setfacl -m u:hermes_runner:r-- /etc/start-vector/<job>.env
+```
 
 Заполните `/etc/start-vector/hermes-allowed-tasks.txt` только предварительно
 проверенными задачами. Не включайте `delete_fbs_warehouse`, `create_fbs_warehouse`,

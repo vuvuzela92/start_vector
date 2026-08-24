@@ -27,6 +27,11 @@ CONFIG_KEYS = {
     "TASK_TIMEOUT_SECONDS",
 }
 ENVIRONMENT_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# Дочерняя задача не наследует SSH-окружение, чтобы клиент не влиял на импорт модулей и пути.
+TASK_ENVIRONMENT_BASE = {
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "PYTHONUNBUFFERED": "1",
+}
 
 
 class ConfigurationError(Exception):
@@ -148,8 +153,8 @@ def load_allowed_tasks(path: Path = ALLOWED_TASKS_PATH) -> set[str]:
 
 
 def load_task_environment(env_file: Path) -> dict[str, str]:
-    """Подготавливает окружение задачи без раскрытия секретов в аргументах или логах."""
-    environment = dict(os.environ)
+    """Подготавливает изолированное окружение из защищённого env для запуска бизнес-задачи."""
+    environment = TASK_ENVIRONMENT_BASE.copy()
     environment.update(read_key_value_file(env_file))
     return environment
 
