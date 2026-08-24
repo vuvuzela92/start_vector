@@ -232,7 +232,11 @@ class VedBalanceAnalyticsService:
 
         Для отдельных этапов допускаются точечные бизнес-исключения.
         Например, страхование груза попадает в платежную аналитику только
-        если его статус не означает, что расход уже оплачен.
+        если его статус не означает, что расход уже оплачен. Для этапа
+        `Брокерское оформление КРЕДО` используются только строки, где
+        декларант равен `Кредо Инвест`, а обычное `Брокерское оформление`
+        получает все остальные строки, чтобы не задваивать одну и ту же
+        сумму таможенного оформления.
         """
         payment_columns = payment_config["columns"]
         self.validate_required_columns(df_source, list(payment_columns.values()))
@@ -246,10 +250,29 @@ class VedBalanceAnalyticsService:
         for target_column, source_column in payment_columns.items():
             df_payment[target_column] = df_source[source_column].to_numpy()
 
+        declarant_normalized = (
+            df_source["Декларант"].fillna("").astype(str).str.strip().str.lower()
+        )
+
         # Для этапа брокерского оформления в аналитике важен не общий
         # перевозчик, а конкретный декларант из шапки `ОТЧЁТ_2.0`.
         if stage_name == "Брокерское оформление":
-            df_payment["Поставщик"] = df_source["Декларант"].to_numpy()
+            df_payment = df_payment.loc[
+                ~declarant_normalized.eq("кредо инвест")
+            ].copy()
+            df_payment["Поставщик"] = df_source.loc[
+                df_payment.index, "Декларант"
+            ].to_numpy()
+
+        # Для отдельного этапа КРЕДО берем те же расходы на оформление,
+        # но только по строкам, где декларант явно указан как `Кредо Инвест`.
+        if stage_name == "Брокерское оформление КРЕДО":
+            df_payment = df_payment.loc[
+                declarant_normalized.eq("кредо инвест")
+            ].copy()
+            df_payment["Поставщик"] = df_source.loc[
+                df_payment.index, "Декларант"
+            ].to_numpy()
 
         if stage_name == "Страхование груза":
             insurance_status = (

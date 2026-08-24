@@ -28,9 +28,7 @@ from src_oop.jobs.bitrix_chat_control.run import (
 )
 from src_oop.jobs.calculation_of_purchases_china.run import (
     transport_quarterly_plan_to_pivot,
-    update_orders_white_balance_analytics,
     update_payments_analyze_with_ved,
-    update_test_balance_with_ved,
 )
 from src_oop.jobs.calculation_of_purchases_russia.run import (
     set_orders_quantity,
@@ -192,17 +190,9 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(transport_quarterly_plan_to_pivot),
         "desc": "Перенос поквартального плана в свод по поставщикам",
     },
-    "update_orders_white_balance_analytics": {
-        "func": smart_run(update_orders_white_balance_analytics),
-        "desc": "Выгрузка аналитики платежей по белым заказам",
-    },
-    "update_test_balance_with_ved": {
-        "func": smart_run(update_test_balance_with_ved),
-        "desc": "Тестовая выгрузка объединенного balance_df и ved_balance_df",
-    },
     "update_payments_analyze_with_ved": {
         "func": smart_run(update_payments_analyze_with_ved),
-        "desc": "Production-выгрузка объединенного balance_df и ved_balance_df в Платежный календарь во вкладку Аналитика_платежей",
+        "desc": "Обновление платежного календаря по объединенной аналитике белых заказов и ВЭД во вкладке Аналитика_платежей",
     },
     # Аналитика артикулов и закупочной цены.
     "orders_article_analyze_run": {
