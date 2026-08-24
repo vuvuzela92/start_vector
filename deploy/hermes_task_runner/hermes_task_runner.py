@@ -19,6 +19,9 @@ from pathlib import Path
 
 CONFIG_PATH = Path("/etc/start-vector/hermes-runner.conf")
 ALLOWED_TASKS_PATH = Path("/etc/start-vector/hermes-allowed-tasks.txt")
+FLOCK_EXECUTABLE = "/usr/bin/flock"
+# Код временной недоступности задачи: второй запуск не является ошибкой бизнес-расчёта.
+LOCK_CONFLICT_EXIT_CODE = 75
 CONFIG_KEYS = {
     "PROJECT_DIR",
     "PYTHON_EXECUTABLE",
@@ -172,7 +175,11 @@ def run_task(
     task_name: str,
     allowed_tasks: set[str],
 ) -> tuple[str, int]:
-    """Запускает разрешённую задачу реестра с таймаутом и сохраняет её вывод для аудита."""
+    """Запускает разрешённую задачу без параллельного дубля и сохраняет вывод для аудита.
+
+    Бизнес-правило: две одновременные выгрузки одной задачи не должны параллельно
+    перезаписывать Google Sheets или одни и те же расчётные данные.
+    """
     if task_name not in allowed_tasks:
         raise ConfigurationError("Эта задача не разрешена для запуска Hermes")
 
@@ -180,7 +187,17 @@ def run_task(
     log_path, log_file = create_log_file(settings.log_dir, job_id)
     logger = logging.getLogger("hermes_task_runner")
     logger.info("Hermes запросил запуск задачи | task=%s | job_id=%s", task_name, job_id)
-    command = [str(settings.python_executable), "main.py", task_name]
+    lock_path = settings.log_dir / f"{task_name}.lock"
+    command = [
+        FLOCK_EXECUTABLE,
+        "--nonblock",
+        "--conflict-exit-code",
+        str(LOCK_CONFLICT_EXIT_CODE),
+        str(lock_path),
+        str(settings.python_executable),
+        "main.py",
+        task_name,
+    ]
     try:
         with log_file:
             log_file.write(f"job_id={job_id}\ntask={task_name}\nstarted_at={datetime.now(UTC).isoformat()}\n")
@@ -198,6 +215,14 @@ def run_task(
     except subprocess.TimeoutExpired:
         logger.warning("Задача Hermes остановлена по таймауту | task=%s | job_id=%s", task_name, job_id)
         return job_id, 124
+
+    if process.returncode == LOCK_CONFLICT_EXIT_CODE:
+        logger.info(
+            "Задача Hermes не запущена: предыдущий экземпляр ещё выполняется | task=%s | job_id=%s",
+            task_name,
+            job_id,
+        )
+        return job_id, LOCK_CONFLICT_EXIT_CODE
 
     logger.info(
         "Задача Hermes завершена | task=%s | job_id=%s | exit_code=%s | log=%s",
@@ -229,7 +254,7 @@ def main() -> int:
         print("status=failed reason=server_error")
         return 1
 
-    status = "success" if exit_code == 0 else "failed"
+    status = "success" if exit_code == 0 else "busy" if exit_code == LOCK_CONFLICT_EXIT_CODE else "failed"
     print(f"status={status} job_id={job_id} exit_code={exit_code}")
     return exit_code
 

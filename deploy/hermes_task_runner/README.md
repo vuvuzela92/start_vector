@@ -9,7 +9,7 @@
 На сервере Start Vector выполните от администратора:
 
 ```bash
-sudo adduser --system --group --home /nonexistent --shell /usr/sbin/nologin hermes_runner
+sudo adduser --system --group --home /var/lib/hermes_runner --shell /bin/sh hermes_runner
 sudo install -d -o hermes_runner -g hermes_runner -m 750 /var/log/start-vector/hermes-jobs
 sudo install -d -o hermes_runner -g hermes_runner -m 700 /var/lib/hermes_runner/.ssh
 ```
@@ -23,6 +23,9 @@ Launcher должен иметь возможность читать код и �
 
 ```bash
 sudo setfacl -R -m u:hermes_runner:rX /opt/start_vector
+sudo setfacl -m u:hermes_runner:-wx /opt/start_vector/logs
+sudo setfacl -m u:hermes_runner:-w- /opt/start_vector/logs/app.log
+sudo setfacl -m d:u:hermes_runner:-w- /opt/start_vector/logs
 ```
 
 ## 2. Установить launcher и конфигурацию
@@ -70,7 +73,6 @@ Match User hermes_runner
     AllowAgentForwarding no
     X11Forwarding no
     PermitTunnel no
-    PermitUserEnvironment no
     ForceCommand /usr/local/bin/run-start-vector-task
 ```
 
@@ -106,6 +108,13 @@ ssh -i /secure/path/hermes_start_vector_ed25519 hermes_runner@START_VECTOR_HOST 
 
 Ответ содержит только статус, `job_id` и код завершения. Полный stdout/stderr задачи
 остаётся в `/var/log/start-vector/hermes-jobs/` с правами `0600`.
+
+## Защита от параллельных запусков
+
+Launcher использует `/usr/bin/flock` и создаёт отдельный lock-файл для каждого имени
+задачи в каталоге job-логов. Пока задача выполняется, повторный запрос той же задачи
+завершается со `status=busy` и кодом `75`; он не запускает второй экземпляр и не пишет
+данные в Google Sheets параллельно.
 
 ## 5. Проверка до выдачи доступа Hermes
 
