@@ -1,0 +1,7 @@
+# Этот файл после настройки хранится только на сервере: /etc/start-vector/hermes-runner.conf
+PROJECT_DIR=/opt/start_vector
+PYTHON_EXECUTABLE=/opt/start_vector/.venv/bin/python
+# Секреты размещаются вне репозитория. Файл должен быть доступен на чтение hermes_runner.
+ENV_FILE=/etc/start-vector/production.env
+LOG_DIR=/var/log/start-vector/hermes-jobs
+TASK_TIMEOUT_SECONDS=3600
