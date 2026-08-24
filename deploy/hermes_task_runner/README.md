@@ -55,6 +55,28 @@ sudo setfacl -m u:hermes_runner:r-- /etc/start-vector/<job>.env
 
 ## 3. Ограничить SSH-ключ Hermes
 
+У launcher-пользователя домашний каталог отключён, поэтому явно укажите SSH путь к
+`authorized_keys` и запретите все способы доступа, кроме ключа с forced-command. Создайте
+`/etc/ssh/sshd_config.d/60-hermes-runner.conf`:
+
+```text
+Match User hermes_runner
+    AuthorizedKeysFile /var/lib/hermes_runner/.ssh/authorized_keys
+    AuthenticationMethods publickey
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    PermitTTY no
+    AllowTcpForwarding no
+    AllowAgentForwarding no
+    X11Forwarding no
+    PermitTunnel no
+    PermitUserEnvironment no
+    ForceCommand /usr/local/bin/run-start-vector-task
+```
+
+До перезагрузки SSH обязательно проверьте синтаксис командой `sudo sshd -t`. Не закрывайте
+текущую административную сессию, пока не проверите вход ключом Hermes.
+
 Поместите публичный ключ сервера Hermes в
 `/var/lib/hermes_runner/.ssh/authorized_keys` одной строкой:
 
