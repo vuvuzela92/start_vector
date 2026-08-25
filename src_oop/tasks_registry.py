@@ -4,7 +4,7 @@ from typing import Any, Callable, Dict
 
 from src.modules.GOOGLE_SHEETS.credit_analyze_vector import update_credit_data_vector
 from src.modules.WB.reports.tasks import orders_report_today
-from src_oop.jobs.add_new_items.run import add_new_items_run
+from src_oop.jobs.add_new_items.run import add_new_items_run, add_new_items_telegram_bot
 from src_oop.jobs.advert_info.run import advert_info
 from src_oop.jobs.advert.run import advert_stat
 from src_oop.jobs.advert_spend.run import advert_spend
@@ -155,6 +155,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "telegram_bot": {
         "func": smart_run(telegram_bot),
         "desc": "Запуск интерактивного Telegram-бота для Bitrix chat control",
+    },
+    "add_new_items_telegram_bot": {
+        "func": smart_run(add_new_items_telegram_bot),
+        "desc": "Запуск Telegram-бота для серверного запуска add_new_items_run",
     },
     # Бухгалтерские и регламентные выгрузки.
     "seller_balance_run": {

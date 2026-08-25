@@ -17,3 +17,24 @@ def build_back_keyboard(callback_data: str):
             [InlineKeyboardButton(text="⬅️ Назад", callback_data=callback_data)]
         ]
     )
+
+
+def build_commands_reply_keyboard(*rows: tuple[str, ...]):
+    """Строит обычную экранную клавиатуру из набора строк-команд.
+
+    Клавиатура нужна для ботов, где пользователям удобнее нажимать на видимые
+    кнопки, чем помнить текст slash-команд. Helper остается общим, чтобы разные
+    Telegram-модули проекта могли собирать свои наборы кнопок без дублирования.
+    """
+    from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+
+    keyboard = [
+        [KeyboardButton(text=button_text) for button_text in row if button_text]
+        for row in rows
+        if row
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=keyboard,
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
