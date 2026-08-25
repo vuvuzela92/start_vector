@@ -278,7 +278,7 @@ class AddNewItemsTelegramService:
                     "Проверьте флаги `Добавлено в MAIN (tested)`, "
                     "`Добавлено в Автопилот`, `Добавлено в products`."
                 ),
-                log_excerpt=log_excerpt,
+                log_excerpt=self._build_compact_diagnostic(log_excerpt),
             )
 
         parsed_stats = self._extract_add_new_items_stats(combined_output)
@@ -292,7 +292,7 @@ class AddNewItemsTelegramService:
                 duration_seconds=duration_seconds,
                 summary="Статус: завершено",
                 details_text=self._build_success_details(parsed_stats),
-                log_excerpt=log_excerpt,
+                log_excerpt="",
             )
 
         return TaskRunResult(
@@ -304,7 +304,7 @@ class AddNewItemsTelegramService:
             duration_seconds=duration_seconds,
             summary="Статус: ошибка",
             details_text=self._build_failure_details(parsed_stats),
-            log_excerpt=log_excerpt,
+            log_excerpt=self._build_compact_diagnostic(log_excerpt),
         )
 
     def _build_internal_error_result(
@@ -368,26 +368,35 @@ class AddNewItemsTelegramService:
         return excerpt or "Дополнительный лог процесса отсутствует."
 
     def _format_result_text(self, result: TaskRunResult) -> str:
-        """Форматирует итог запуска в короткое сообщение для рабочей группы.
+        """Форматирует итог запуска в понятное сообщение для рабочей группы.
 
-        Итоговый текст должен быть понятен без чтения серверных логов: участник
-        группы сразу видит статус, инициатора, длительность и хвост лога, если
-        что-то пошло не так.
+        Итоговый текст должен читаться с одного взгляда сотрудником без доступа
+        к серверу: виден результат, кто запускал, сколько строк обработано и
+        где нужно проверить флаги. Сырые логи остаются только для ошибок.
         """
-        lines = [
-            result.summary,
-            "",
-            f"Кто запустил: {result.requested_by}",
-            f"Старт: {self._format_dt(result.started_at)}",
-            f"Финиш: {self._format_dt(result.finished_at)}",
-            f"Длительность: {self._format_duration(result.duration_seconds)}",
-        ]
-        if result.exit_code is not None:
-            lines.append(f"Код завершения: {result.exit_code}")
+        lines = [result.summary, ""]
+
+        lines.extend(
+            [
+                f"Кто запустил: {result.requested_by}",
+                f"Старт: {self._format_dt(result.started_at)}",
+                f"Финиш: {self._format_dt(result.finished_at)}",
+                f"Длительность: {self._format_duration(result.duration_seconds)}",
+            ]
+        )
+
         if result.details_text:
             lines.extend(["", result.details_text])
-        if result.log_excerpt:
-            lines.extend(["", "Хвост лога:", result.log_excerpt])
+
+        if result.status in {"failed", "timeout"}:
+            if result.exit_code is not None:
+                lines.append(f"Код завершения: {result.exit_code}")
+            if result.log_excerpt:
+                lines.extend(["", "Техническая деталь:", result.log_excerpt])
+
+        if result.status == "success" and result.exit_code not in (None, 0):
+            lines.append(f"Код завершения: {result.exit_code}")
+
         return "\n".join(lines)
 
     @staticmethod
@@ -457,20 +466,23 @@ class AddNewItemsTelegramService:
         контуров могла не состояться. Поэтому бот всегда напоминает проверять
         итоговые флаги `да/нет` в исходной таблице.
         """
-        lines = ["Проверьте итоговые флаги в источнике: MAIN, Автопилот, products."]
+        lines = [
+            "Проверьте флаги в таблице `Для юнит`: MAIN, Автопилот, products."
+        ]
         if parsed_stats is not None:
             lines.extend(
                 [
                     "",
-                    "Сводка:",
-                    f"Строк в обработке: {parsed_stats.loaded_cards}",
-                    f"Сопост: {parsed_stats.added_to_sopost}",
+                    f"Обработано строк: {parsed_stats.loaded_cards}",
+                    "Добавлено:",
                     f"MAIN (tested): {parsed_stats.added_to_unit_main}",
                     f"Автопилот: {parsed_stats.added_to_autopilot}",
                     f"Конкуренты: {parsed_stats.added_to_competitors}",
                     f"products: {parsed_stats.added_to_products}",
                 ]
             )
+            if parsed_stats.added_to_sopost:
+                lines.append(f"Сопост: {parsed_stats.added_to_sopost}")
         return "\n".join(lines)
 
     @staticmethod
@@ -482,23 +494,52 @@ class AddNewItemsTelegramService:
         показывает их как ориентир для ручной проверки.
         """
         lines = [
-            "Процесс завершился с ошибкой, но часть данных могла записаться.",
-            "Проверьте итоговые флаги в источнике: MAIN, Автопилот, products.",
+            "Процесс завершился с ошибкой. Часть данных могла записаться.",
+            "Проверьте флаги в таблице `Для юнит`: MAIN, Автопилот, products.",
         ]
         if parsed_stats is not None:
             lines.extend(
                 [
                     "",
-                    "Сводка:",
-                    f"Строк в обработке: {parsed_stats.loaded_cards}",
-                    f"Сопост: {parsed_stats.added_to_sopost}",
+                    f"Обработано строк: {parsed_stats.loaded_cards}",
+                    "Что успело добавиться:",
                     f"MAIN (tested): {parsed_stats.added_to_unit_main}",
                     f"Автопилот: {parsed_stats.added_to_autopilot}",
                     f"Конкуренты: {parsed_stats.added_to_competitors}",
                     f"products: {parsed_stats.added_to_products}",
                 ]
             )
+            if parsed_stats.added_to_sopost:
+                lines.append(f"Сопост: {parsed_stats.added_to_sopost}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _build_compact_diagnostic(log_excerpt: str) -> str:
+        """Очищает технический хвост лога до короткой полезной подсказки.
+
+        Сотрудникам не нужен полный stdout процесса. Helper убирает декоративные
+        строки и оставляет только последние осмысленные сообщения, которые
+        помогут понять тип проблемы до подключения разработчика.
+        """
+        filtered_lines = []
+        for line in log_excerpt.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("="):
+                continue
+            if "Получен запрос на запуск задачи из CLI" in stripped:
+                continue
+            if "Задача найдена в реестре" in stripped:
+                continue
+            if stripped == "OOP transfer of new items to UNIT, autopilot, competitors and products":
+                continue
+            if stripped == "✅ Задача 'add_new_items_run' успешно завершена.":
+                continue
+            filtered_lines.append(stripped)
+
+        compact_lines = filtered_lines[-6:]
+        return "\n".join(compact_lines) if compact_lines else log_excerpt
 
     @staticmethod
     def _format_duration(duration_seconds: int) -> str:
