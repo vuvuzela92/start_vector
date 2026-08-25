@@ -236,7 +236,10 @@ class VedBalanceAnalyticsService:
         `Брокерское оформление КРЕДО` используются только строки, где
         декларант равен `Кредо Инвест`, а обычное `Брокерское оформление`
         получает все остальные строки, чтобы не задваивать одну и ту же
-        сумму таможенного оформления.
+        сумму таможенного оформления. Для этапов, связанных с КРЕДО,
+        поставщик в итоговой аналитике всегда фиксируется как
+        `Кредо Инвест`, чтобы этот блок не распадался на разные значения
+        в сводных таблицах и фильтрах.
         """
         payment_columns = payment_config["columns"]
         self.validate_required_columns(df_source, list(payment_columns.values()))
@@ -270,9 +273,10 @@ class VedBalanceAnalyticsService:
             df_payment = df_payment.loc[
                 declarant_normalized.eq("кредо инвест")
             ].copy()
-            df_payment["Поставщик"] = df_source.loc[
-                df_payment.index, "Декларант"
-            ].to_numpy()
+            df_payment["Поставщик"] = "Кредо Инвест"
+
+        if stage_name == "Таможенные платежи КРЕДО":
+            df_payment["Поставщик"] = "Кредо Инвест"
 
         if stage_name == "Страхование груза":
             insurance_status = (
