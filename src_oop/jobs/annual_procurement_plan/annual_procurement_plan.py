@@ -7,6 +7,7 @@ from src_oop.jobs.annual_procurement_plan.config import (
     supplies_query,
     parfume_query,
     seller_price_query,
+    purchase_price_query,
 )
 from src_oop.core.database import Database
 # Импортируем внешние библиотеки
@@ -57,6 +58,7 @@ class AnnualProcurementPlan:
             "нед прибытие",
             "Поставщик",
             "Цена WB",
+            "Стоимость в закупке (руб.)",
         ]
         self.cancel_statuses = ["отмена", "в планах", "прибыло","РАЗОБРАТЬСЯ", "утеряно карго", "не получили", "излишек", "недостача"]
 
@@ -144,14 +146,29 @@ class AnnualProcurementPlan:
         return Database.read_sql_to_dataframe(supplies_query)
 
     def get_seller_price_data(self):
-        """Получает среднюю цену WB по артикулу продавца за последние 7 дней.
+        """Получает самую свежую цену WB по артикулу продавца без окна по дате.
 
         Метод обслуживает финальную выгрузку во вкладку ``БД_ЗАКАЗЫ``. Он
-        возвращает среднюю `seller_price` из `wb_order_feed`, агрегированную по
-        `local_vendor_code`, чтобы в годовом плане закупа рядом с заказом была
-        актуальная рыночная цена WB для оперативного анализа.
+        возвращает последнюю доступную `seller_price` из `wb_order_feed` по
+        каждому `local_vendor_code`, чтобы в годовом плане закупа рядом с
+        заказом была максимально актуальная цена WB даже для товаров, у которых
+        давно не было новых продаж.
         """
         return Database.read_sql_to_dataframe(seller_price_query)
+
+    def get_purchase_price_data(self):
+        """Получает максимально полную закупочную стоимость для годового плана.
+
+        Метод обслуживает финальную выгрузку во вкладку ``БД_ЗАКАЗЫ``. Для
+        расчета используется та же бизнес-логика, что и в боевой задаче
+        `purchase_price_update`: по каждому `local_vendor_code` берется
+        последняя валидная поставка и выбирается итоговый `price_per_item` с
+        учетом `planned_cost` для специальных сценариев валюты и поставщика.
+        В отличие от боевого обновления цены в UNIT здесь не используется
+        ограничение по дате, чтобы закупочная стоимость подтянулась для
+        максимального количества товаров в годовом плане.
+        """
+        return Database.read_sql_to_dataframe(purchase_price_query)
 
     def get_parfume_data(self):
         """Получает отзывы по парфюмерным товарам для отдельной вкладки плана.

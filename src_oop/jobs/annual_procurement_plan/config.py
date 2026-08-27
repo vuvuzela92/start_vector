@@ -44,15 +44,82 @@ supplies_query = text("""
         """)
 
 seller_price_query = text("""
-    SELECT
+    SELECT DISTINCT ON (a.local_vendor_code)
         a.local_vendor_code,
-        ROUND(AVG(f.seller_price)) AS seller_price
+        f.seller_price
     FROM wb_order_feed f
     LEFT JOIN article a
         ON a.nm_id = f.nm_id
-    WHERE DATE(f.created_at) >= current_date - INTERVAL '7 days'
-    GROUP BY
-        a.local_vendor_code;
+    WHERE a.local_vendor_code IS NOT NULL
+      AND a.local_vendor_code != ''
+    ORDER BY
+        a.local_vendor_code,
+        f.created_at DESC;
+""")
+
+purchase_price_query = text("""
+    WITH latest_purchase_price AS (
+        SELECT DISTINCT ON (local_vendor_code)
+            update_document_datetime,
+            guid,
+            document_number,
+            local_vendor_code,
+            product_name,
+            amount_with_vat,
+            quantity,
+            ROUND(amount_with_vat / quantity, 2) AS latest_price_per_item,
+            currency,
+            planned_cost,
+            supplier_name
+        FROM supply_to_sellers_warehouse
+        WHERE is_valid = TRUE
+          AND local_vendor_code LIKE 'wild%'
+          AND supplier_name != 'РВБ ООО'
+          AND quantity != 0
+        ORDER BY local_vendor_code, update_document_datetime DESC
+    ),
+    prepared_purchase_price AS (
+        SELECT
+            lpp.*,
+            CASE
+                WHEN
+                    (
+                        lpp.currency IS NOT NULL
+                        AND lpp.currency != '643'
+                    )
+                    OR (
+                        lpp.supplier_name IS NOT NULL
+                        AND lpp.supplier_name ILIKE '%ZILOL%'
+                    )
+                THEN TRUE
+                ELSE FALSE
+            END AS use_planned_cost
+        FROM latest_purchase_price lpp
+    )
+    SELECT
+        ppp.update_document_datetime,
+        ppp.guid,
+        ppp.document_number,
+        ppp.local_vendor_code,
+        ppp.product_name,
+        ppp.amount_with_vat,
+        ppp.quantity,
+        ppp.latest_price_per_item,
+        CASE
+            WHEN ppp.use_planned_cost
+            THEN ppp.planned_cost
+            ELSE ppp.latest_price_per_item
+        END AS price_per_item,
+        ppp.currency,
+        ppp.planned_cost,
+        CASE
+            WHEN ppp.use_planned_cost
+                AND (ppp.planned_cost IS NULL OR ppp.planned_cost = 0)
+            THEN 'ALARM: planned_cost missing'
+            ELSE NULL
+        END AS alarm_flag
+    FROM prepared_purchase_price ppp
+    ORDER BY ppp.local_vendor_code
 """)
 
 parfume_query = text("""SELECT f.nmid,
