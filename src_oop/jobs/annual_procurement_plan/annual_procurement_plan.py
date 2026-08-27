@@ -1,6 +1,13 @@
 # Импортируем внутренние модули
 from src_oop.core.my_gspread import GoogleTabs
-from src_oop.jobs.annual_procurement_plan.config import delivery_calculation_china, annual_procurement_plan, unit_gs, supplies_query, parfume_query
+from src_oop.jobs.annual_procurement_plan.config import (
+    delivery_calculation_china,
+    annual_procurement_plan,
+    unit_gs,
+    supplies_query,
+    parfume_query,
+    seller_price_query,
+)
 from src_oop.core.database import Database
 # Импортируем внешние библиотеки
 import pandas as pd
@@ -49,6 +56,7 @@ class AnnualProcurementPlan:
             "Сумма заказа, RMB",
             "нед прибытие",
             "Поставщик",
+            "Цена WB",
         ]
         self.cancel_statuses = ["отмена", "в планах", "прибыло","РАЗОБРАТЬСЯ", "утеряно карго", "не получили", "излишек", "недостача"]
 
@@ -127,11 +135,31 @@ class AnnualProcurementPlan:
         return df
     
     def get_supplies_data(self):
-        """Получает данные из базы данных по запросу supplies_query"""
+        """Получает данные поставок для блока фактических приходов годового плана.
+
+        Метод обслуживает вкладку ``Данные_Поставки``. В выборку попадают
+        агрегированные количества по `local_vendor_code` и дате поставки, чтобы
+        закупка могла сопоставлять план с уже подтвержденными поступлениями.
+        """
         return Database.read_sql_to_dataframe(supplies_query)
 
+    def get_seller_price_data(self):
+        """Получает среднюю цену WB по артикулу продавца за последние 7 дней.
+
+        Метод обслуживает финальную выгрузку во вкладку ``БД_ЗАКАЗЫ``. Он
+        возвращает среднюю `seller_price` из `wb_order_feed`, агрегированную по
+        `local_vendor_code`, чтобы в годовом плане закупа рядом с заказом была
+        актуальная рыночная цена WB для оперативного анализа.
+        """
+        return Database.read_sql_to_dataframe(seller_price_query)
+
     def get_parfume_data(self):
-        """Получает данные из базы данных по запросу parfume_query"""
+        """Получает отзывы по парфюмерным товарам для отдельной вкладки плана.
+
+        Метод обслуживает лист ``Данные_Парфюм`` и возвращает диагностическую
+        выгрузку по отзывам, которая используется в смежном бизнес-сценарии
+        контроля качества и оценки карточек товаров.
+        """
         return Database.read_sql_to_dataframe(parfume_query)
 
     @staticmethod

@@ -21,6 +21,48 @@ def _select_orders_columns(df_source: pd.DataFrame, required_columns: list[str])
     return df_result[required_columns]
 
 
+def _append_seller_price(
+    df_orders: pd.DataFrame,
+    df_seller_price: pd.DataFrame,
+) -> pd.DataFrame:
+    """Добавляет в выгрузку заказов среднюю цену WB по артикулу продавца.
+
+    Вспомогательная функция защищает сценарий подготовки вкладки ``БД_ЗАКАЗЫ``.
+    Она нормализует ключи `wild` и `local_vendor_code`, чтобы корректно
+    соединить табличные заказы с агрегированной ценой WB, не меняя состав самих
+    строк заказа и не прерывая выгрузку, если по части артикулов цена в БД
+    отсутствует.
+    """
+    df_result = df_orders.copy()
+
+    if df_seller_price.empty:
+        df_result["Цена WB"] = ""
+        return df_result
+
+    prepared_orders = df_result.copy()
+    prepared_prices = df_seller_price.copy()
+
+    prepared_orders["_merge_wild"] = (
+        prepared_orders["wild"].fillna("").astype(str).str.strip()
+    )
+    prepared_prices["_merge_wild"] = (
+        prepared_prices["local_vendor_code"].fillna("").astype(str).str.strip()
+    )
+
+    prepared_prices = prepared_prices[["_merge_wild", "seller_price"]].drop_duplicates(
+        subset=["_merge_wild"],
+        keep="last",
+    )
+
+    merged = prepared_orders.merge(
+        prepared_prices,
+        on="_merge_wild",
+        how="left",
+    )
+    merged["Цена WB"] = merged["seller_price"].fillna("")
+    return merged.drop(columns=["_merge_wild", "seller_price"])
+
+
 def transport_data_to_annual_procurement_plan():
     """Переносит заказы из рабочих листов в вкладку ``БД_ЗАКАЗЫ`` годового плана.
 
@@ -50,6 +92,10 @@ def transport_data_to_annual_procurement_plan():
     cancel_statuses = plan.cancel_statuses
     # Фильтрация
     df_merge = df_merge.loc[~df_merge['Статус'].isin(cancel_statuses)]
+    # Дополняем итоговую выгрузку средней ценой WB за последние 7 дней.
+    df_seller_price = plan.get_seller_price_data()
+    df_merge = _append_seller_price(df_merge, df_seller_price)
+    df_merge = _select_orders_columns(df_merge, choosen_orders_columns)
     # Обновляем данные в таблице Годовой план закупа 2026
     plan.set_data(plan.google_connect_to, df_merge)
 

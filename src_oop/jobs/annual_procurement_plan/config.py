@@ -43,6 +43,18 @@ supplies_query = text("""
             s.local_vendor_code;
         """)
 
+seller_price_query = text("""
+    SELECT
+        a.local_vendor_code,
+        ROUND(AVG(f.seller_price)) AS seller_price
+    FROM wb_order_feed f
+    LEFT JOIN article a
+        ON a.nm_id = f.nm_id
+    WHERE DATE(f.created_at) >= current_date - INTERVAL '7 days'
+    GROUP BY
+        a.local_vendor_code;
+""")
+
 parfume_query = text("""SELECT f.nmid,
        DATE(f.createddate) as date,
        f.text,
