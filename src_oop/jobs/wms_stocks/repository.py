@@ -6,6 +6,8 @@ import logging
 from dataclasses import dataclass
 
 import pandas as pd
+from sqlalchemy import Column, MetaData, Table, UniqueConstraint, inspect, text
+from sqlalchemy.sql.type_api import TypeEngine
 
 from src_oop.core.database import Database
 from src_oop.jobs.wms_stocks.config import (
@@ -75,6 +77,8 @@ class WMSStockRepository:
                 written_rows=0,
             )
 
+        self._ensure_database_table()
+        self._ensure_database_columns()
         self.database_cls.sync_data_to_postgres(
             table_name=WMS_STOCK_TABLE_NAME,
             data=self._prepare_dataframe_for_database(deduplicated_df),
@@ -171,3 +175,78 @@ class WMSStockRepository:
         """
         db_dataframe = dataframe.loc[:, list(WMS_STOCK_SCHEMA_DEFINITION)].copy()
         return db_dataframe.astype(object).where(pd.notna(db_dataframe), None)
+
+    def _ensure_database_table(self) -> None:
+        """Создает `public.wms_stock`, если таблица еще не была создана раньше.
+
+        Бизнес-сценарий:
+        новая выгрузка не должна зависеть от ручной миграции. Таблица с
+        ключом `(balance_date, product_id)` должна появляться автоматически при
+        первом штатном запуске или backfill.
+        """
+        engine = self.database_cls.get_engine()
+        metadata = MetaData()
+        table = Table(
+            WMS_STOCK_TABLE_NAME,
+            metadata,
+            *(Column(column_name, column_type) for column_name, column_type in WMS_STOCK_SCHEMA_DEFINITION.items()),
+            UniqueConstraint(*WMS_STOCK_KEY_COLUMNS, name=f"uq_{WMS_STOCK_TABLE_NAME}_keys"),
+        )
+        metadata.create_all(engine, tables=[table])
+
+    def _ensure_database_columns(self) -> None:
+        """Добавляет недостающие колонки в `public.wms_stock` после расширения витрины.
+
+        Бизнес-сценарий:
+        таблица могла быть создана ранней версией job без поля `fbs`. Метод
+        безопасно доводит схему до актуального состояния, чтобы повторный запуск
+        начал писать FBS-остаток без ручной правки PostgreSQL.
+        """
+        engine = self.database_cls.get_engine()
+        existing_columns = set(self._get_existing_column_types())
+
+        for column_name, column_type in WMS_STOCK_SCHEMA_DEFINITION.items():
+            if column_name in existing_columns:
+                continue
+
+            compiled_type = self._compile_sqlalchemy_type(
+                column_type=column_type,
+                dialect=engine.dialect,
+            )
+            alter_sql = text(
+                f'ALTER TABLE "{WMS_STOCK_TABLE_NAME}" '
+                f'ADD COLUMN IF NOT EXISTS "{column_name}" {compiled_type}'
+            )
+            with engine.begin() as connection:
+                connection.execute(alter_sql)
+            logger.info(
+                "В таблицу wms_stock добавлена недостающая колонка | column=%s | type=%s",
+                column_name,
+                compiled_type,
+            )
+
+    def _get_existing_column_types(self) -> dict[str, TypeEngine]:
+        """Читает фактическую схему `public.wms_stock` перед точечным расширением колонок.
+
+        Бизнес-сценарий:
+        job должна понимать, какие поля уже есть в БД, чтобы дозаводить только
+        недостающие колонки и не вмешиваться в существующую рабочую таблицу.
+        """
+        inspector = inspect(self.database_cls.get_engine())
+        return {
+            column["name"]: column["type"]
+            for column in inspector.get_columns(WMS_STOCK_TABLE_NAME)
+        }
+
+    def _compile_sqlalchemy_type(self, column_type, dialect) -> str:
+        """Преобразует тип SQLAlchemy в SQL-строку для `ALTER TABLE`.
+
+        Бизнес-сценарий:
+        автоматическое расширение `public.wms_stock` должно одинаково работать
+        и для классов типов SQLAlchemy, и для их экземпляров без ручного
+        составления SQL под каждую новую колонку витрины.
+        """
+        resolved_type = column_type
+        if isinstance(column_type, type) and issubclass(column_type, TypeEngine):
+            resolved_type = column_type()
+        return resolved_type.compile(dialect=dialect)

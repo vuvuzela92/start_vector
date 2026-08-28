@@ -15,7 +15,7 @@ import pandas as pd
 
 class AnnualProcurementPlan:
     """Класс для обслуживания гугл-таблицы Годовой план закупа 2026"""
-    
+
     def __init__(self):
         """Инициализирует источники и состав колонок для сценария обновления годового плана закупа.
 
@@ -40,7 +40,9 @@ class AnnualProcurementPlan:
         self._unit_sheet = annual_procurement_plan.get("unit_sheet")
         self._supply_sheet = annual_procurement_plan.get("supply_sheet")
         self._parfume_sheet = annual_procurement_plan.get("parfume_sheet")
+        self._quarter_sheet = annual_procurement_plan.get("quarter_sheet")
         self._conn_to = None
+        self._conn_quarter = None
 
         # Настройки для юнитки
         self._table_unit = unit_gs.get("title")
@@ -61,6 +63,9 @@ class AnnualProcurementPlan:
             "Стоимость в закупке (руб.)",
         ]
         self.cancel_statuses = ["отмена", "в планах", "прибыло","РАЗОБРАТЬСЯ", "утеряно карго", "не получили", "излишек", "недостача"]
+        self.quarter_price_column = "цена продажная плановая"
+        self.quarter_cost_column = "себестоимость 2025-2026"
+        self.white_plan_cost_column = "Себестоимость 1 шт. в руб ПЛАН"
 
         # Подключение к базе данных
         self.engine = Database.get_engine()
@@ -94,7 +99,7 @@ class AnnualProcurementPlan:
         if self._conn_to is None:
             self._conn_to = GoogleTabs(self._table_to_name, self._unit_sheet)
         return self._conn_to
-    
+
     @property
     def annual_plan_connect_to_supply_sheet(self):
         """Ленивое подключение к листу с данными поставок в таблице Годовой план закупа 2026"""
@@ -108,7 +113,18 @@ class AnnualProcurementPlan:
         if self._conn_unit is None:
             self._conn_unit = GoogleTabs(self._table_unit, self._sheet_unit)
         return self._conn_unit
-    
+
+    @property
+    def annual_plan_connect_to_quarter_sheet(self):
+        """Ленивое подключение к листу Поквартально в годовом плане закупа.
+
+        Свойство обслуживает отдельный сценарий точечного обновления ценовых
+        колонок в листе ``Поквартально`` без полной перезаписи таблицы.
+        """
+        if self._conn_quarter is None:
+            self._conn_quarter = GoogleTabs(self._table_to_name, self._quarter_sheet)
+        return self._conn_quarter
+
     @property
     def annual_plan_connect_to_parfume_sheet(self):
         """Ленивое подключение к листу с данными парфюма в таблице Годовой план закупа 2026"""
@@ -135,7 +151,19 @@ class AnnualProcurementPlan:
         data = self.google_connect_unit.sheet_title.get_all_values()
         df = pd.DataFrame(data[1:], columns=data[0])
         return df
-    
+
+    def get_quarterly_plan_data(self):
+        """Получает данные листа ``Поквартально`` с шапкой в 4-й строке.
+
+        Метод обслуживает сценарий точечного обновления цен в квартальном
+        плане закупа. Он сохраняет реальную структуру листа: заголовки берутся
+        из 4-й строки, а строки данных начинаются с 5-й, чтобы привязка по
+        `wild` совпадала с тем, что видит бизнес в Google Sheets.
+        """
+        data = self.annual_plan_connect_to_quarter_sheet.sheet_title.get_all_values()
+        df = pd.DataFrame(data[4:], columns=data[3])
+        return df
+
     def get_supplies_data(self):
         """Получает данные поставок для блока фактических приходов годового плана.
 

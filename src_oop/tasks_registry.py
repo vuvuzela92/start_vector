@@ -14,6 +14,7 @@ from src_oop.jobs.annual_procurement_plan.run import (
     transport_parfume_data_to_annual_procurement_plan,
     transport_supplies_data_to_annual_procurement_plan,
     transport_unit_data_to_annual_procurement_plan,
+    update_quarterly_prices_to_annual_procurement_plan,
 )
 from src_oop.jobs.autopilot.run import autopilot_hourly_run, update_individual_info
 from src_oop.jobs.bukh_docs.run import get_bukh_docs_async
@@ -189,6 +190,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "transport_supplies_data_to_annual_procurement_plan": {
         "func": smart_run(transport_supplies_data_to_annual_procurement_plan),
         "desc": "Обновление данных поставок в годовом плане закупа 2026",
+    },
+    "update_quarterly_prices_to_annual_procurement_plan": {
+        "func": smart_run(update_quarterly_prices_to_annual_procurement_plan),
+        "desc": "Обновление ценовых колонок на листе Поквартально годового плана закупа 2026",
     },
     "transport_quarterly_plan_to_pivot": {
         "func": smart_run(transport_quarterly_plan_to_pivot),

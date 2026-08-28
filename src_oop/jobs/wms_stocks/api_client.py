@@ -122,6 +122,8 @@ class WMSStockService:
         date_from: str,
         date_to: str,
         limit: int = 500,
+        location_id: int | None = None,
+        include_subtree: bool = False,
     ) -> list[dict[str, Any]]:
         """Получает дневные остатки WMS по новому методу `daily-balances`.
 
@@ -129,7 +131,9 @@ class WMSStockService:
         новая витрина `public.wms_stock` несколько раз в день перечитывает окно
         дат или делает исторический backfill. Пагинация в этом endpoint идет по
         товарам, поэтому метод последовательно читает страницы через `limit` и
-        `offset`, а для каждого товара получает весь диапазон дней сразу.
+        `offset`, а для каждого товара получает весь диапазон дней сразу. При
+        необходимости метод поддерживает отдельный срез по `location_id`, чтобы
+        сохранить в БД как общий остаток, так и FBS-остаток по конкретной WMS-локации.
         """
         url = "https://api-wms.star-vector.ru/api/inventory-history/daily-balances"
         timeout = aiohttp.ClientTimeout(total=60)
@@ -147,19 +151,22 @@ class WMSStockService:
                     date_to=date_to,
                     offset=offset,
                     limit=limit,
+                    location_id=location_id,
+                    include_subtree=include_subtree,
                 )
                 if not page_items:
                     break
 
                 all_items.extend(page_items)
                 logger.info(
-                    "Получена страница дневной истории WMS-остатков | offset=%s | limit=%s | page_products=%s | total_products=%s | date_from=%s | date_to=%s",
+                    "Получена страница дневной истории WMS-остатков | offset=%s | limit=%s | page_products=%s | total_products=%s | date_from=%s | date_to=%s | location_id=%s",
                     offset,
                     limit,
                     len(page_items),
                     total_products,
                     date_from,
                     date_to,
+                    location_id,
                 )
 
                 offset += len(page_items)
@@ -184,6 +191,8 @@ class WMSStockService:
         date_to: str,
         offset: int,
         limit: int,
+        location_id: int | None,
+        include_subtree: bool,
         retries: int = 4,
     ) -> tuple[list[dict[str, Any]], int | None]:
         """Запрашивает одну страницу `daily-balances` с retry и пагинацией по товарам.
@@ -199,6 +208,9 @@ class WMSStockService:
             "limit": limit,
             "offset": offset,
         }
+        if location_id is not None:
+            params["location_id"] = location_id
+            params["include_subtree"] = "true" if include_subtree else "false"
         retry_delays = (2, 5, 10, 20)
 
         for attempt in range(1, retries + 1):
@@ -234,9 +246,10 @@ class WMSStockService:
                     if response.status >= 400:
                         response_text = await response.text()
                         logger.error(
-                            "WMS API отклонил запрос дневной истории остатков | offset=%s | limit=%s | status=%s | response_preview=%s",
+                            "WMS API отклонил запрос дневной истории остатков | offset=%s | limit=%s | location_id=%s | status=%s | response_preview=%s",
                             offset,
                             limit,
+                            location_id,
                             response.status,
                             response_text[:500],
                         )

@@ -1,8 +1,12 @@
 # Импорт внутренних модулей
+import logging
+
 from src_oop.jobs.annual_procurement_plan.annual_procurement_plan import AnnualProcurementPlan
 from src_oop.core.utils_general import clean_currency_value
 # Импорт внешних библиотек
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 def _select_orders_columns(df_source: pd.DataFrame, required_columns: list[str]) -> pd.DataFrame:
     """Возвращает набор колонок заказа для выгрузки в годовой план закупа.
@@ -25,11 +29,11 @@ def _append_seller_price(
     df_orders: pd.DataFrame,
     df_seller_price: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Добавляет в выгрузку заказов среднюю цену WB по артикулу продавца.
+    """Добавляет в выгрузку заказов самую свежую цену WB по артикулу продавца.
 
     Вспомогательная функция защищает сценарий подготовки вкладки ``БД_ЗАКАЗЫ``.
     Она нормализует ключи `wild` и `local_vendor_code`, чтобы корректно
-    соединить табличные заказы с агрегированной ценой WB, не меняя состав самих
+    соединить табличные заказы с последней доступной ценой WB, не меняя состав самих
     строк заказа и не прерывая выгрузку, если по части артикулов цена в БД
     отсутствует.
     """
@@ -103,6 +107,100 @@ def _append_purchase_price(
     )
     merged["Стоимость в закупке (руб.)"] = merged["price_per_item"].fillna("")
     return merged.drop(columns=["_merge_wild", "price_per_item"])
+
+
+def _append_quarterly_seller_price(
+    df_quarterly: pd.DataFrame,
+    df_seller_price: pd.DataFrame,
+    target_column_name: str,
+) -> pd.DataFrame:
+    """Подмешивает самую свежую цену WB в квартальный план по ключу `wild`.
+
+    Вспомогательная функция обслуживает отдельный сценарий обновления листа
+    ``Поквартально``. Значение записывается только в целевую колонку
+    `цена продажная плановая`, а если по товару в БД нет цены, ячейка
+    сохраняется пустой.
+    """
+    df_result = df_quarterly.copy()
+
+    if df_seller_price.empty:
+        if target_column_name not in df_result.columns:
+            df_result[target_column_name] = ""
+        return df_result
+
+    prepared_quarterly = df_result.copy()
+    prepared_prices = df_seller_price.copy()
+
+    prepared_quarterly["_merge_wild"] = (
+        prepared_quarterly["wild"].fillna("").astype(str).str.strip()
+    )
+    prepared_prices["_merge_wild"] = (
+        prepared_prices["local_vendor_code"].fillna("").astype(str).str.strip()
+    )
+    prepared_prices = prepared_prices[["_merge_wild", "seller_price"]].drop_duplicates(
+        subset=["_merge_wild"],
+        keep="last",
+    )
+
+    merged = prepared_quarterly.merge(
+        prepared_prices,
+        on="_merge_wild",
+        how="left",
+    )
+    merged[target_column_name] = merged["seller_price"].fillna("")
+    return merged.drop(columns=["_merge_wild", "seller_price"])
+
+
+def _append_quarterly_white_plan_cost(
+    df_quarterly: pd.DataFrame,
+    df_white_orders: pd.DataFrame,
+    source_column_name: str,
+    target_column_name: str,
+) -> pd.DataFrame:
+    """Подмешивает плановую себестоимость из листа белых заказов в квартальный план.
+
+    Вспомогательная функция защищает бизнес-сценарий, где закупщик хочет видеть
+    в листе ``Поквартально`` ориентир по себестоимости для каждого `wild`.
+    Если один и тот же `wild` встречается в белых заказах несколько раз,
+    используется последнее непустое значение из текущего снимка листа.
+    """
+    df_result = df_quarterly.copy()
+
+    if df_white_orders.empty or source_column_name not in df_white_orders.columns:
+        if target_column_name not in df_result.columns:
+            df_result[target_column_name] = ""
+        return df_result
+
+    prepared_quarterly = df_result.copy()
+    prepared_white_orders = df_white_orders[["wild", source_column_name]].copy()
+
+    prepared_quarterly["_merge_wild"] = (
+        prepared_quarterly["wild"].fillna("").astype(str).str.strip()
+    )
+    prepared_white_orders["_merge_wild"] = (
+        prepared_white_orders["wild"].fillna("").astype(str).str.strip()
+    )
+    prepared_white_orders[source_column_name] = (
+        prepared_white_orders[source_column_name].fillna("").astype(str).str.strip()
+    )
+    prepared_white_orders = prepared_white_orders.loc[
+        (prepared_white_orders["_merge_wild"] != "")
+        & (prepared_white_orders[source_column_name] != "")
+    ]
+    prepared_white_orders = prepared_white_orders[
+        ["_merge_wild", source_column_name]
+    ].drop_duplicates(
+        subset=["_merge_wild"],
+        keep="last",
+    )
+
+    merged = prepared_quarterly.merge(
+        prepared_white_orders,
+        on="_merge_wild",
+        how="left",
+    )
+    merged[target_column_name] = merged[source_column_name].fillna("")
+    return merged.drop(columns=["_merge_wild", source_column_name])
 
 
 def transport_data_to_annual_procurement_plan():
@@ -180,3 +278,58 @@ def transport_parfume_data_to_annual_procurement_plan():
     df_parfume = plan.get_parfume_data()
     # Обновляем данные в таблице Годовой план закупа 2026
     plan.set_data(plan.annual_plan_connect_to_parfume_sheet, df_parfume)
+
+
+def update_quarterly_prices_to_annual_procurement_plan() -> None:
+    """Обновляет ценовые колонки листа ``Поквартально`` по ключу `wild`.
+
+    Сценарий читает квартальный план из таблицы ``Годовой план закупа 2026``,
+    находит для каждой строки с `wild` самую свежую `Цена WB` из БД и
+    плановую себестоимость из листа ``Заказы белые ТЕСТ`` по колонке
+    ``Себестоимость 1 шт. в руб ПЛАН``, а затем точечно записывает значения в
+    колонки ``цена продажная плановая`` и ``себестоимость 2025-2026``. Если по
+    товару источник пустой, ячейка в квартальном плане остается пустой.
+    """
+    plan = AnnualProcurementPlan()
+    df_quarterly = plan.get_quarterly_plan_data()
+
+    if df_quarterly.empty:
+        logger.warning(
+            "Обновление ценовых колонок листа Поквартально пропущено: в листе нет строк данных."
+        )
+        return
+
+    df_seller_price = plan.get_seller_price_data()
+    df_white_orders = plan.get_white_orders_data()
+
+    df_quarterly = _append_quarterly_seller_price(
+        df_quarterly=df_quarterly,
+        df_seller_price=df_seller_price,
+        target_column_name=plan.quarter_price_column,
+    )
+    df_quarterly = _append_quarterly_white_plan_cost(
+        df_quarterly=df_quarterly,
+        df_white_orders=df_white_orders,
+        source_column_name=plan.white_plan_cost_column,
+        target_column_name=plan.quarter_cost_column,
+    )
+
+    quarter_connector = plan.annual_plan_connect_to_quarter_sheet
+    quarter_connector.update_column_by_name_at_header_row(
+        column_name=plan.quarter_price_column,
+        data_to_write=df_quarterly[plan.quarter_price_column].tolist(),
+        header_row_number=4,
+        data_start_row_number=5,
+    )
+    quarter_connector.update_column_by_name_at_header_row(
+        column_name=plan.quarter_cost_column,
+        data_to_write=df_quarterly[plan.quarter_cost_column].tolist(),
+        header_row_number=4,
+        data_start_row_number=5,
+    )
+    logger.info(
+        "Ценовые колонки листа Поквартально обновлены | rows=%s | price_column=%s | cost_column=%s",
+        len(df_quarterly.index),
+        plan.quarter_price_column,
+        plan.quarter_cost_column,
+    )

@@ -9,12 +9,14 @@ from sqlalchemy import Date, DateTime, Integer, String
 WMS_STOCK_TABLE_NAME = "wms_stock"
 WMS_STOCK_LOOKBACK_DAYS = 7
 WMS_STOCK_BACKFILL_START_DATE = date(2026, 7, 29)
+WMS_STOCK_FBS_LOCATION_ID = 35
 
 # Целевая схема upsert для агрегированных дневных остатков WMS.
 WMS_STOCK_SCHEMA_DEFINITION = {
     "balance_date": Date,
     "product_id": String,
     "stock_qty": Integer,
+    "fbs": Integer,
     "loaded_at": DateTime,
 }
 

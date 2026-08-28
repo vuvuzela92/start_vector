@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import requests
 from dotenv import load_dotenv
+from google.auth import exceptions as google_auth_exceptions
 from gspread.utils import rowcol_to_a1
 
 load_dotenv()
@@ -171,6 +172,28 @@ class GoogleTabs:
                     type(error).__name__,
                 )
                 time.sleep(max(wait_seconds, delay))
+            except google_auth_exceptions.TransportError as error:
+                if attempt == retries:
+                    logger.exception(
+                        "Подключение к Google Sheets исчерпало все попытки после ошибки транспортного слоя Google Auth | table=%s | sheet=%s | attempts=%s | error_type=%s",
+                        self.table_title,
+                        self.sheet_title,
+                        retries,
+                        type(error).__name__,
+                    )
+                    raise
+
+                wait_seconds = self._get_google_network_retry_delay_seconds(attempt=attempt)
+                logger.warning(
+                    "Google Auth временно недоступен при подключении к Google Sheets, повторяем попытку | table=%s | sheet=%s | attempt=%s/%s | wait_seconds=%s | error_type=%s",
+                    self.table_title,
+                    self.sheet_title,
+                    attempt,
+                    retries,
+                    wait_seconds,
+                    type(error).__name__,
+                )
+                time.sleep(max(wait_seconds, delay))
 
         raise RuntimeError(
             f"Не удалось открыть таблицу '{self.table_title}' после {retries} попыток."
@@ -229,6 +252,25 @@ class GoogleTabs:
                 wait_seconds = self._get_google_network_retry_delay_seconds(attempt=attempt)
                 logger.warning(
                     "Сетевая ошибка при записи в Google Sheets, повторяем попытку | operation=%s | attempt=%s/%s | wait_seconds=%s | error_type=%s",
+                    operation_name,
+                    attempt,
+                    GOOGLE_WRITE_RETRY_ATTEMPTS,
+                    wait_seconds,
+                    type(error).__name__,
+                )
+                time.sleep(wait_seconds)
+            except google_auth_exceptions.TransportError as error:
+                if attempt == GOOGLE_WRITE_RETRY_ATTEMPTS:
+                    logger.exception(
+                        "Операция записи в Google Sheets исчерпала все попытки после ошибки транспортного слоя Google Auth | operation=%s | attempts=%s",
+                        operation_name,
+                        GOOGLE_WRITE_RETRY_ATTEMPTS,
+                    )
+                    raise
+
+                wait_seconds = self._get_google_network_retry_delay_seconds(attempt=attempt)
+                logger.warning(
+                    "Google Auth временно недоступен при записи в Google Sheets, повторяем попытку | operation=%s | attempt=%s/%s | wait_seconds=%s | error_type=%s",
                     operation_name,
                     attempt,
                     GOOGLE_WRITE_RETRY_ATTEMPTS,
@@ -423,6 +465,76 @@ class GoogleTabs:
 
         except Exception as error:
             print(f"Ошибка при динамическом обновлении: {error}")
+
+    def update_column_by_name_at_header_row(
+        self,
+        column_name: str,
+        data_to_write: list,
+        header_row_number: int,
+        data_start_row_number: int,
+    ) -> None:
+        """Обновляет колонку по имени заголовка в листе с произвольной строкой шапки.
+
+        Бизнес-сценарий:
+        часть управленческих листов проекта хранит заголовки не в первой строке,
+        а ниже после служебных блоков. Для таких витрин нужно уметь точечно
+        обновлять одну бизнес-колонку без полной перезаписи листа и без
+        смещения пользовательской структуры таблицы.
+        """
+
+        try:
+            headers = self.sheet_title.row_values(header_row_number)
+
+            if column_name not in headers:
+                raise ValueError(
+                    f"Колонка '{column_name}' не найдена в строке заголовков {header_row_number}!"
+                )
+
+            if not data_to_write:
+                logger.info(
+                    "Точечное обновление колонки Google Sheets пропущено: нет данных для записи | sheet=%s | column=%s | header_row=%s",
+                    self.sheet_title.title,
+                    column_name,
+                    header_row_number,
+                )
+                return
+
+            col_idx = headers.index(column_name) + 1
+            vertical_values = [[_sheet_update_cell(val)] for val in data_to_write]
+
+            start_cell = rowcol_to_a1(data_start_row_number, col_idx)
+            end_cell = rowcol_to_a1(
+                data_start_row_number + len(data_to_write) - 1,
+                col_idx,
+            )
+            range_label = f"{start_cell}:{end_cell}"
+
+            self._execute_google_write_with_retry(
+                operation_name=(
+                    f"update_column {self.sheet_title.title} {column_name} "
+                    f"header_row={header_row_number}"
+                ),
+                func=self.sheet_title.update,
+                range_name=range_label,
+                values=vertical_values,
+            )
+            logger.info(
+                "Колонка Google Sheets обновлена по произвольной строке заголовков | sheet=%s | column=%s | range=%s | rows=%s",
+                self.sheet_title.title,
+                column_name,
+                range_label,
+                len(data_to_write),
+            )
+
+        except Exception as error:
+            logger.exception(
+                "Ошибка при точечном обновлении колонки Google Sheets | sheet=%s | column=%s | header_row=%s | error_type=%s",
+                getattr(self.sheet_title, "title", self.sheet_title),
+                column_name,
+                header_row_number,
+                type(error).__name__,
+            )
+            raise
 
     def set_df_to_google(self, df: pd.DataFrame):
         """Публикует DataFrame в Google Sheets с добавлением служебного времени обновления.
