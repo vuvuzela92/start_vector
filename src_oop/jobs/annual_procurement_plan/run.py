@@ -163,6 +163,9 @@ def _append_quarterly_white_plan_cost(
     в листе ``Поквартально`` ориентир по себестоимости для каждого `wild`.
     Если один и тот же `wild` встречается в белых заказах несколько раз,
     используется последнее непустое значение из текущего снимка листа.
+    Перед записью себестоимость очищается от валютных префиксов и лишних
+    символов, чтобы Google Sheets воспринимал результат как число, а не как
+    текст вроде ``р.428,10``.
     """
     df_result = df_quarterly.copy()
 
@@ -180,15 +183,15 @@ def _append_quarterly_white_plan_cost(
     prepared_white_orders["_merge_wild"] = (
         prepared_white_orders["wild"].fillna("").astype(str).str.strip()
     )
-    prepared_white_orders[source_column_name] = (
-        prepared_white_orders[source_column_name].fillna("").astype(str).str.strip()
+    prepared_white_orders["_clean_cost_value"] = (
+        prepared_white_orders[source_column_name].apply(clean_currency_value)
     )
     prepared_white_orders = prepared_white_orders.loc[
         (prepared_white_orders["_merge_wild"] != "")
-        & (prepared_white_orders[source_column_name] != "")
+        & (prepared_white_orders["_clean_cost_value"].notna())
     ]
     prepared_white_orders = prepared_white_orders[
-        ["_merge_wild", source_column_name]
+        ["_merge_wild", "_clean_cost_value"]
     ].drop_duplicates(
         subset=["_merge_wild"],
         keep="last",
@@ -199,8 +202,8 @@ def _append_quarterly_white_plan_cost(
         on="_merge_wild",
         how="left",
     )
-    merged[target_column_name] = merged[source_column_name].fillna("")
-    return merged.drop(columns=["_merge_wild", source_column_name])
+    merged[target_column_name] = merged["_clean_cost_value"].fillna("")
+    return merged.drop(columns=["_merge_wild", "_clean_cost_value"])
 
 
 def transport_data_to_annual_procurement_plan():
