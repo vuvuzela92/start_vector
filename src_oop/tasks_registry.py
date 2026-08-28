@@ -73,6 +73,11 @@ from src_oop.jobs.purchase_price_update.run import purchase_price_update_run
 from src_oop.jobs.returns_to_customers.run import returns_to_customers
 from src_oop.jobs.sales_analyze.run import update_sales_warehouse_analytics
 from src_oop.jobs.seller_balance.run import seller_balance_run
+from src_oop.jobs.sales_plan.run import (
+    sync_sales_plan_accounting_category_reference_to_db,
+    sync_sales_plan_manager_reference_to_db,
+    sync_sales_wild_status_daily_to_db,
+)
 from src_oop.jobs.unit.update_adv_participants import update_adv_participants_to_gs
 from src_oop.jobs.unit.update_wild_statuses import update_wild_statuses
 from src_oop.jobs.wb_api.measurements.run import (
@@ -165,6 +170,18 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "seller_balance_run": {
         "func": smart_run(seller_balance_run),
         "desc": "Выгрузка баланса продавцов WB в Google Sheets ДДС во вкладку Переменные.",
+    },
+    "sync_sales_plan_manager_reference_to_db": {
+        "func": smart_run(sync_sales_plan_manager_reference_to_db),
+        "desc": "Сохранение ежедневного снимка справочника Категория-Менеджер в PostgreSQL",
+    },
+    "sync_sales_plan_accounting_category_reference_to_db": {
+        "func": smart_run(sync_sales_plan_accounting_category_reference_to_db),
+        "desc": "Синхронизация текущего справочника учетной категории по wild в PostgreSQL",
+    },
+    "sync_sales_wild_status_daily_to_db": {
+        "func": smart_run(sync_sales_wild_status_daily_to_db),
+        "desc": "Сохранение ежедневного snapshot статусов wild из Поквартально в PostgreSQL",
     },
     "add_new_items_run": {
         "func": smart_run(add_new_items_run),
