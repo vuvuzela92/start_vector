@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+import gspread
 import pandas as pd
 from gspread.utils import rowcol_to_a1
 
@@ -16,6 +17,7 @@ from src_oop.jobs.calculation_of_purchases_russia.config import (
     query_supplies_1c,
     supply_1c_output_columns,
     supply_1c_columns_rename,
+    supplies_1c_target_sheets,
     unit_table,
     virtual_stock_column_name,
 )
@@ -234,6 +236,46 @@ class Calculation_of_purchases_russia:
             value_input_option="USER_ENTERED",
         )
 
+    def _open_worksheet_by_spreadsheet_id(
+        self,
+        spreadsheet_id: str,
+        sheet_title: str,
+    ) -> gspread.Worksheet:
+        """Открывает лист Google Sheets по `spreadsheet_id`.
+
+        Бизнес-сценарий:
+        часть витрин проекта нужно писать строго в конкретный документ, даже
+        если в рабочем пространстве встречаются таблицы с похожими названиями.
+        Для таких случаев безопаснее открывать таблицу по `spreadsheet_id`,
+        а не по заголовку.
+        """
+
+        client = gspread.service_account(filename=str(self.google_connect.creds_file))
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        return spreadsheet.worksheet(sheet_title)
+
+    def _update_worksheet_range_with_retry(
+        self,
+        worksheet: gspread.Worksheet,
+        range_name: str,
+        values: list[list[object]],
+    ) -> None:
+        """Записывает диапазон в произвольный лист Google Sheets с retry.
+
+        Бизнес-сценарий:
+        сценарий выгрузки `Приходы_1С` теперь обновляет несколько таблиц, и для
+        дополнительных документов по `spreadsheet_id` нужен тот же retry на
+        временные ошибки Google Sheets, что и для базового клиента проекта.
+        """
+
+        self.google_connect._execute_google_write_with_retry(
+            operation_name=f"update_range {worksheet.title} {range_name}",
+            func=worksheet.update,
+            range_name=range_name,
+            values=values,
+            value_input_option="USER_ENTERED",
+        )
+
     @staticmethod
     def _build_updated_label() -> str:
         """Возвращает служебную отметку времени для первой строки листа.
@@ -424,29 +466,62 @@ class Calculation_of_purchases_russia:
         Бизнес-сценарий:
         метод переносит в OOP-контур регламентную выгрузку приходов 1С. Он
         публикует заголовки и данные начиная с `A2`, а в `A1` ставит отметку
-        последнего обновления, чтобы сохранить привычное поведение рабочей
-        таблицы и не ломать сценарии ручной проверки.
+        последнего обновления. Один и тот же набор данных выгружается сразу в
+        несколько таблиц, чтобы российский и китайский закупочные контуры
+        видели одинаковую витрину `Приходы_1С`.
         """
 
         supplies_sheet_df = self.build_supplies_1c_sheet_data()
         output_values = self._build_sheet_output(supplies_sheet_df)
-        connector = self.google_connect_to_supplies_1c_sheet
+        updated_label = self._build_updated_label()
 
-        if output_values:
-            self._update_sheet_range(
-                connector=connector,
-                range_name="A2",
-                values=output_values,
-            )
-        else:
+        for target_sheet in supplies_1c_target_sheets:
+            if target_sheet.spreadsheet_id:
+                worksheet = self._open_worksheet_by_spreadsheet_id(
+                    spreadsheet_id=target_sheet.spreadsheet_id,
+                    sheet_title=target_sheet.sheet_title,
+                )
+                if output_values:
+                    self._update_worksheet_range_with_retry(
+                        worksheet=worksheet,
+                        range_name="A2",
+                        values=output_values,
+                    )
+                else:
+                    logger.info(
+                        "Выгрузка листа Приходы_1С не записала строк данных, но сценарий продолжает обновление отметки времени | table=%s",
+                        target_sheet.table_title,
+                    )
+
+                self._update_worksheet_range_with_retry(
+                    worksheet=worksheet,
+                    range_name="A1",
+                    values=[[updated_label]],
+                )
+            else:
+                connector = self.google_connect_to_supplies_1c_sheet
+                if output_values:
+                    self._update_sheet_range(
+                        connector=connector,
+                        range_name="A2",
+                        values=output_values,
+                    )
+                else:
+                    logger.info(
+                        "Выгрузка листа Приходы_1С не записала строк данных, но сценарий продолжает обновление отметки времени | table=%s",
+                        target_sheet.table_title,
+                    )
+
+                self._update_sheet_range(
+                    connector=connector,
+                    range_name="A1",
+                    values=[[updated_label]],
+                )
+
             logger.info(
-                "Выгрузка листа Приходы_1С не записала строк данных, но сценарий продолжает обновление отметки времени."
+                "Лист Приходы_1С успешно обновлён | table=%s | sheet=%s",
+                target_sheet.table_title,
+                target_sheet.sheet_title,
             )
 
-        self._update_sheet_range(
-            connector=connector,
-            range_name="A1",
-            values=[[self._build_updated_label()]],
-        )
-        logger.info("Лист Приходы_1С успешно обновлён.")
         return supplies_sheet_df

@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from sqlalchemy import text
 
 query = """
@@ -175,6 +177,36 @@ google_table = {
     "orders_buyers_sheet": "Заказы_и_поступления",
     "supplies_1c_sheet": "Приходы_1С",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class Supplies1CTargetSheet:
+    """Описывает целевой лист для публикации выгрузки `Приходы_1С`.
+
+    Бизнес-сценарий:
+    одна и та же витрина приходов 1С теперь нужна в нескольких Google-таблицах,
+    поэтому конфигурация хранит и человекочитаемое имя таблицы, и стабильный
+    `spreadsheet_id`, чтобы job писала в правильный документ даже при
+    неуникальных названиях.
+    """
+
+    table_title: str
+    spreadsheet_id: str | None
+    sheet_title: str
+
+
+supplies_1c_target_sheets = (
+    Supplies1CTargetSheet(
+        table_title="Расчет закупки Россия",
+        spreadsheet_id=None,
+        sheet_title="Приходы_1С",
+    ),
+    Supplies1CTargetSheet(
+        table_title="Расчет поставки Китай_по обороту",
+        spreadsheet_id="1fXiijP8vMYv8vEFN1BnnTcqioCT_P2t1tgogi_ATh_8",
+        sheet_title="Приходы_1С",
+    ),
+)
 
 unit_table = {
     "title": "UNIT 2.0 (tested)",
