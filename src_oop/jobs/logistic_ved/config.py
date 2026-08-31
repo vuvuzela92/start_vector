@@ -54,6 +54,9 @@ LOGISTIC_TO_CHINA_SYNC_COLS = [
 # Исходная таблица закупщиков.
 delivery_calculation_china = {
     "title": "Расчет поставки Китай_по обороту",
+    # Стабильный идентификатор таблицы закупщиков. Используется как защита
+    # от ручного переименования документа без изменения бизнес-сценария.
+    "spreadsheet_id": "1fXiijP8vMYv8vEFN1BnnTcqioCT_P2t1tgogi_ATh_8",
     "white_orders_sheet": "Заказы белые ТЕСТ",
 }
 
@@ -84,5 +87,21 @@ SUPPLY_ACCEPTANCE_STATUS_QUERY = text(
       AND btrim(s.local_vendor_code) <> ''
       AND s.document_number IS NOT NULL
       AND NOT starts_with(s.document_number, 'К');
+    """
+)
+
+# SQL-запрос для заполнения фактической даты прибытия на склад по номеру трака.
+# Если по одному траку в БД встретится несколько разных дат, окончательное
+# решение принимает код: такие случаи не заполняются автоматически, чтобы не
+# подставить в ОТЧЁТ_2.0 неверную дату.
+TRUCK_ARRIVAL_DATE_QUERY = text(
+    """
+    SELECT
+           DISTINCT btrim(s.truck_number) AS truck_number,
+           DATE(s.supply_date) AS supply_date
+    FROM supply_to_sellers_warehouse s
+    WHERE s.truck_number IS NOT NULL
+      AND btrim(s.truck_number) <> ''
+      AND s.is_valid IS TRUE;
     """
 )

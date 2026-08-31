@@ -40,6 +40,7 @@ from src_oop.core.my_gspread import GoogleTabs
 from src_oop.jobs.logistic_ved.config import (
     LOGISTIC_TO_CHINA_SYNC_COLS,
     SUPPLY_ACCEPTANCE_STATUS_QUERY,
+    TRUCK_ARRIVAL_DATE_QUERY,
     delivery_calculation_china,
     ved_logistics_2026,
 )
@@ -54,6 +55,7 @@ ORDER_QTY_COLUMN = "Кол-во к заказу"
 TRUCK_NUMBER_COLUMN = "Номер Трака"
 TRANSPORT_NUMBER_COLUMN = "Номер ТС"
 DATA_CHECK_COLUMN = "Сверка данных"
+FACT_ARRIVAL_TO_WAREHOUSE_FROM_US_COLUMN = "ФАКТИЧЕСКАЯ ДАТА ПРИБЫТИЯ НА СКЛАД ОТ НАС"
 DATA_CHECK_MESSAGE = "Сверьте wild и количество"
 DATA_CHECK_STATUS_MESSAGE = "Сверьте wild, количество и статус"
 # Список авто-сообщений, которые скрипт сам ставит и сам же может очистить,
@@ -150,6 +152,8 @@ BATCH_UPDATE_CHUNK_SIZE = 500
 LAST_SYNC_CELL = "B1"
 # Ключ автоматической приемки: номер трака, номер ТС и wild.
 AcceptanceKey = tuple[str, str, str]
+# Ключ словаря дат прибытия: номер трака.
+TruckNumberKey = str
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +206,16 @@ class AcceptanceStatusSummary:
     duplicate_rows: int
 
 
+@dataclass(frozen=True, slots=True)
+class TruckArrivalDateSummary:
+    """Сводка по заполнению фактической даты прибытия на склад из БД."""
+
+    checked_rows: int
+    matched_rows: int
+    updated_rows: int
+    ambiguous_rows: int
+
+
 @dataclass(slots=True)
 class LogisticVedReverseUpdater:
     """Возвращает логистические данные и результаты сверки обратно закупщикам.
@@ -220,10 +234,12 @@ class LogisticVedReverseUpdater:
         self.source_connector = GoogleTabs(
             table_title=delivery_calculation_china["title"],
             sheet_title=delivery_calculation_china["white_orders_sheet"],
+            spreadsheet_id=delivery_calculation_china.get("spreadsheet_id"),
         )
         self.target_connector = GoogleTabs(
             table_title=ved_logistics_2026["title"],
             sheet_title=ved_logistics_2026["report_sheet"],
+            spreadsheet_id=ved_logistics_2026.get("spreadsheet_id"),
         )
 
     def run(self) -> None:
@@ -259,6 +275,10 @@ class LogisticVedReverseUpdater:
             values=target_values,
             headers=target_headers,
         )
+        db_arrival_date_updates = self._build_truck_arrival_date_updates(
+            target_headers=target_headers,
+            target_rows_by_key=target_rows_by_key,
+        )
 
         # На этом шаге только рассчитываем изменения.
         # Запись в таблицы выполняется отдельно, если действительно есть что обновлять.
@@ -268,6 +288,10 @@ class LogisticVedReverseUpdater:
             target_headers=target_headers,
             source_row_positions=source_row_positions,
             target_rows_by_key=target_rows_by_key,
+        )
+        updates = self._append_target_updates(
+            updates=updates,
+            extra_target_updates=db_arrival_date_updates,
         )
         updates = self._append_final_acceptance_updates(
             updates=updates,
@@ -530,6 +554,115 @@ class LogisticVedReverseUpdater:
             target_updates=target_updates,
         )
 
+    def _build_truck_arrival_date_updates(
+        self,
+        target_headers: list[str],
+        target_rows_by_key: dict[str, TargetRowSnapshot],
+    ) -> list[dict[str, object]]:
+        """Готовит обновления даты прибытия на склад в ОТЧЁТ_2.0 по номеру трака.
+
+        Бизнес-логика:
+        поле ``ФАКТИЧЕСКАЯ ДАТА ПРИБЫТИЯ НА СКЛАД ОТ НАС`` заполняется из БД по
+        ``Номер Трака``. Если дата по траку не найдена, строка не меняется. Если
+        по одному траку найдено несколько разных дат, строка тоже не меняется,
+        потому что автоматический выбор даты в такой ситуации рискован.
+        """
+        arrival_dates_by_truck = self._load_truck_arrival_dates()
+        target_header_map = {header: index + 1 for index, header in enumerate(target_headers)}
+        update_map: dict[str, dict[str, object]] = {}
+        summary = self._build_empty_truck_arrival_date_summary()
+
+        for order_line_id, target_snapshot in target_rows_by_key.items():
+            summary = TruckArrivalDateSummary(
+                checked_rows=summary.checked_rows + 1,
+                matched_rows=summary.matched_rows,
+                updated_rows=summary.updated_rows,
+                ambiguous_rows=summary.ambiguous_rows,
+            )
+            truck_number = self._normalize_string(target_snapshot.values.get(TRUCK_NUMBER_COLUMN, ""))
+            if truck_number == "":
+                continue
+
+            arrival_dates = arrival_dates_by_truck.get(truck_number)
+            if not arrival_dates:
+                continue
+
+            if len(arrival_dates) > 1:
+                logger.warning(
+                    "Автозаполнение даты прибытия на склад пропущено: по номеру трака найдено несколько дат в БД. Нужна ручная проверка: truck_number=%s order_line_id=%s dates=%s",
+                    truck_number,
+                    order_line_id,
+                    ", ".join(arrival_dates),
+                )
+                summary = TruckArrivalDateSummary(
+                    checked_rows=summary.checked_rows,
+                    matched_rows=summary.matched_rows + 1,
+                    updated_rows=summary.updated_rows,
+                    ambiguous_rows=summary.ambiguous_rows + 1,
+                )
+                continue
+
+            new_date_value = arrival_dates[0]
+            current_date_value = self._normalize_string(
+                target_snapshot.values.get(FACT_ARRIVAL_TO_WAREHOUSE_FROM_US_COLUMN, "")
+            )
+            summary = TruckArrivalDateSummary(
+                checked_rows=summary.checked_rows,
+                matched_rows=summary.matched_rows + 1,
+                updated_rows=summary.updated_rows,
+                ambiguous_rows=summary.ambiguous_rows,
+            )
+            if current_date_value == new_date_value:
+                continue
+
+            self._add_update(
+                update_map=update_map,
+                row_number=target_snapshot.row_number,
+                column_number=target_header_map[FACT_ARRIVAL_TO_WAREHOUSE_FROM_US_COLUMN],
+                value=new_date_value,
+            )
+            target_snapshot.values[FACT_ARRIVAL_TO_WAREHOUSE_FROM_US_COLUMN] = new_date_value
+            summary = TruckArrivalDateSummary(
+                checked_rows=summary.checked_rows,
+                matched_rows=summary.matched_rows,
+                updated_rows=summary.updated_rows + 1,
+                ambiguous_rows=summary.ambiguous_rows,
+            )
+
+        logger.info(
+            "Подготовлено автозаполнение даты прибытия на склад из БД: checked_rows=%s matched_rows=%s updated_rows=%s ambiguous_rows=%s",
+            summary.checked_rows,
+            summary.matched_rows,
+            summary.updated_rows,
+            summary.ambiguous_rows,
+        )
+        return list(update_map.values())
+
+    def _append_target_updates(
+        self,
+        updates: ReverseSyncUpdates,
+        extra_target_updates: list[dict[str, object]],
+    ) -> ReverseSyncUpdates:
+        """Добавляет к уже рассчитанным изменениям новые точечные обновления ОТЧЁТ_2.0.
+
+        Метод нужен для финального объединения нескольких независимых бизнес-блоков,
+        которые готовят изменения в одну и ту же таблицу логистов. При совпадении
+        адреса ячейки более позднее правило имеет приоритет.
+        """
+        if not extra_target_updates:
+            return updates
+
+        target_update_map = {
+            str(update["range"]): update for update in updates.target_updates
+        }
+        for update in extra_target_updates:
+            target_update_map[str(update["range"])] = update
+
+        return ReverseSyncUpdates(
+            source_updates=updates.source_updates,
+            target_updates=list(target_update_map.values()),
+        )
+
     def _append_final_acceptance_updates(
         self,
         updates: ReverseSyncUpdates,
@@ -635,6 +768,39 @@ class LogisticVedReverseUpdater:
             duplicate_keys,
         )
         return acceptance_lookup
+
+    def _load_truck_arrival_dates(self) -> dict[TruckNumberKey, list[str]]:
+        """Читает из БД даты прибытия на склад и группирует их по номеру трака.
+
+        Бизнес-логика:
+        дата прибытия в ОТЧЁТ_2.0 ищется только по ``Номер Трака``. Запрос может
+        вернуть несколько дат для одного трака, поэтому метод не выбирает одну из
+        них самовольно, а сохраняет все уникальные даты для последующей проверки.
+        """
+        dataframe = self.database_cls.read_sql_to_dataframe(TRUCK_ARRIVAL_DATE_QUERY)
+        logger.info(
+            "Из БД прочитаны даты прибытия на склад по тракам: rows=%s",
+            len(dataframe.index),
+        )
+
+        arrival_dates_by_truck: dict[TruckNumberKey, set[str]] = {}
+        for row in dataframe.to_dict(orient="records"):
+            truck_number = self._normalize_string(row.get("truck_number", ""))
+            formatted_supply_date = self._format_sheet_date(row.get("supply_date"))
+            if truck_number == "" or formatted_supply_date == "":
+                continue
+
+            arrival_dates_by_truck.setdefault(truck_number, set()).add(formatted_supply_date)
+
+        logger.info(
+            "Подготовлен справочник дат прибытия по тракам: unique_trucks=%s ambiguous_trucks=%s",
+            len(arrival_dates_by_truck),
+            sum(1 for dates in arrival_dates_by_truck.values() if len(dates) > 1),
+        )
+        return {
+            truck_number: sorted(dates)
+            for truck_number, dates in arrival_dates_by_truck.items()
+        }
 
     def _build_final_acceptance_updates(
         self,
@@ -862,6 +1028,34 @@ class LogisticVedReverseUpdater:
             return str(int(numeric_value))
         return str(numeric_value)
 
+    @staticmethod
+    def _format_sheet_date(value: object) -> str:
+        """Преобразует дату из БД в строковый формат, удобный для Google Sheets.
+
+        Бизнес-логика:
+        дата из PostgreSQL должна записываться в том же визуально привычном виде,
+        который используют логисты в таблице, чтобы не смешивать разные форматы
+        отображения одной и той же даты.
+        """
+        if value is None or pd.isna(value):
+            return ""
+
+        if hasattr(value, "strftime"):
+            return value.strftime("%d.%m.%Y")
+
+        normalized_value = LogisticVedReverseUpdater._normalize_string(value)
+        if normalized_value == "":
+            return ""
+
+        try:
+            return pd.to_datetime(normalized_value).strftime("%d.%m.%Y")
+        except (ValueError, TypeError):
+            logger.warning(
+                "Не удалось привести дату прибытия из БД к формату Google Sheets: raw_value=%s",
+                value,
+            )
+            return normalized_value
+
     def _build_acceptance_key(
         self,
         truck_number: object,
@@ -952,6 +1146,16 @@ class LogisticVedReverseUpdater:
             accepted_rows=0,
             discrepancy_rows=0,
             duplicate_rows=0,
+        )
+
+    @staticmethod
+    def _build_empty_truck_arrival_date_summary() -> TruckArrivalDateSummary:
+        """Создает нулевую сводку по автозаполнению даты прибытия на склад."""
+        return TruckArrivalDateSummary(
+            checked_rows=0,
+            matched_rows=0,
+            updated_rows=0,
+            ambiguous_rows=0,
         )
 
     @staticmethod

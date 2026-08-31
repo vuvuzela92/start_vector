@@ -77,13 +77,16 @@ class GoogleTabs:
         table_title: str,
         sheet_title: str,
         creds_file: str | Path | None = None,
+        spreadsheet_id: str | None = None,
     ):
         """Создаёт подключение к Google Таблице и выбранному листу проекта.
 
         Бизнес-сценарий:
         единая точка доступа к Google Sheets нужна большинству выгрузок
-        проекта, чтобы все job-сценарии одинаково открывали таблицы по имени и
-        использовали общие правила записи и обработки временных сбоев.
+        проекта, чтобы все job-сценарии одинаково открывали таблицы по имени
+        или по стабильному `spreadsheet_id` и использовали общие правила записи
+        и обработки временных сбоев. Открытие по `spreadsheet_id` защищает
+        сценарии от ручного переименования документа.
         """
 
         self.creds_file = (
@@ -92,6 +95,7 @@ class GoogleTabs:
             else Path(__file__).resolve().parents[2] / "creds/creds.json"
         )
         self.table_title = table_title
+        self.spreadsheet_id = spreadsheet_id
         self.table = None
         self.sheet_title = sheet_title
         self._safe_connect()
@@ -104,21 +108,24 @@ class GoogleTabs:
         `5xx` или сетевого сбоя на этапе открытия Google Sheets, поэтому
         клиент делает несколько попыток подключения перед окончательной
         ошибкой. Это особенно важно для cron-задач, которые могут попасть в
-        минутные квоты чтения Google Sheets.
+        минутные квоты чтения Google Sheets. Если для документа задан
+        `spreadsheet_id`, подключение выполняется по нему, чтобы переименование
+        таблицы не ломало бизнес-сценарий.
         """
 
         self.gc = gspread.service_account(filename=self.creds_file)
 
         for attempt in range(1, retries + 1):
             try:
-                table = self.gc.open(self.table_title)
+                table = self._open_table()
                 self.table = table
                 self.sheet_title = table.worksheet(self.sheet_title)
 
                 logger.info(
-                    "Успешное подключение к Google Sheets | table=%s | sheet=%s",
-                    self.table_title,
+                    "Успешное подключение к Google Sheets | table=%s | sheet=%s | spreadsheet_id=%s",
+                    table.title,
                     self.sheet_title.title,
+                    self.spreadsheet_id,
                 )
                 return
 
@@ -198,6 +205,29 @@ class GoogleTabs:
         raise RuntimeError(
             f"Не удалось открыть таблицу '{self.table_title}' после {retries} попыток."
         )
+
+    def _open_table(self):
+        """Открывает Google Таблицу по `spreadsheet_id` или по имени.
+
+        Бизнес-сценарий:
+        часть критичных сценариев должна переживать ручное переименование
+        документа. Для них приоритетным идентификатором считается
+        `spreadsheet_id`. Если одновременно задано и ожидаемое имя таблицы,
+        клиент дополнительно проверяет его и пишет предупреждение в лог, если
+        название изменилось.
+        """
+        if self.spreadsheet_id:
+            table = self.gc.open_by_key(self.spreadsheet_id)
+            if self.table_title and table.title != self.table_title:
+                logger.warning(
+                    "Название Google Таблицы отличается от ожидаемого, но подключение продолжается по spreadsheet_id | expected_title=%s | actual_title=%s | spreadsheet_id=%s",
+                    self.table_title,
+                    table.title,
+                    self.spreadsheet_id,
+                )
+            return table
+
+        return self.gc.open(self.table_title)
 
     def _execute_google_write_with_retry(self, operation_name: str, func, *args, **kwargs):
         """Выполняет запись в Google Sheets с retry при временных ошибках.

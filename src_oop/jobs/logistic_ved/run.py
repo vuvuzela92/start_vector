@@ -81,6 +81,7 @@ class GoogleSheetConfig:
 
     table_title: str
     sheet_title: str
+    spreadsheet_id: str | None
     header_row_index: int
     data_row_index: int
 
@@ -98,6 +99,7 @@ class TargetSyncPlan:
 SOURCE_SHEET_CONFIG = GoogleSheetConfig(
     table_title=delivery_calculation_china["title"],
     sheet_title=delivery_calculation_china["white_orders_sheet"],
+    spreadsheet_id=delivery_calculation_china.get("spreadsheet_id"),
     header_row_index=3,
     data_row_index=4,
 )
@@ -105,6 +107,7 @@ SOURCE_SHEET_CONFIG = GoogleSheetConfig(
 TARGET_SHEET_CONFIG = GoogleSheetConfig(
     table_title=ved_logistics_2026["title"],
     sheet_title=ved_logistics_2026["report_sheet"],
+    spreadsheet_id=ved_logistics_2026.get("spreadsheet_id"),
     header_row_index=3,
     data_row_index=4,
 )
@@ -132,10 +135,12 @@ class LogisticVedUpdater:
         self.source_connector = GoogleTabs(
             table_title=self.source_config.table_title,
             sheet_title=self.source_config.sheet_title,
+            spreadsheet_id=self.source_config.spreadsheet_id,
         )
         self.target_connector = GoogleTabs(
             table_title=self.target_config.table_title,
             sheet_title=self.target_config.sheet_title,
+            spreadsheet_id=self.target_config.spreadsheet_id,
         )
 
     def run(self) -> None:
