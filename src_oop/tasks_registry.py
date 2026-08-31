@@ -35,6 +35,7 @@ from src_oop.jobs.calculation_of_purchases_russia.run import (
     set_orders_quantity,
     transport_orders_and_supply,
     update_penalties_in_gs_purchase_russia,
+    update_supplies_1c_in_purchase_russia,
 )
 from src_oop.jobs.conditional_calculations.run import (
     conditional_calculation_to_db_run,
@@ -353,6 +354,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "transport_orders_and_supply": {
         "func": smart_run(transport_orders_and_supply),
         "desc": "Запись данных о заказах и поступлениях товаров",
+    },
+    "update_supplies_1c_in_purchase_russia": {
+        "func": smart_run(update_supplies_1c_in_purchase_russia),
+        "desc": "Обновление листа Приходы_1С в таблице Расчет закупки Россия",
     },
     # Автопилот и индивидуальные настройки.
     "update_individual_info": {

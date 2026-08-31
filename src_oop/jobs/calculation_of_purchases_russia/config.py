@@ -139,12 +139,41 @@ query_penalties_and_virtual_stock = text("""
     GROUP BY a.local_vendor_code;
 """)
 
+query_supplies_1c = text("""
+    SELECT
+        id,
+        guid,
+        document_number,
+        document_created_at,
+        supply_date,
+        local_vendor_code,
+        product_name,
+        event_status,
+        quantity,
+        amount_with_vat,
+        amount_without_vat,
+        supplier_name,
+        supplier_code,
+        update_document_datetime,
+        author_of_the_change,
+        our_organizations_name,
+        is_valid,
+        amount_with_vat / NULLIF(quantity, 0) AS price_per_item,
+        planned_cost,
+        transport_number,
+        truck_number
+    FROM public.supply_to_sellers_warehouse
+    WHERE is_valid = TRUE
+      AND update_document_datetime >= DATE '2025-05-01';
+""")
+
 google_table = {
     "title": "Расчет закупки Россия",
     "calculate_sheet": "Расчет закупки",
     "orders_sheet": "БД_Заказы",
     "statuses_sheet": "Статичный лист статусы",
     "orders_buyers_sheet": "Заказы_и_поступления",
+    "supplies_1c_sheet": "Приходы_1С",
 }
 
 unit_table = {
@@ -154,3 +183,49 @@ unit_table = {
 
 penalties_column_name = "Штраф (по основанию брак, невыполненный заказ и подмена)"
 virtual_stock_column_name = "Кол-во товара по виртуальным остаткам"
+
+# Соответствие технических колонок БД и пользовательских заголовков листа Приходы_1С.
+supply_1c_columns_rename = {
+    "document_number": "Номер документа",
+    "document_created_at": "Дата создания документа",
+    "supply_date": "Дата поставки",
+    "local_vendor_code": "Внутренний код поставщика",
+    "product_name": "Наименование товара",
+    "event_status": "Статус события",
+    "quantity": "Количество",
+    "amount_with_vat": "Сумма с НДС",
+    "amount_without_vat": "Сумма без НДС",
+    "supplier_name": "Название поставщика",
+    "supplier_code": "Код поставщика",
+    "update_document_datetime": "Дата обновления документа",
+    "author_of_the_change": "Автор изменения",
+    "our_organizations_name": "Название нашей организации",
+    "is_valid": "Корректность документа",
+    "price_per_item": "Цена за единицу",
+    "planned_cost": "Плановая себестоимость",
+    "transport_number": "Номер машины",
+    "truck_number": "Номер трака",
+}
+
+# Итоговый порядок колонок для legacy-совместимой выгрузки листа Приходы_1С.
+supply_1c_output_columns = [
+    "Номер документа",
+    "Дата создания документа",
+    "Дата поставки",
+    "Внутренний код поставщика",
+    "Наименование товара",
+    "Статус события",
+    "Количество",
+    "Сумма с НДС",
+    "Сумма без НДС",
+    "Название поставщика",
+    "Код поставщика",
+    "Дата обновления документа",
+    "Автор изменения",
+    "Название нашей организации",
+    "Корректность документа",
+    "Цена за единицу",
+    "Плановая себестоимость",
+    "Номер машины",
+    "Номер трака",
+]
