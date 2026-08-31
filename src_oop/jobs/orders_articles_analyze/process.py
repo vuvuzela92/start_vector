@@ -2,8 +2,12 @@ import logging
 
 import numpy as np
 import pandas as pd
+from sqlalchemy import BigInteger
 
 from src_oop.jobs.orders_articles_analyze.repository import ArticleAnalyzeRepository
+from src_oop.jobs.orders_articles_analyze.tables_scheme import (
+    orders_articles_analyze_table,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -253,6 +257,50 @@ class ProcessArticleAnalyze:
         """Возвращает нормализованный ключ аккаунта для безопасного merge."""
         normalized = series.astype("string").str.strip().str.upper()
         return normalized.fillna("")
+
+    @staticmethod
+    def _normalize_bigint_columns(df: pd.DataFrame, stage: str) -> pd.DataFrame:
+        """
+        Приводит счетчиковые BIGINT-колонки к целым значениям и заменяет пропуски на 0.
+
+        Функция защищает финальный этап бизнес-сценария записи витрины
+        `orders_articles_analyze` в PostgreSQL: если в колонках остались `NaN`
+        или строковые значения, драйвер БД может отправить их в `BIGINT` как
+        невалидное число и сорвать весь batch upsert. На этом шаге такие поля
+        принудительно очищаются и приводятся к `int64`, чтобы пропуски
+        интерпретировались как нулевые счетчики.
+        """
+        bigint_columns = [
+            column_name
+            for column_name, column_type in orders_articles_analyze_table["columns"].items()
+            if column_type is BigInteger and column_name in df.columns
+        ]
+        if not bigint_columns:
+            logger.info(
+                "BIGINT-колонки для нормализации не найдены | stage=%s",
+                stage,
+            )
+            return df
+
+        result_df = df.copy()
+        normalized_stats: list[dict[str, int]] = []
+        for column_name in bigint_columns:
+            numeric_series = pd.to_numeric(result_df[column_name], errors="coerce")
+            replaced_count = int(numeric_series.isna().sum())
+            result_df[column_name] = numeric_series.fillna(0).astype("int64")
+            normalized_stats.append(
+                {
+                    "column": column_name,
+                    "replaced_with_zero": replaced_count,
+                }
+            )
+
+        logger.info(
+            "Завершена нормализация BIGINT-колонок перед записью в PostgreSQL | stage=%s | normalized_stats=%s",
+            stage,
+            normalized_stats,
+        )
+        return result_df
 
     def build_dataset(self, days_ago: int, days_to: int) -> pd.DataFrame:
         """
@@ -656,6 +704,25 @@ class ProcessArticleAnalyze:
             )
             self._log_article_id_quality(stage="normalize_large_numeric_types", df=df)
             self._log_sales_revenue_state(stage="normalize_large_numeric_types", df=df)
+            logger.info("Этап обработки завершён | stage=%s", current_stage)
+
+            current_stage = "normalize_bigint_columns"
+            logger.info("Начат этап обработки | stage=%s", current_stage)
+            df = self._normalize_bigint_columns(df=df, stage=current_stage)
+            self._log_dataframe_state(
+                stage="bigint_columns_normalized",
+                df=df,
+                required_columns=["article_id", "date", "end_of_day_balance"],
+                key_columns=[
+                    "article_id",
+                    "date",
+                    "orders_count",
+                    "views",
+                    "end_of_day_balance",
+                ],
+            )
+            self._log_article_id_quality(stage="bigint_columns_normalized", df=df)
+            self._log_sales_revenue_state(stage="bigint_columns_normalized", df=df)
             logger.info("Этап обработки завершён | stage=%s", current_stage)
 
             current_stage = "final_sort"
