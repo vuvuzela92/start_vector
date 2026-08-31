@@ -11,9 +11,9 @@
 - модуль ``run.py`` отвечает за прямую синхронизацию в ``ОТЧЁТ_2.0``;
 - модуль ``reverse_run.py`` отвечает за обратную синхронизацию в ``Заказы белые ТЕСТ``;
 - модуль ``config.py`` хранит набор колонок и названия рабочих листов;
-- пакет экспортирует публичные точки входа для CLI-задач.
+- пакет экспортирует только боевую точку входа полного сценария.
 """
 
-from src_oop.jobs.fbo_supplies.run import fbo_supplies_run as logistic_ved_run
+from src_oop.jobs.logistic_ved.run import logistic_ved_full_run
 
-__all__ = ["logistic_ved_run"]
+__all__ = ["logistic_ved_full_run"]

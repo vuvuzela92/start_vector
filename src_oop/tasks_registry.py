@@ -65,8 +65,7 @@ from src_oop.jobs.fbs_stocks.run import (
     auto_refill_fbs_stocks_from_unit,
     update_fbs_stocks_in_unit,
 )
-from src_oop.jobs.logistic_ved.reverse_run import logistic_ved_reverse_run
-from src_oop.jobs.logistic_ved.run import logistic_ved_full_run, logistic_ved_run
+from src_oop.jobs.logistic_ved.run import logistic_ved_full_run
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 from src_oop.jobs.orders_feed.run import order_feed
 from src_oop.jobs.purchase_price_update.run import purchase_price_update_run
@@ -369,17 +368,9 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "desc": "Дневное обновление завершенных дней панели управления автопилотом и связанных UNIT-блоков",
     },
     # Логистика ВЭД
-    "logistic_ved_run": {
-        "func": smart_run(logistic_ved_run),
-        "desc": "Актуализация таблицы Логистика ВЭД 2026 из расчета поставки Китай по ключу ORDER_LINE_ID",
-    },
     "logistic_ved_full_run": {
         "func": smart_run(logistic_ved_full_run),
         "desc": "Полный цикл Логистика ВЭД: сначала обратная отправка данных в Заказы белые ТЕСТ, затем актуализация ОТЧЁТ_2.0",
-    },
-    "logistic_ved_reverse_run": {
-        "func": smart_run(logistic_ved_reverse_run),
-        "desc": "Обратная отправка логистических полей из ОТЧЁТ_2.0 в Заказы белые ТЕСТ по ключу ORDER_LINE_ID",
     },
     "returns_to_customers": {
         "func": smart_run(returns_to_customers),
