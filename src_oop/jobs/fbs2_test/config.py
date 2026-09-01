@@ -32,15 +32,14 @@ SHIPMENTS_DATABASE_QUERY = text(
     ),
     products_list AS (
         SELECT unnest(ARRAY[
-            'wild163', 'wild359', 'wild188901', 'wild188601',
-            'wild1890', 'wild1893', 'wild1895', 'wild1896',
-            'wild1886', 'wild1889', 'wild1891', 'wild1894',
-            'wild1884', 'wild1969', 'wild1970', 'wild1971',
-            'wild1972', 'wild1973', 'wild1974', 'wild1975',
-            'wild1976', 'wild1977', 'wild1978', 'wild1979',
-            'wild1980', 'wild1981', 'wild1982', 'wild1983',
-            'wild2082', 'wild2083', 'wild2093', 'wild2094',
-            'wild2123', 'wild2132', 'wild1892'
+        'wild163','wild359','wild188901','wild188601',
+        'wild1890','wild1893','wild1895','wild1896', 'wild1886',
+        'wild1894','wild1884','wild1969','wild1970', 'wild1891',
+        'wild1971','wild1972','wild1973','wild1974', 'wild1889',
+        'wild1975','wild1976','wild1977','wild1978',
+        'wild1979','wild1980','wild1981','wild1982',
+        'wild1983','wild2082','wild2083','wild2093',
+        'wild2094','wild2123','wild2132', 'wild1892'
         ]) AS product_id
     ),
     fbs_agg AS (
