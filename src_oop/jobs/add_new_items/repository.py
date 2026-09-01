@@ -5,7 +5,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence, TypeVar
 
 import aiohttp
 import gspread
@@ -33,7 +33,11 @@ logger = logging.getLogger(__name__)
 
 _WILD_NUMERIC_PATTERN = re.compile(r"^wild(?P<nm_id>\d+)$", re.IGNORECASE)
 _GSHEETS_RETRY_ATTEMPTS = 5
-_GSHEETS_RETRY_DELAY_SECONDS = 2
+_GSHEETS_QUOTA_RETRY_DELAYS_SECONDS = (20, 40, 60, 60)
+_GSHEETS_TEMPORARY_ERROR_RETRY_DELAYS_SECONDS = (5, 10, 20, 30)
+_RETRYABLE_GSHEETS_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -730,32 +734,78 @@ class AddNewItemsRepository:
         self,
         *,
         action_name: str,
-        func,
-    ):
+        func: Callable[[], T],
+    ) -> T:
+        """Выполняет обращение к Google Sheets с повторами при временных сбоях.
+
+        Защищает перенос нового товара от кратковременной недоступности Google
+        Sheets и минутного лимита чтений `429`. После исчерпания попыток ошибка
+        передаётся выше: job не должна продолжать работу с неполными исходными
+        данными и создавать риск некорректных отметок в листе «Для юнит».
+        """
         last_error: APIError | None = None
         for attempt in range(1, _GSHEETS_RETRY_ATTEMPTS + 1):
             try:
                 return func()
             except APIError as error:
-                if "[503]" not in str(error):
+                status_code = self._get_gspread_error_status_code(error)
+                if status_code not in _RETRYABLE_GSHEETS_STATUS_CODES:
                     raise
 
                 last_error = error
                 if attempt == _GSHEETS_RETRY_ATTEMPTS:
                     break
 
+                wait_seconds = self._get_gspread_retry_delay_seconds(
+                    status_code=status_code,
+                    attempt=attempt,
+                )
                 logger.warning(
-                    "Google Sheets временно недоступен, повторяем попытку: action=%s attempt=%s/%s",
+                    "Google Sheets временно не принял запрос, повторяем операцию | "
+                    "action=%s | status_code=%s | attempt=%s/%s | wait_seconds=%s",
                     action_name,
+                    status_code,
                     attempt,
                     _GSHEETS_RETRY_ATTEMPTS,
+                    wait_seconds,
                 )
-                time.sleep(_GSHEETS_RETRY_DELAY_SECONDS * attempt)
+                time.sleep(wait_seconds)
 
         if last_error is not None:
             logger.error(
-                "Google Sheets остался недоступен после повторов: action=%s attempts=%s",
+                "Google Sheets не принял запрос после всех повторов | "
+                "action=%s | attempts=%s | status_code=%s",
                 action_name,
                 _GSHEETS_RETRY_ATTEMPTS,
+                self._get_gspread_error_status_code(last_error),
             )
             raise last_error
+
+        raise RuntimeError(
+            "Не удалось выполнить обращение к Google Sheets: неизвестная ошибка повторов."
+        )
+
+    @staticmethod
+    def _get_gspread_error_status_code(error: APIError) -> int | None:
+        """Извлекает код ответа Google для выбора безопасной стратегии повтора.
+
+        Код `429` означает превышение квоты, поэтому для переноса новых товаров
+        требуется более длинная пауза, чем при обычной временной ошибке сервиса.
+        """
+        response = getattr(error, "response", None)
+        status_code = getattr(response, "status_code", None)
+        return status_code if isinstance(status_code, int) else None
+
+    @staticmethod
+    def _get_gspread_retry_delay_seconds(*, status_code: int | None, attempt: int) -> int:
+        """Возвращает паузу перед повтором, не создавая новую волну запросов.
+
+        При `429` пауза увеличивается до минуты: это даёт минутной квоте чтения
+        Google Sheets время восстановиться перед продолжением переноса.
+        """
+        delays = (
+            _GSHEETS_QUOTA_RETRY_DELAYS_SECONDS
+            if status_code == 429
+            else _GSHEETS_TEMPORARY_ERROR_RETRY_DELAYS_SECONDS
+        )
+        return delays[min(attempt - 1, len(delays) - 1)]
