@@ -118,8 +118,8 @@ def _append_quarterly_seller_price(
 
     Вспомогательная функция обслуживает отдельный сценарий обновления листа
     ``Поквартально``. Значение записывается только в целевую колонку
-    `цена продажная плановая`, а если по товару в БД нет цены, ячейка
-    сохраняется пустой.
+    `цена продажная плановая`. Если по товару в БД нет цены, ранее введенное
+    вручную значение в ячейке сохраняется без изменений.
     """
     df_result = df_quarterly.copy()
 
@@ -147,7 +147,11 @@ def _append_quarterly_seller_price(
         on="_merge_wild",
         how="left",
     )
-    merged[target_column_name] = merged["seller_price"].fillna("")
+    # Не очищаем ручные значения квартального плана, когда цена WB не найдена.
+    merged[target_column_name] = merged["seller_price"].where(
+        merged["seller_price"].notna(),
+        merged[target_column_name],
+    )
     return merged.drop(columns=["_merge_wild", "seller_price"])
 
 
@@ -165,7 +169,8 @@ def _append_quarterly_white_plan_cost(
     используется последнее непустое значение из текущего снимка листа.
     Перед записью себестоимость очищается от валютных префиксов и лишних
     символов, чтобы Google Sheets воспринимал результат как число, а не как
-    текст вроде ``р.428,10``.
+    текст вроде ``р.428,10``. При отсутствии данных в источнике ранее
+    заполненная вручную ячейка квартального плана не изменяется.
     """
     df_result = df_quarterly.copy()
 
@@ -202,7 +207,11 @@ def _append_quarterly_white_plan_cost(
         on="_merge_wild",
         how="left",
     )
-    merged[target_column_name] = merged["_clean_cost_value"].fillna("")
+    # Не очищаем ручные значения квартального плана, когда себестоимость не найдена.
+    merged[target_column_name] = merged["_clean_cost_value"].where(
+        merged["_clean_cost_value"].notna(),
+        merged[target_column_name],
+    )
     return merged.drop(columns=["_merge_wild", "_clean_cost_value"])
 
 
@@ -291,7 +300,8 @@ def update_quarterly_prices_to_annual_procurement_plan() -> None:
     плановую себестоимость из листа ``Заказы белые ТЕСТ`` по колонке
     ``Себестоимость 1 шт. в руб ПЛАН``, а затем точечно записывает значения в
     колонки ``цена продажная плановая`` и ``себестоимость 2025-2026``. Если по
-    товару источник пустой, ячейка в квартальном плане остается пустой.
+    товару нет данных в источнике, существующее, в том числе ручное, значение
+    в квартальном плане сохраняется без изменений.
     """
     plan = AnnualProcurementPlan()
     df_quarterly = plan.get_quarterly_plan_data()
