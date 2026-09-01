@@ -12,6 +12,7 @@ from sqlalchemy.sql.type_api import TypeEngine
 from src_oop.core.database import Database
 from src_oop.jobs.wms_stocks.config import (
     WMS_STOCK_KEY_COLUMNS,
+    WMS_STOCK_LEGACY_COLUMN_RENAMES,
     WMS_STOCK_SCHEMA_DEFINITION,
     WMS_STOCK_TABLE_NAME,
 )
@@ -78,6 +79,7 @@ class WMSStockRepository:
             )
 
         self._ensure_database_table()
+        self._rename_legacy_database_columns()
         self._ensure_database_columns()
         self.database_cls.sync_data_to_postgres(
             table_name=WMS_STOCK_TABLE_NAME,
@@ -198,9 +200,9 @@ class WMSStockRepository:
         """Добавляет недостающие колонки в `public.wms_stock` после расширения витрины.
 
         Бизнес-сценарий:
-        таблица могла быть создана ранней версией job без поля `fbs`. Метод
-        безопасно доводит схему до актуального состояния, чтобы повторный запуск
-        начал писать FBS-остаток без ручной правки PostgreSQL.
+        таблица могла быть создана ранней версией job без части полей зон.
+        Метод безопасно доводит схему до актуального состояния, чтобы повторный
+        запуск начал писать остатки по всем зонам без ручной правки PostgreSQL.
         """
         engine = self.database_cls.get_engine()
         existing_columns = set(self._get_existing_column_types())
@@ -223,6 +225,43 @@ class WMSStockRepository:
                 "В таблицу wms_stock добавлена недостающая колонка | column=%s | type=%s",
                 column_name,
                 compiled_type,
+            )
+
+    def _rename_legacy_database_columns(self) -> None:
+        """Переименовывает старые транслитерированные поля зон без потери данных.
+
+        Бизнес-правило:
+        после уточнения имен колонок витрина должна использовать понятные
+        англоязычные названия, но накопленные остатки нельзя переносить в новую
+        таблицу или терять. Переименование выполняется только когда нового поля
+        еще нет; при конфликте схема остается без изменений для ручной проверки.
+        """
+        engine = self.database_cls.get_engine()
+        existing_columns = set(self._get_existing_column_types())
+
+        for legacy_name, actual_name in WMS_STOCK_LEGACY_COLUMN_RENAMES.items():
+            if legacy_name not in existing_columns:
+                continue
+            if actual_name in existing_columns:
+                logger.warning(
+                    "Колонки wms_stock не переименованы из-за конфликта имен | old=%s | new=%s",
+                    legacy_name,
+                    actual_name,
+                )
+                continue
+
+            rename_sql = text(
+                f'ALTER TABLE "{WMS_STOCK_TABLE_NAME}" '
+                f'RENAME COLUMN "{legacy_name}" TO "{actual_name}"'
+            )
+            with engine.begin() as connection:
+                connection.execute(rename_sql)
+            existing_columns.remove(legacy_name)
+            existing_columns.add(actual_name)
+            logger.info(
+                "Колонка wms_stock переименована без потери данных | old=%s | new=%s",
+                legacy_name,
+                actual_name,
             )
 
     def _get_existing_column_types(self) -> dict[str, TypeEngine]:

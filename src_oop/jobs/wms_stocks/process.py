@@ -4,6 +4,9 @@ from datetime import datetime
 
 import pandas as pd
 
+from src_oop.jobs.wms_stocks.config import WMS_STOCK_ZONES
+
+
 class Process:
     """Преобразует ответы WMS API в табличный вид для старой и новой выгрузки.
 
@@ -50,9 +53,9 @@ class Process:
         Бизнес-сценарий:
         endpoint уже возвращает агрегированный диапазон дней в `items[].days[]`,
         включая дни без операций. Задача загрузки - развернуть этот диапазон в
-        строки `public.wms_stock`, сохранив итоговый `closing_quantity` как
-        суммарный остаток товара на конкретную дату. Один и тот же разбор
-        используется и для общего остатка, и для отдельного FBS-среза.
+        строки `public.wms_stock`, сохранив исходный `opening_quantity` как
+        суммарный остаток товара на начало конкретной даты. Один и тот же разбор
+        используется и для общего остатка, и для отдельных складских зон.
         """
         if not self.data:
             return pd.DataFrame(
@@ -115,58 +118,68 @@ class Process:
 
     def merge_daily_balance_frames(
         self,
-        total_dataframe: pd.DataFrame,
-        fbs_dataframe: pd.DataFrame,
+        frames_by_quantity: dict[str, pd.DataFrame],
     ) -> pd.DataFrame:
-        """Объединяет общий и FBS-срезы остатков в одну витрину `public.wms_stock`.
+        """Объединяет общий остаток и зональные срезы в одну витрину `public.wms_stock`.
 
         Бизнес-сценарий:
         бизнесу нужен один ряд на `(balance_date, product_id)`, где одновременно
-        виден общий остаток и остаток по FBS-локации `location_id=1`. Если товар
-        присутствует только в одном из срезов, строка не должна теряться.
+        виден общий остаток по складу и остатки по ключевым зонам. Если товар
+        присутствует только в части зон, строка не должна теряться при merge.
         """
         key_columns = ["balance_date", "product_id"]
-        if total_dataframe.empty and fbs_dataframe.empty:
+        if not frames_by_quantity:
             return pd.DataFrame(
-                columns=["balance_date", "product_id", "stock_qty", "fbs", "loaded_at"]
+                columns=self._build_final_columns()
             )
 
-        if total_dataframe.empty:
-            merged_dataframe = fbs_dataframe.copy()
-            merged_dataframe["stock_qty"] = pd.NA
-            return self._finalize_merged_daily_balances(merged_dataframe)
+        prepared_frames = [
+            dataframe.copy()
+            for dataframe in frames_by_quantity.values()
+            if dataframe is not None and not dataframe.empty
+        ]
+        if not prepared_frames:
+            return pd.DataFrame(columns=self._build_final_columns())
 
-        if fbs_dataframe.empty:
-            merged_dataframe = total_dataframe.copy()
-            merged_dataframe["fbs"] = pd.NA
-            return self._finalize_merged_daily_balances(merged_dataframe)
+        merged_dataframe = prepared_frames[0]
+        for dataframe in prepared_frames[1:]:
+            merged_dataframe = merged_dataframe.merge(
+                dataframe,
+                on=key_columns,
+                how="outer",
+                suffixes=("", "_dup"),
+            )
 
-        merged_dataframe = total_dataframe.merge(
-            fbs_dataframe,
-            on=key_columns,
-            how="outer",
-            suffixes=("_total", "_fbs"),
-        )
+            duplicate_loaded_columns = [
+                column
+                for column in merged_dataframe.columns
+                if column.startswith("loaded_at")
+            ]
+            if len(duplicate_loaded_columns) > 1:
+                merged_dataframe["loaded_at"] = merged_dataframe[duplicate_loaded_columns].max(axis=1)
+                merged_dataframe = merged_dataframe.drop(columns=duplicate_loaded_columns)
+
         return self._finalize_merged_daily_balances(merged_dataframe)
 
     def _finalize_merged_daily_balances(self, dataframe: pd.DataFrame) -> pd.DataFrame:
         """Приводит объединенную витрину остатков к финальной схеме записи в БД.
 
         Бизнес-сценарий:
-        после merge общий и FBS-срезы могут прийти с разными наборами колонок,
-        но репозиторию нужен единый DataFrame с полями `stock_qty`, `fbs` и
-        одним `loaded_at` для upsert в `public.wms_stock`.
+        после merge общий остаток и отдельные зоны могут прийти с разными
+        наборами колонок, но репозиторию нужен единый DataFrame с итоговым
+        набором полей витрины и одним `loaded_at` для upsert в `public.wms_stock`.
         """
         prepared_dataframe = dataframe.copy()
-        if "loaded_at_total" in prepared_dataframe.columns or "loaded_at_fbs" in prepared_dataframe.columns:
-            prepared_dataframe["loaded_at"] = prepared_dataframe[
-                [column for column in ("loaded_at_total", "loaded_at_fbs") if column in prepared_dataframe.columns]
-            ].max(axis=1)
-            prepared_dataframe = prepared_dataframe.drop(
-                columns=[column for column in ("loaded_at_total", "loaded_at_fbs") if column in prepared_dataframe.columns]
-            )
+        loaded_at_columns = [
+            column_name
+            for column_name in prepared_dataframe.columns
+            if column_name.startswith("loaded_at")
+        ]
+        if loaded_at_columns:
+            prepared_dataframe["loaded_at"] = prepared_dataframe[loaded_at_columns].max(axis=1)
+            prepared_dataframe = prepared_dataframe.drop(columns=loaded_at_columns)
 
-        for column_name in ("stock_qty", "fbs"):
+        for column_name in self._build_quantity_columns():
             if column_name not in prepared_dataframe.columns:
                 prepared_dataframe[column_name] = pd.NA
             prepared_dataframe[column_name] = pd.to_numeric(
@@ -179,8 +192,27 @@ class Process:
 
         return prepared_dataframe.loc[
             :,
-            ["balance_date", "product_id", "stock_qty", "fbs", "loaded_at"],
+            self._build_final_columns(),
         ].copy()
+
+    def _build_quantity_columns(self) -> list[str]:
+        """Возвращает список количественных колонок новой витрины WMS.
+
+        Бизнес-сценарий:
+        схема `public.wms_stock` может расширяться новыми зонами, поэтому merge
+        и финальная подготовка должны опираться на единый список бизнес-колонок,
+        а не на разрозненные литералы по коду.
+        """
+        return ["stock_qty", *(zone.column_name for zone in WMS_STOCK_ZONES)]
+
+    def _build_final_columns(self) -> list[str]:
+        """Возвращает итоговый порядок колонок для записи витрины `public.wms_stock`.
+
+        Бизнес-сценарий:
+        фиксированный порядок полей упрощает диагностику, сравнение выгрузок и
+        безопасную запись в PostgreSQL через общий batch upsert проекта.
+        """
+        return ["balance_date", "product_id", *self._build_quantity_columns(), "loaded_at"]
 
     def _extract_product_id(self, item: dict[str, object]) -> object:
         """Ищет идентификатор товара в основных вариантах полей ответа.
@@ -199,7 +231,7 @@ class Process:
         """Оставлен для совместимости и запасного разбора альтернативных ответов.
 
         Бизнес-правило:
-        основной контракт `daily-balances` использует `days[].closing_quantity`,
+        основной контракт `daily-balances` использует `days[].opening_quantity`,
         но helper сохраняется как безопасный запасной путь, если тестовый ответ
         сервиса придет в упрощенном плоском виде.
         """

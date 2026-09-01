@@ -166,11 +166,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(add_new_items_telegram_bot),
         "desc": "Запуск Telegram-бота для серверного запуска add_new_items_run",
     },
-    # Бухгалтерские и регламентные выгрузки.
-    "seller_balance_run": {
-        "func": smart_run(seller_balance_run),
-        "desc": "Выгрузка баланса продавцов WB в Google Sheets ДДС во вкладку Переменные.",
-    },
+    # План продаж
     "sync_sales_plan_manager_reference_to_db": {
         "func": smart_run(sync_sales_plan_manager_reference_to_db),
         "desc": "Сохранение ежедневного снимка справочника Категория-Менеджер в PostgreSQL",
@@ -182,6 +178,11 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "sync_sales_wild_status_daily_to_db": {
         "func": smart_run(sync_sales_wild_status_daily_to_db),
         "desc": "Сохранение ежедневного snapshot статусов wild из Поквартально в PostgreSQL",
+    },
+    # Бухгалтерские и регламентные выгрузки.
+    "seller_balance_run": {
+        "func": smart_run(seller_balance_run),
+        "desc": "Выгрузка баланса продавцов WB в Google Sheets ДДС во вкладку Переменные.",
     },
     "add_new_items_run": {
         "func": smart_run(add_new_items_run),

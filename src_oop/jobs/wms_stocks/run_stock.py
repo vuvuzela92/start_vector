@@ -8,8 +8,8 @@ from datetime import datetime, timedelta
 from src_oop.jobs.wms_stocks.api_client import WMSStockService
 from src_oop.jobs.wms_stocks.config import (
     WMS_STOCK_BACKFILL_START_DATE,
-    WMS_STOCK_FBS_LOCATION_ID,
     WMS_STOCK_LOOKBACK_DAYS,
+    WMS_STOCK_ZONES,
 )
 from src_oop.jobs.wms_stocks.process import Process
 from src_oop.jobs.wms_stocks.repository import WMSStockRepository
@@ -25,6 +25,48 @@ def _format_date(value: datetime) -> str:
     WMS API получал предсказуемые параметры без различий между режимами запуска.
     """
     return value.strftime("%Y-%m-%d")
+
+
+async def _collect_wms_stock_dataframe(
+    resolved_date_from: str,
+    resolved_date_to: str,
+) -> tuple[object, object]:
+    """Собирает общий остаток и все зональные срезы в единый DataFrame для записи.
+
+    Бизнес-сценарий:
+    регулярный run и backfill должны использовать один и тот же способ загрузки,
+    чтобы `public.wms_stock` одинаково содержала общий остаток склада и остатки
+    по ключевым зонам за любой период.
+    """
+    service = WMSStockService()
+    total_data = await service.fetch_daily_balances(
+        date_from=resolved_date_from,
+        date_to=resolved_date_to,
+    )
+    processor = Process(total_data)
+    frames_by_quantity = {
+        "stock_qty": processor.process_daily_balances(quantity_column_name="stock_qty")
+    }
+
+    for zone in WMS_STOCK_ZONES:
+        zone_data = await service.fetch_daily_balances(
+            date_from=resolved_date_from,
+            date_to=resolved_date_to,
+            location_id=zone.location_id,
+            include_subtree=zone.include_subtree,
+        )
+        frames_by_quantity[zone.column_name] = Process(zone_data).process_daily_balances(
+            quantity_column_name=zone.column_name
+        )
+        logger.info(
+            "Зональный срез WMS-остатков подготовлен | zone_name=%s | location_id=%s | column=%s",
+            zone.zone_name,
+            zone.location_id,
+            zone.column_name,
+        )
+
+    dataframe = processor.merge_daily_balance_frames(frames_by_quantity)
+    return dataframe, WMS_STOCK_ZONES
 
 
 async def wms_stock_run(date_from: str | None = None, date_to: str | None = None) -> None:
@@ -44,27 +86,16 @@ async def wms_stock_run(date_from: str | None = None, date_to: str | None = None
         resolved_date_from,
         resolved_date_to,
     )
-    service = WMSStockService()
-    total_data = await service.fetch_daily_balances(
-        date_from=resolved_date_from,
-        date_to=resolved_date_to,
+    dataframe, zones = await _collect_wms_stock_dataframe(
+        resolved_date_from=resolved_date_from,
+        resolved_date_to=resolved_date_to,
     )
-    fbs_data = await service.fetch_daily_balances(
-        date_from=resolved_date_from,
-        date_to=resolved_date_to,
-        location_id=WMS_STOCK_FBS_LOCATION_ID,
-        include_subtree=True,
-    )
-    processor = Process(total_data)
-    total_dataframe = processor.process_daily_balances(quantity_column_name="stock_qty")
-    fbs_dataframe = Process(fbs_data).process_daily_balances(quantity_column_name="fbs")
-    dataframe = processor.merge_daily_balance_frames(total_dataframe, fbs_dataframe)
     save_result = WMSStockRepository().save(dataframe)
     logger.info(
-        "Обновление дневных WMS-остатков завершено | input_rows=%s | written_rows=%s | fbs_location_id=%s",
+        "Обновление дневных WMS-остатков завершено | input_rows=%s | written_rows=%s | zones=%s",
         save_result.input_rows,
         save_result.written_rows,
-        WMS_STOCK_FBS_LOCATION_ID,
+        [zone.column_name for zone in zones],
     )
 
 
@@ -89,25 +120,14 @@ async def wms_stock_backfill_run(
         resolved_date_from,
         resolved_date_to,
     )
-    service = WMSStockService()
-    total_data = await service.fetch_daily_balances(
-        date_from=resolved_date_from,
-        date_to=resolved_date_to,
+    dataframe, zones = await _collect_wms_stock_dataframe(
+        resolved_date_from=resolved_date_from,
+        resolved_date_to=resolved_date_to,
     )
-    fbs_data = await service.fetch_daily_balances(
-        date_from=resolved_date_from,
-        date_to=resolved_date_to,
-        location_id=WMS_STOCK_FBS_LOCATION_ID,
-        include_subtree=True,
-    )
-    processor = Process(total_data)
-    total_dataframe = processor.process_daily_balances(quantity_column_name="stock_qty")
-    fbs_dataframe = Process(fbs_data).process_daily_balances(quantity_column_name="fbs")
-    dataframe = processor.merge_daily_balance_frames(total_dataframe, fbs_dataframe)
     save_result = WMSStockRepository().save(dataframe)
     logger.info(
-        "Backfill дневных WMS-остатков завершен | input_rows=%s | written_rows=%s | fbs_location_id=%s",
+        "Backfill дневных WMS-остатков завершен | input_rows=%s | written_rows=%s | zones=%s",
         save_result.input_rows,
         save_result.written_rows,
-        WMS_STOCK_FBS_LOCATION_ID,
+        [zone.column_name for zone in zones],
     )
