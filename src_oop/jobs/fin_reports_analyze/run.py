@@ -79,6 +79,29 @@ def update_fin_deductions_mv(table_name: str = "Анализ_фин_отчето
     except RuntimeError as e:
         print(f"Ошибка подключения: {e}") 
 
+
+def update_daily_fin_reports_deductions_agg() -> None:
+    """Выгружает помесячную детализацию удержаний WB в управленческий финансовый отчёт.
+
+    Job получает агрегированные удержания по их группе и месяцу из PostgreSQL,
+    заменяет отсутствующие значения нулями и полностью обновляет предназначенный
+    для этой детализации лист Google Sheets. Нули сохраняют корректность итогов
+    и сводных формул в отчёте при неполных данных источника.
+    """
+    fin_rep = FinReportsAnalyze()
+    dataframe = fin_rep.get_daily_fin_reports_deductions_agg().fillna(0)
+    table_name = fin_rep_analyze.get("title")
+    sheet_name = fin_rep_analyze.get("export_daily_fin_reports_deductions_agg")
+
+    logger.info(
+        "Начата выгрузка помесячной детализации удержаний в Google Sheets | rows=%s",
+        len(dataframe.index),
+    )
+    google_connect = GoogleTabs(table_title=table_name, sheet_title=sheet_name)
+    google_connect.set_df_to_google(dataframe)
+    logger.info("Выгрузка помесячной детализации удержаний в Google Sheets завершена")
+
+
 def update_deductions_by_month():
     """ Обновление данных о ежемесячных удержаниях в таблице Анализ_фин_отчетов_Вектор, лист отчет_по_месяцам"""
     analyze = FinReportsAnalyze()
