@@ -8,7 +8,7 @@ from datetime import date
 from sqlalchemy import Date, DateTime, Integer, String
 
 WMS_STOCK_TABLE_NAME = "wms_stock"
-WMS_STOCK_LOOKBACK_DAYS = 7
+WMS_STOCK_LOOKBACK_DAYS = 1
 WMS_STOCK_BACKFILL_START_DATE = date(2026, 7, 29)
 
 
