@@ -5,6 +5,7 @@ fin_rep_analyze = {
                    "outcomes_detalize" : "детализация_расходов",
                    "deducations_detalize": "удержания_детализация",
                    "deductions_by_month" : "удержания_детализация_месяц",
+                   "export_daily_fin_reports_deductions_agg": "удержания_детализация_месяц",
                    "query_cash_flow_writeoffs": "расходы_по_банку",
                    "stock_analyze": "анализ_остатков"
                    }
