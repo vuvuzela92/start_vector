@@ -68,14 +68,16 @@ ved_logistics_2026 = {
 
 # SQL-запрос для автоматической сверки приемки с данными из PostgreSQL.
 # Из таблицы приходов забираются только валидные строки с заполненными
-# номером автомобиля, номером трака и wild. Документы, начинающиеся с "К",
-# исключаются, потому что по ним не нужно вести количественный учет.
+# номером автомобиля, номером трака, wild и номером заказа в 1С. Документы,
+# начинающиеся с "К", исключаются, потому что по ним не нужно вести
+# количественный учет.
 SUPPLY_ACCEPTANCE_STATUS_QUERY = text(
     """
     SELECT
            btrim(s.transport_number) AS transport_number,
            btrim(s.truck_number) AS truck_number,
            btrim(s.local_vendor_code) AS local_vendor_code,
+           btrim(s.document_number) AS document_number,
            s.quantity
     FROM supply_to_sellers_warehouse s
     WHERE s.is_valid IS TRUE
@@ -86,6 +88,7 @@ SUPPLY_ACCEPTANCE_STATUS_QUERY = text(
       AND s.local_vendor_code IS NOT NULL
       AND btrim(s.local_vendor_code) <> ''
       AND s.document_number IS NOT NULL
+      AND btrim(s.document_number) <> ''
       AND NOT starts_with(s.document_number, 'К');
     """
 )
