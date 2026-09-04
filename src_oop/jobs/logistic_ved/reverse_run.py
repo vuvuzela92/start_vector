@@ -54,6 +54,7 @@ WILD_COLUMN = "wild"
 ORDER_QTY_COLUMN = "Кол-во к заказу"
 TRUCK_NUMBER_COLUMN = "Номер Трака"
 TRANSPORT_NUMBER_COLUMN = "Номер ТС"
+ORDER_NUMBER_1C_COLUMN = "Номер заказа в 1С"
 DATA_CHECK_COLUMN = "Сверка данных"
 FACT_ARRIVAL_TO_WAREHOUSE_FROM_US_COLUMN = "ФАКТИЧЕСКАЯ ДАТА ПРИБЫТИЯ НА СКЛАД ОТ НАС"
 DATA_CHECK_MESSAGE = "Сверьте wild и количество"
@@ -150,8 +151,8 @@ TARGET_DATA_ROW_INDEX = 4
 BATCH_UPDATE_CHUNK_SIZE = 500
 # Ячейка с датой и временем последней успешной обратной синхронизации в таблице закупщиков.
 LAST_SYNC_CELL = "B1"
-# Ключ автоматической приемки: номер трака, номер ТС и wild.
-AcceptanceKey = tuple[str, str, str]
+# Ключ автоматической приемки: номер трака, номер ТС, wild и номер заказа в 1С.
+AcceptanceKey = tuple[str, str, str, str]
 # Ключ словаря дат прибытия: номер трака.
 TruckNumberKey = str
 
@@ -183,7 +184,7 @@ class AcceptanceStatusResult:
 
     Бизнес-логика:
     - строка получает статус ``принят складом`` только при полном совпадении
-      трака, автомобиля, wild и количества с данными БД;
+      трака, автомобиля, wild, номера заказа в 1С и количества с данными БД;
     - если ключ совпал, но количество нет, строка получает статус
       ``расхождения при приемке``;
     - если ключ не найден или найден неоднозначно, статус не меняется.
@@ -336,7 +337,15 @@ class LogisticVedReverseUpdater:
         source_headers: list[str],
         target_headers: list[str],
     ) -> None:
-        """Проверяет, что обе таблицы содержат обязательные для синхронизации колонки."""
+        """Проверяет состав колонок для обмена и финальной автопроверки приемки.
+
+        Бизнес-логика:
+        общие колонки нужны для двусторонней синхронизации между закупщиками и
+        логистами. Номер трака, номер ТС и номер заказа в 1С нужны только в
+        ``ОТЧЁТ_2.0``: по ним сопоставляется фактическая приемка из БД. Ранняя
+        проверка защищает от тихого пропуска автосмены статусов при ручном
+        изменении структуры листа.
+        """
         required_columns = [
             ORDER_LINE_ID_COLUMN,
             STATUS_COLUMN,
@@ -355,8 +364,15 @@ class LogisticVedReverseUpdater:
                 + ", ".join(missing_source_columns)
             )
 
+        # Эти поля заполняются и используются только в рабочей таблице логистов.
+        required_target_columns = [
+            *required_columns,
+            TRUCK_NUMBER_COLUMN,
+            TRANSPORT_NUMBER_COLUMN,
+            ORDER_NUMBER_1C_COLUMN,
+        ]
         missing_target_columns = [
-            column for column in required_columns if column not in target_headers
+            column for column in required_target_columns if column not in target_headers
         ]
         if missing_target_columns:
             raise ValueError(
@@ -738,8 +754,8 @@ class LogisticVedReverseUpdater:
         Бизнес-логика:
         автоматическая приемка у логистов должна опираться на фактические данные
         прихода из БД. Для надежного совпадения используется связка из номера
-        трака, номера автомобиля и wild. Количество сравнивается отдельно уже
-        после совпадения ключа.
+        трака, номера автомобиля, wild и номера заказа в 1С. Количество
+        сравнивается отдельно уже после совпадения ключа.
         """
         dataframe = self.database_cls.read_sql_to_dataframe(SUPPLY_ACCEPTANCE_STATUS_QUERY)
         logger.info(
@@ -753,6 +769,7 @@ class LogisticVedReverseUpdater:
                 truck_number=row.get("truck_number", ""),
                 transport_number=row.get("transport_number", ""),
                 wild=row.get("local_vendor_code", ""),
+                order_number_1c=row.get("document_number", ""),
             )
             if not all(key):
                 continue
@@ -811,8 +828,8 @@ class LogisticVedReverseUpdater:
         """Готовит точечные обновления статуса приемки для всех строк ОТЧЁТ_2.0.
 
         Бизнес-правило:
-        - если совпали ``Номер Трака + Номер ТС + wild`` и количество, ставим
-          ``принят складом``;
+        - если совпали ``Номер Трака + Номер ТС + wild + Номер заказа в 1С``
+          и количество, ставим ``принят складом``;
         - если совпал ключ, но количество не совпало, ставим
           ``расхождения при приемке``;
         - если ключ не совпал или совпадение неоднозначно, текущий статус
@@ -869,6 +886,7 @@ class LogisticVedReverseUpdater:
             truck_number=target_row.get(TRUCK_NUMBER_COLUMN, ""),
             transport_number=target_row.get(TRANSPORT_NUMBER_COLUMN, ""),
             wild=target_row.get(WILD_COLUMN, ""),
+            order_number_1c=target_row.get(ORDER_NUMBER_1C_COLUMN, ""),
         )
         if not all(acceptance_key):
             return AcceptanceStatusResult(
@@ -889,10 +907,11 @@ class LogisticVedReverseUpdater:
 
         if len(matched_quantities) > 1:
             logger.warning(
-                "Финальная автопроверка приемки пропущена: по связке найдено несколько строк в БД. Нужна ручная проверка: truck=%s transport=%s wild=%s order_line_id=%s matches=%s",
+                "Финальная автопроверка приемки пропущена: по связке найдено несколько строк в БД. Нужна ручная проверка: truck=%s transport=%s wild=%s order_number_1c=%s order_line_id=%s matches=%s",
                 acceptance_key[0],
                 acceptance_key[1],
                 acceptance_key[2],
+                acceptance_key[3],
                 order_line_id,
                 len(matched_quantities),
             )
@@ -907,10 +926,11 @@ class LogisticVedReverseUpdater:
         database_quantity = matched_quantities[0]
         if target_quantity is None or database_quantity is None:
             logger.warning(
-                "Финальная автопроверка приемки переведена в статус расхождения из-за некорректного количества: truck=%s transport=%s wild=%s order_line_id=%s target_quantity=%s database_quantity=%s",
+                "Финальная автопроверка приемки переведена в статус расхождения из-за некорректного количества: truck=%s transport=%s wild=%s order_number_1c=%s order_line_id=%s target_quantity=%s database_quantity=%s",
                 acceptance_key[0],
                 acceptance_key[1],
                 acceptance_key[2],
+                acceptance_key[3],
                 order_line_id,
                 target_row.get(ORDER_QTY_COLUMN, ""),
                 database_quantity,
@@ -1061,12 +1081,20 @@ class LogisticVedReverseUpdater:
         truck_number: object,
         transport_number: object,
         wild: object,
+        order_number_1c: object,
     ) -> AcceptanceKey:
-        """Собирает нормализованный ключ автоприемки из трака, автомобиля и wild."""
+        """Собирает нормализованный ключ автоприемки из четырех бизнес-полей.
+
+        Бизнес-логика:
+        номер заказа в 1С отделяет разные поставки, которые могут иметь одинаковые
+        номер трака, номер ТС и wild. Это защищает автоприемку от ложного
+        совпадения нескольких строк БД.
+        """
         return (
             self._normalize_string(truck_number),
             self._normalize_string(transport_number),
             self._normalize_string(wild),
+            self._normalize_string(order_number_1c),
         )
 
     def _normalize_quantity_for_match(self, value: object) -> Decimal | None:
