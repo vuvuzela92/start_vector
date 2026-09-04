@@ -1,0 +1,158 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Путь руководителя в Telegram-боте управления доступами",
+    "quality_profile": "showcase",
+    "output": "src_oop/jobs/database_access_management/user-access.workflow.html"
+  },
+  "lanes": [
+    { "id": "manager", "label": "Руководитель" },
+    { "id": "telegram", "label": "Telegram-бот" },
+    { "id": "service", "label": "Сервис управления доступами" },
+    { "id": "databases", "label": "PostgreSQL и ClickHouse" },
+    { "id": "notification", "label": "Уведомление руководителю" },
+    { "id": "exception", "label": "Отзыв или блокировка", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "entry", "label": "Вход и выбор", "fromCol": 0, "toCol": 1 },
+    { "id": "access", "label": "Настройка доступа", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "apply", "label": "Применение и аудит", "fromCol": 4, "toCol": 4, "variant": "security" }
+  ],
+  "mainPath": [
+    "manager",
+    "bot",
+    "employee",
+    "access",
+    "confirm",
+    "service",
+    "database",
+    "result"
+  ],
+  "semanticChecks": {
+    "allowedRoots": ["manager"],
+    "allowedTerminals": ["result"],
+    "requiredPaths": [
+      { "from": "manager", "to": "result" },
+      { "from": "revoke", "to": "service" }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "manager",
+      "lane": "manager",
+      "col": 0,
+      "type": "external",
+      "label": "Руководитель",
+      "sublabel": "управляет доступами",
+      "width": 138
+    },
+    {
+      "id": "bot",
+      "lane": "telegram",
+      "col": 1,
+      "type": "security",
+      "label": "Telegram-бот",
+      "sublabel": "проверяет Telegram ID",
+      "tag": "только разрешённые руководители",
+      "width": 150
+    },
+    {
+      "id": "employee",
+      "lane": "telegram",
+      "col": 2,
+      "type": "frontend",
+      "label": "Сотрудник и операция",
+      "sublabel": "выдать / сменить / отозвать",
+      "width": 164
+    },
+    {
+      "id": "access",
+      "lane": "telegram",
+      "col": 3,
+      "type": "security",
+      "label": "Настройка доступа",
+      "sublabel": "личный логин, БД и роль",
+      "tag": "пароль генерирует сервис",
+      "width": 170
+    },
+    {
+      "id": "confirm",
+      "lane": "telegram",
+      "col": 3,
+      "type": "security",
+      "label": "Подтверждение",
+      "sublabel": "сверяет итоговые права",
+      "width": 152,
+      "yOffset": 94
+    },
+    {
+      "id": "service",
+      "lane": "service",
+      "col": 4,
+      "type": "backend",
+      "label": "Сервис доступа",
+      "sublabel": "аудит и применение роли",
+      "width": 154
+    },
+    {
+      "id": "database",
+      "lane": "databases",
+      "col": 4,
+      "type": "database",
+      "label": "Целевая СУБД",
+      "sublabel": "PostgreSQL / ClickHouse",
+      "width": 150
+    },
+    {
+      "id": "result",
+      "lane": "notification",
+      "col": 4,
+      "type": "messagebus",
+      "label": "Результат",
+      "sublabel": "выдан / изменён / отозван",
+      "width": 152
+    },
+    {
+      "id": "revoke",
+      "lane": "exception",
+      "col": 3,
+      "type": "security",
+      "label": "Отзыв доступа",
+      "sublabel": "снять роль / блокировать вход",
+      "width": 156
+    }
+  ],
+  "edges": [
+    { "id": "open-bot", "from": "manager", "to": "bot", "role": "main" },
+    { "id": "choose-employee", "from": "bot", "to": "employee", "label": "открыть управление", "role": "main" },
+    { "id": "configure-access", "from": "employee", "to": "access", "label": "выдать или сменить", "role": "main", "variant": "emphasis" },
+    { "id": "review-summary", "from": "access", "to": "confirm", "label": "показать сводку", "role": "main", "variant": "security" },
+    { "id": "confirm-apply", "from": "confirm", "to": "service", "label": "подтвердить", "role": "main", "variant": "security" },
+    { "id": "apply-role", "from": "service", "to": "database", "label": "создать учётную запись и назначить роль", "role": "main", "variant": "emphasis" },
+    { "id": "notify-manager", "from": "database", "to": "result", "label": "уведомить руководителя", "role": "main", "variant": "emphasis" },
+    { "id": "start-revoke", "from": "employee", "to": "revoke", "label": "отозвать", "role": "branch", "variant": "security" },
+    { "id": "apply-revoke", "from": "revoke", "to": "service", "label": "снять роль или заблокировать вход", "role": "branch", "variant": "security" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Права",
+      "items": [
+        "Каждый сотрудник использует личный логин",
+        "Роль — общий набор прав для нескольких сотрудников",
+        "Уровни: read_all, read_tables, full_access",
+        "Смена роли заменяет прежнее управляемое членство"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Контроли",
+      "items": [
+        "Ботом пользуются только руководители из разрешённого списка",
+        "Пароль не записывается в аудит и показывается один раз",
+        "Каждое изменение сохраняется в журнале аудита"
+      ]
+    }
+  ]
+}

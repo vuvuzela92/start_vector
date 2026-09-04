@@ -1,0 +1,122 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Путь руководителя в Telegram-боте: управление доступом",
+    "quality_profile": "showcase",
+    "output": "src_oop/jobs/database_access_management/user-access-mvp.workflow.html"
+  },
+  "lanes": [
+    { "id": "process", "label": "Управление доступом" }
+  ],
+  "phases": [
+    { "id": "entry", "label": "Вход", "fromCol": 0, "toCol": 1 },
+    { "id": "setup", "label": "Выбор действия", "fromCol": 2, "toCol": 2, "variant": "emphasis" },
+    { "id": "apply", "label": "Применение", "fromCol": 3, "toCol": 3, "variant": "security" }
+  ],
+  "mainPath": [
+    "manager",
+    "bot",
+    "employee",
+    "access",
+    "confirm",
+    "service",
+    "database",
+    "result"
+  ],
+  "semanticChecks": {
+    "allowedRoots": ["manager"],
+    "allowedTerminals": ["result"],
+    "requiredPaths": [
+      { "from": "manager", "to": "result" }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "manager",
+      "lane": "process",
+      "col": 0,
+      "type": "external",
+      "label": "Руководитель",
+      "width": 142
+    },
+    {
+      "id": "bot",
+      "lane": "process",
+      "col": 1,
+      "type": "security",
+      "label": "Telegram-бот",
+      "sublabel": "проверка ID",
+      "tag": "только руководители",
+      "width": 150
+    },
+    {
+      "id": "employee",
+      "lane": "process",
+      "col": 2,
+      "type": "frontend",
+      "label": "Сотрудник и операция",
+      "sublabel": "выдать / сменить / снять",
+      "width": 162,
+      "yOffset": -88
+    },
+    {
+      "id": "access",
+      "lane": "process",
+      "col": 2,
+      "type": "security",
+      "label": "Настройка доступа",
+      "sublabel": "логин, БД и роль",
+      "tag": "пароль генерирует сервис",
+      "width": 172
+    },
+    {
+      "id": "confirm",
+      "lane": "process",
+      "col": 3,
+      "type": "security",
+      "label": "Подтверждение",
+      "sublabel": "сверка прав",
+      "width": 154
+    },
+    {
+      "id": "service",
+      "lane": "process",
+      "col": 3,
+      "type": "backend",
+      "label": "Сервис доступа",
+      "sublabel": "аудит и роли",
+      "width": 154,
+      "yOffset": 88
+    },
+    {
+      "id": "database",
+      "lane": "process",
+      "col": 3,
+      "type": "database",
+      "label": "Целевая СУБД",
+      "sublabel": "PostgreSQL / ClickHouse",
+      "width": 150,
+      "yOffset": 176
+    },
+    {
+      "id": "result",
+      "lane": "process",
+      "col": 3,
+      "type": "messagebus",
+      "label": "Статус в боте",
+      "sublabel": "выдан / изменён / снят",
+      "width": 160,
+      "yOffset": 264
+    }
+  ],
+  "edges": [
+    { "id": "open-bot", "from": "manager", "to": "bot", "role": "main" },
+    { "id": "choose-employee", "from": "bot", "to": "employee", "label": "открыть управление", "role": "main" },
+    { "id": "configure-access", "from": "employee", "to": "access", "label": "выбрать действие", "role": "main", "variant": "emphasis" },
+    { "id": "review-summary", "from": "access", "to": "confirm", "label": "показать сводку", "role": "main", "variant": "security" },
+    { "id": "confirm-apply", "from": "confirm", "to": "service", "label": "подтвердить", "role": "main", "variant": "security" },
+    { "id": "apply-role", "from": "service", "to": "database", "label": "создать учётную запись или изменить роль", "role": "main", "variant": "emphasis" },
+    { "id": "send-status", "from": "database", "to": "result", "label": "вернуть результат", "role": "main", "variant": "emphasis" }
+  ]
+}

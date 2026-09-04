@@ -1,0 +1,133 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Выдача доступа человеку и микросервису",
+    "quality_profile": "showcase",
+    "output": "src_oop/jobs/database_access_management/principal-access.workflow.html"
+  },
+  "lanes": [
+    { "id": "manager", "label": "Руководитель и Telegram-бот" },
+    { "id": "service", "label": "Сервис управления доступами" },
+    { "id": "infrastructure", "label": "Инфраструктура" }
+  ],
+  "phases": [
+    { "id": "select", "label": "Выбор", "fromCol": 0, "toCol": 2 },
+    { "id": "identity", "label": "Учётная запись", "fromCol": 3, "toCol": 3, "variant": "emphasis" },
+    { "id": "access", "label": "Роль и доступ", "fromCol": 4, "toCol": 4, "variant": "security" }
+  ],
+  "mainPath": ["manager", "bot", "principal", "human", "role", "databases"],
+  "semanticChecks": {
+    "allowedRoots": ["manager"],
+    "allowedTerminals": ["databases", "vault"],
+    "requiredPaths": [
+      { "from": "manager", "to": "databases" },
+      { "from": "service_account", "to": "vault" }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "manager",
+      "lane": "manager",
+      "col": 0,
+      "type": "external",
+      "label": "Руководитель",
+      "width": 138
+    },
+    {
+      "id": "bot",
+      "lane": "manager",
+      "col": 1,
+      "type": "security",
+      "label": "Telegram-бот",
+      "sublabel": "проверка ID",
+      "width": 146
+    },
+    {
+      "id": "principal",
+      "lane": "manager",
+      "col": 2,
+      "type": "frontend",
+      "label": "Тип субъекта",
+      "sublabel": "сотрудник или микросервис",
+      "width": 156
+    },
+    {
+      "id": "human",
+      "lane": "service",
+      "col": 3,
+      "type": "security",
+      "label": "Личный логин",
+      "sublabel": "один сотрудник — одна учётная запись",
+      "width": 168
+    },
+    {
+      "id": "service_account",
+      "lane": "infrastructure",
+      "col": 3,
+      "type": "backend",
+      "label": "Service account",
+      "sublabel": "один сервис и одна среда",
+      "tag": "например, orders-prod",
+      "width": 164
+    },
+    {
+      "id": "role",
+      "lane": "service",
+      "col": 4,
+      "type": "security",
+      "label": "Роль доступа",
+      "sublabel": "уровень прав",
+      "width": 172
+    },
+    {
+      "id": "databases",
+      "lane": "infrastructure",
+      "col": 4,
+      "type": "database",
+      "label": "Целевая СУБД",
+      "sublabel": "PostgreSQL / ClickHouse",
+      "width": 154
+    },
+    {
+      "id": "vault",
+      "lane": "infrastructure",
+      "col": 4,
+      "type": "security",
+      "label": "Хранилище секретов",
+      "sublabel": "секрет и ротация",
+      "width": 160,
+      "yOffset": 88
+    }
+  ],
+  "edges": [
+    { "id": "open-bot", "from": "manager", "to": "bot", "role": "main" },
+    { "id": "choose-principal", "from": "bot", "to": "principal", "label": "создать или изменить", "role": "main" },
+    { "id": "human-identity", "from": "principal", "to": "human", "label": "сотрудник", "role": "main", "variant": "emphasis" },
+    { "id": "service-identity", "from": "principal", "to": "service_account", "label": "микросервис", "role": "branch", "variant": "emphasis" },
+    { "id": "human-role", "from": "human", "to": "role", "label": "назначить роль", "role": "main", "variant": "security" },
+    { "id": "service-role", "from": "service_account", "to": "role", "label": "назначить роль", "role": "branch", "variant": "security" },
+    { "id": "apply-role", "from": "role", "to": "databases", "label": "применить права", "role": "main", "variant": "emphasis" },
+    { "id": "store-secret", "from": "service_account", "to": "vault", "label": "передать секрет", "role": "async", "variant": "security" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Правило учётных записей",
+      "items": [
+        "Не использовать одну общую учётную запись для всех микросервисов",
+        "Разделять service account по сервису и среде: prod, stage, dev",
+        "Роли можно переиспользовать между людьми и сервисами"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Секреты и аудит",
+      "items": [
+        "Пароли и ключи не передаются через Telegram",
+        "Секрет хранится в Vault или аналогичном менеджере секретов",
+        "Для service account фиксируются владелец, команда и среда"
+      ]
+    }
+  ]
+}

@@ -43,6 +43,7 @@ from src_oop.jobs.conditional_calculations.run import (
 )
 from src_oop.jobs.fin_reports_analyze.run import (
     update_cash_flow_writeoffs,
+    update_daily_fin_reports_deductions_agg,
     update_deductions_by_month,
     update_fin_deductions_mv,
     update_monthly_report,
@@ -264,6 +265,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "update_fin_deductions_mv": {
         "func": smart_run(update_fin_deductions_mv),
         "desc": "Выгрузка детализации удержаний фин отчета",
+    },
+    "update_daily_fin_reports_deductions_agg": {
+        "func": smart_run(update_daily_fin_reports_deductions_agg),
+        "desc": "Выгрузка помесячной детализации удержаний фин отчета",
     },
     "update_deductions_by_month": {
         "func": smart_run(update_deductions_by_month),
