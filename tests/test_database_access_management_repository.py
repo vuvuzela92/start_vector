@@ -229,3 +229,49 @@ def test_repository_returns_role_name_recorded_at_activation() -> None:
     repository.mark_grant_active(grant_id, "dam_legacy_role")
 
     assert repository.get_applied_role_name(grant_id) == "dam_legacy_role"
+
+
+def test_repository_returns_secret_ref_only_for_active_postgresql_target() -> None:
+    """Проверяет внутреннее получение ссылки для чтения каталога выбранной БД.
+
+    Тест защищает сценарий «Активные доступы»: Telegram-бот может получить
+    административную ссылку только для зарегистрированной активной цели
+    PostgreSQL, не раскрывая эту ссылку в публичном ответе API.
+    """
+
+    repository, _ = create_repository_with_grant()
+
+    secret_ref = repository.get_active_target_admin_secret_ref(
+        "analytics-postgresql-prod",
+        engine_name="postgresql",
+    )
+
+    assert secret_ref == "vault://database-access/analytics/postgresql"
+
+    with pytest.raises(LookupError, match="недоступна"):
+        repository.get_active_target_admin_secret_ref(
+            "analytics-postgresql-prod",
+            engine_name="clickhouse",
+        )
+
+
+def test_repository_returns_tables_for_active_managed_table_role() -> None:
+    """Проверяет вывод таблиц активной роли, выданной через Telegram-бота.
+
+    Тест защищает точечный просмотр доступа сотрудника: список таблиц должен
+    отображаться по активному распоряжению и фактическому имени роли, а не по
+    нестабильному разбору её технического названия.
+    """
+
+    repository, grant_id = create_repository_with_grant()
+    repository.claim_pending_grant(grant_id)
+    repository.mark_grant_active(grant_id, "analytics_public_prod_read_separate_123456789abc")
+
+    scopes = repository.list_active_read_table_scopes(
+        "ivanov",
+        "analytics-postgresql-prod",
+    )
+
+    assert scopes == {
+        "analytics_public_prod_read_separate_123456789abc": ("orders",)
+    }

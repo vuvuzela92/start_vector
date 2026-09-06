@@ -3,9 +3,20 @@
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
 from src_oop.jobs.database_access_management.models import AccessGrantRequest
 from src_oop.jobs.database_access_management.postgresql_adapter import PostgreSQLAccessAdapter
+
+
+class FakePostgreSQLDriverError:
+    """Имитирует безопасные атрибуты ошибки драйвера PostgreSQL для теста."""
+
+    def __init__(self, sqlstate: str | None = None, pgcode: str | None = None) -> None:
+        """Создаёт ошибку драйвера с одним из форматов SQLSTATE."""
+
+        self.sqlstate = sqlstate
+        self.pgcode = pgcode
 
 
 def build_request(
@@ -54,6 +65,33 @@ def test_read_tables_plan_grants_only_requested_tables() -> None:
     )
     assert not any("ALL TABLES" in statement for statement in plan.statements)
     assert plan.statements[-1].endswith('TO "ivanov"')
+
+
+def test_read_tables_role_name_hides_table_names_and_keeps_scope_unique() -> None:
+    """Проверяет безопасное и читаемое имя роли отдельных таблиц.
+
+    Тест защищает изоляцию доступов: названия таблиц не должны засорять имя
+    роли, но разные наборы таблиц должны получать разные роли, чтобы их права
+    не объединились для разных сотрудников.
+    """
+
+    adapter = PostgreSQLAccessAdapter("sqlite://")
+    orders_plan = adapter.build_grant_plan(
+        build_request(
+            "read_tables",
+            {"database": "vector_db", "schema_name": "public", "tables": ["orders"]},
+        )
+    )
+    sales_plan = adapter.build_grant_plan(
+        build_request(
+            "read_tables",
+            {"database": "vector_db", "schema_name": "public", "tables": ["sales"]},
+        )
+    )
+
+    assert orders_plan.role_name.startswith("vector_db_public_prod_read_separate_")
+    assert "orders" not in orders_plan.role_name
+    assert orders_plan.role_name != sales_plan.role_name
 
 
 def test_read_all_plan_grants_select_for_each_supplied_schema() -> None:
@@ -191,3 +229,20 @@ def test_full_access_plan_includes_default_privileges_for_all_schemas() -> None:
         statement == 'ALTER DEFAULT PRIVILEGES IN SCHEMA "public" GRANT ALL PRIVILEGES ON TABLES TO "vector_db_all_schemas_prod_manage"'
         for statement in plan.statements
     )
+
+
+def test_sqlstate_extraction_supports_psycopg2_and_modern_drivers() -> None:
+    """Проверяет безопасную диагностику ошибок выдачи прав PostgreSQL.
+
+    Тест защищает сопровождение ролей: при ошибке планировщик должен вернуть
+    только SQLSTATE драйвера, а не полный текст исключения с потенциально
+    чувствительными техническими данными.
+    """
+
+    psycopg2_error = SQLAlchemyError()
+    psycopg2_error.orig = FakePostgreSQLDriverError(pgcode="42501")
+    modern_driver_error = SQLAlchemyError()
+    modern_driver_error.orig = FakePostgreSQLDriverError(sqlstate="25P02")
+
+    assert PostgreSQLAccessAdapter._get_sqlstate(psycopg2_error) == "42501"
+    assert PostgreSQLAccessAdapter._get_sqlstate(modern_driver_error) == "25P02"

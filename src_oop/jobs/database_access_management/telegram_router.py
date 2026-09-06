@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from src_oop.jobs.database_access_management.config import DatabaseAccessManagementSettings
 from src_oop.jobs.database_access_management.executor import (
     EnvironmentSecretResolver,
@@ -60,20 +62,34 @@ def create_database_access_router():
         details = State()
         login_created = State()
 
-    class DeleteUserForm(StatesGroup):
-        """Хранит ожидание логина для удаления учётной записи."""
+    class ActiveAccessForm(StatesGroup):
+        """Хранит логин и выбор базы для точечного просмотра доступов сотрудника."""
 
         login = State()
+        target = State()
+
+    class InventoryForm(StatesGroup):
+        """Хранит выбор базы для инвентаризации существующих PostgreSQL-ролей."""
+
+        target = State()
+
+    class DeleteUserForm(StatesGroup):
+        """Хранит логин и подтверждение удаления одной учётной записи."""
+
+        login = State()
+        confirmation = State()
 
     class RevokeForm(StatesGroup):
-        """Хранит ожидание логина для выбора активного доступа к отзыву."""
+        """Хранит логин и выбор активного доступа для безопасного отзыва."""
 
         login = State()
+        selection = State()
 
     class MassDeleteForm(StatesGroup):
-        """Хранит ожидание списка логинов для массового удаления."""
+        """Хранит список логинов и подтверждение массового удаления."""
 
         logins = State()
+        confirmation = State()
 
     router = Router(name="database_access_management")
     settings = DatabaseAccessTelegramSettings.from_env()
@@ -105,6 +121,95 @@ def create_database_access_router():
                 f"{title}, часть {index}/{len(sql_chunks)}:\n```sql\n{chunk}\n```",
                 parse_mode="Markdown",
             )
+
+    async def request_active_access_target(
+        message: Message,
+        state: FSMContext,
+        login_name: str,
+    ) -> None:
+        """Предлагает базу для чтения действующих доступов без изменений прав.
+
+        Функция обслуживает единый сценарий «Активные доступы»: руководитель
+        вводит логин сотрудника, затем выбирает зарегистрированную
+        PostgreSQL-базу. Логин сохраняется только во временном состоянии
+        Telegram-диалога.
+        """
+
+        service_settings = DatabaseAccessManagementSettings.from_env()
+        repository = AccessGrantRepository.from_database_url(
+            service_settings.database_url, schema_name=service_settings.schema_name
+        )
+        targets = repository.list_active_database_targets(engine_name="postgresql")
+        if not targets:
+            await message.answer("Нет зарегистрированных PostgreSQL-баз.")
+            return
+        await state.update_data(active_access_login_name=login_name)
+        await state.set_state(ActiveAccessForm.target)
+        await message.answer(
+            "Выберите PostgreSQL-базу для просмотра действующих доступов:",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=target.display_name,
+                            callback_data=f"dam_access_target:{target.target_id}",
+                        )
+                    ]
+                    for target in targets
+                ] + [[InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:active_login")]]
+            ),
+        )
+
+    async def request_active_access_login(message: Message, state: FSMContext) -> None:
+        """Запрашивает логин для точечного просмотра действующих доступов.
+
+        Функция обслуживает кнопку и команду «Активные доступы»: без логина
+        бот не выполняет широкий запрос по всем сотрудникам, а ожидает явный
+        идентификатор сотрудника для последующего выбора PostgreSQL-базы.
+        """
+
+        await state.set_state(ActiveAccessForm.login)
+        await message.answer(
+            "Введите логин сотрудника для просмотра его действующих доступов.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:menu")]
+                ]
+            ),
+        )
+
+    async def request_inventory_target(message: Message, state: FSMContext) -> None:
+        """Предлагает базу для инвентаризации её существующих логинов и ролей.
+
+        Функция обслуживает общий read-only сценарий «Инвентаризация
+        PostgreSQL»: руководитель сначала явно выбирает зарегистрированную
+        целевую базу, чтобы результаты не смешивали доступы разных систем.
+        """
+
+        service_settings = DatabaseAccessManagementSettings.from_env()
+        repository = AccessGrantRepository.from_database_url(
+            service_settings.database_url, schema_name=service_settings.schema_name
+        )
+        targets = repository.list_active_database_targets(engine_name="postgresql")
+        if not targets:
+            await message.answer("Нет зарегистрированных PostgreSQL-баз.")
+            return
+        await state.set_state(InventoryForm.target)
+        await message.answer(
+            "Выберите PostgreSQL-базу для инвентаризации:",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=target.display_name,
+                            callback_data=f"dam_inventory_target:{target.target_id}",
+                        )
+                    ]
+                    for target in targets
+                ] + [[InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:menu")]]
+            ),
+        )
+
     reply_keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="➕ Выдать доступ"), KeyboardButton(text="📋 Активные доступы")],
@@ -128,7 +233,7 @@ def create_database_access_router():
             "Управление доступами PostgreSQL\n\n"
             "Доступные действия:\n"
             "• /grant — выдать доступ\n"
-            "• /accesses — показать активные доступы\n"
+            "• /accesses <логин> — показать действующие доступы сотрудника\n"
             "• /revoke <номер_распоряжения> — отозвать доступ\n\n"
             "Смена роли выполняется через выдачу новой роли и отзыв прежнего доступа.",
             reply_markup=reply_keyboard,
@@ -154,47 +259,163 @@ def create_database_access_router():
         await start_grant(message, state)
 
     @router.message(F.text == "📋 Активные доступы")
-    async def accesses_button(message: Message) -> None:
-        """Сразу показывает все активные доступы, выданные сервисом."""
+    async def accesses_button(message: Message, state: FSMContext) -> None:
+        """Запускает выбор БД для просмотра действующих доступов сотрудников."""
 
         if not _is_manager_chat(message.chat.id, settings):
             return
+        await request_active_access_login(message, state)
+
+    @router.message(F.text == "🔎 Инвентаризация PostgreSQL")
+    async def inventory_button(message: Message, state: FSMContext) -> None:
+        """Запускает выбор базы для общей инвентаризации PostgreSQL-ролей."""
+
+        if not _is_manager_chat(message.chat.id, settings):
+            return
+        await request_inventory_target(message, state)
+
+    @router.callback_query(
+        InventoryForm.target,
+        lambda query: query.data and query.data.startswith("dam_inventory_target:"),
+    )
+    async def show_inventory_for_target(
+        query: CallbackQuery,
+        state: FSMContext,
+    ) -> None:
+        """Показывает логины и роли, существующие в выбранной PostgreSQL-базе.
+
+        Метод обслуживает инвентаризацию уже выданных прав независимо от того,
+        создавал ли их Telegram-бот. Запросы ограничены чтением системного
+        каталога PostgreSQL, а ссылка на административный секрет не попадает в
+        ответ пользователю или журнал.
+        """
+
+        if query.message is None or not _is_manager_chat(query.message.chat.id, settings):
+            await query.answer("Доступ не разрешён", show_alert=True)
+            return
+        target_id = query.data.removeprefix("dam_inventory_target:")
+        await query.answer("Загружаю инвентаризацию…")
         service_settings = DatabaseAccessManagementSettings.from_env()
         repository = AccessGrantRepository.from_database_url(
             service_settings.database_url, schema_name=service_settings.schema_name
         )
-        grants = repository.list_active_grants()
-        if not grants:
-            await message.answer("Активные PostgreSQL-доступы, выданные сервисом, не найдены.")
+        try:
+            admin_secret_ref = repository.get_active_target_admin_secret_ref(
+                target_id,
+                engine_name="postgresql",
+            )
+            database_url = EnvironmentSecretResolver().resolve_database_url(admin_secret_ref)
+            inventory = PostgreSQLAccessInventory(database_url)
+            accesses = await asyncio.to_thread(inventory.list_users_and_role_memberships)
+        except (LookupError, OSError, RuntimeError, SQLAlchemyError, ValueError) as error:
+            logger.error(
+                "Не удалось выполнить инвентаризацию PostgreSQL | "
+                "target_id=%s | error_type=%s",
+                target_id,
+                type(error).__name__,
+            )
+            await state.clear()
+            await query.message.answer("Не удалось загрузить инвентаризацию выбранной базы.")
             return
-        lines = ["Все активные PostgreSQL-доступы:"]
-        lines.extend(
-            f"• {grant['login_name']} — {grant['database_name']} — {grant['access_level']}"
-            for grant in grants
-        )
-        await message.answer("\n".join(lines))
 
-    @router.message(F.text == "🔎 Инвентаризация PostgreSQL")
-    async def inventory_button(message: Message) -> None:
-        """Сразу запускает read-only инвентаризацию существующих доступов."""
-
-        if not _is_manager_chat(message.chat.id, settings):
-            return
-        await message.answer("Ищу существующих пользователей PostgreSQL…")
-        service_settings = DatabaseAccessManagementSettings.from_env()
-        inventory = PostgreSQLAccessInventory(service_settings.database_url)
-        accesses = await asyncio.to_thread(inventory.list_users_and_role_memberships)
+        await state.clear()
         if not accesses:
-            await message.answer("В PostgreSQL не найдены прикладные пользователи.")
+            await query.message.answer("В выбранной PostgreSQL-базе не найдены прикладные пользователи.")
             return
-        lines = ["Пользователи PostgreSQL и их роли:"]
+        lines = [f"Пользователи PostgreSQL базы {target_id} и их роли:"]
         lines.extend(
             f"• {item.login_name} → {item.role_name or 'роль не назначена'}"
             for item in accesses[:100]
         )
         if len(accesses) > 100:
             lines.append(f"Показаны первые 100 из {len(accesses)} записей.")
-        await message.answer("\n".join(lines))
+        await query.message.answer("\n".join(lines))
+
+    @router.message(ActiveAccessForm.login)
+    async def choose_login_for_active_accesses(message: Message, state: FSMContext) -> None:
+        """Сохраняет логин сотрудника и предлагает базу для проверки его ролей."""
+
+        if not _is_manager_chat(message.chat.id, settings):
+            await state.clear()
+            return
+        login_name = (message.text or "").strip()
+        if not login_name:
+            await message.answer("Введите непустой логин сотрудника.")
+            return
+        await request_active_access_target(message, state, login_name)
+
+    @router.callback_query(
+        ActiveAccessForm.target,
+        lambda query: query.data and query.data.startswith("dam_access_target:"),
+    )
+    async def show_active_accesses_for_target(
+        query: CallbackQuery,
+        state: FSMContext,
+    ) -> None:
+        """Показывает существующие логины и роли выбранной PostgreSQL-базы.
+
+        Метод обслуживает просмотр действующих доступов, включая выданные до
+        внедрения Telegram-бота. Он выполняет только чтение системного каталога
+        PostgreSQL и не показывает административный секрет или строку
+        подключения даже при ошибке доступа к выбранной базе.
+        """
+
+        if query.message is None or not _is_manager_chat(query.message.chat.id, settings):
+            await query.answer("Доступ не разрешён", show_alert=True)
+            return
+        target_id = query.data.removeprefix("dam_access_target:")
+        form_data = await state.get_data()
+        login_name = form_data.get("active_access_login_name")
+        if not isinstance(login_name, str):
+            await state.clear()
+            await query.answer("Данные формы устарели", show_alert=True)
+            return
+        await query.answer("Загружаю действующие доступы…")
+        service_settings = DatabaseAccessManagementSettings.from_env()
+        repository = AccessGrantRepository.from_database_url(
+            service_settings.database_url, schema_name=service_settings.schema_name
+        )
+        try:
+            admin_secret_ref = repository.get_active_target_admin_secret_ref(
+                target_id,
+                engine_name="postgresql",
+            )
+            database_url = EnvironmentSecretResolver().resolve_database_url(admin_secret_ref)
+            inventory = PostgreSQLAccessInventory(database_url)
+            accesses = await asyncio.to_thread(inventory.list_users_and_role_memberships)
+            managed_table_scopes = repository.list_active_read_table_scopes(
+                login_name,
+                target_id,
+            )
+        except (LookupError, OSError, RuntimeError, SQLAlchemyError, ValueError) as error:
+            logger.error(
+                "Не удалось прочитать действующие доступы PostgreSQL | "
+                "target_id=%s | error_type=%s",
+                target_id,
+                type(error).__name__,
+            )
+            await state.clear()
+            await query.message.answer("Не удалось загрузить действующие доступы выбранной базы.")
+            return
+
+        accesses = [item for item in accesses if item.login_name == login_name]
+        await state.clear()
+        if not accesses:
+            await query.message.answer(
+                f"Для логина {login_name} в выбранной PostgreSQL-базе доступы не найдены."
+            )
+            return
+        lines = [f"Действующие PostgreSQL-доступы {login_name} в базе {target_id}:"]
+        for item in accesses[:100]:
+            line = f"• {item.login_name} → {item.role_name or 'роль не назначена'}"
+            if item.role_name is not None:
+                table_names = managed_table_scopes.get(item.role_name)
+                if table_names:
+                    line += f"\n  таблицы: {', '.join(table_names)}"
+            lines.append(line)
+        if len(accesses) > 100:
+            lines.append(f"Показаны первые 100 из {len(accesses)} записей.")
+        await query.message.answer("\n".join(lines))
 
     @router.message(F.text == "⛔ Отозвать доступ")
     async def revoke_button(message: Message, state: FSMContext) -> None:
@@ -203,7 +424,14 @@ def create_database_access_router():
         if not _is_manager_chat(message.chat.id, settings):
             return
         await state.set_state(RevokeForm.login)
-        await message.answer("Введите логин пользователя, доступ которого нужно отозвать.")
+        await message.answer(
+            "Введите логин пользователя, доступ которого нужно отозвать.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:menu")]
+                ]
+            ),
+        )
 
     @router.message(RevokeForm.login)
     async def choose_grant_for_revocation(message: Message, state: FSMContext) -> None:
@@ -218,8 +446,8 @@ def create_database_access_router():
             service_settings.database_url, schema_name=service_settings.schema_name
         )
         grants = repository.list_active_grants(login_name)
-        await state.clear()
         if not grants:
+            await state.clear()
             await message.answer("У этого логина нет активных доступов, выданных сервисом.")
             return
         keyboard = InlineKeyboardMarkup(
@@ -229,8 +457,9 @@ def create_database_access_router():
                     callback_data=f"dam_revoke:{grant['id']}",
                 )]
                 for grant in grants
-            ]
+            ] + [[InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:revoke_login")]]
         )
+        await state.set_state(RevokeForm.selection)
         await message.answer("Выберите доступ для отзыва:", reply_markup=keyboard)
 
     @router.message(F.text == "🗑 Удалить пользователя")
@@ -240,7 +469,14 @@ def create_database_access_router():
         if not _is_manager_chat(message.chat.id, settings):
             return
         await state.set_state(DeleteUserForm.login)
-        await message.answer("Введите логин пользователя для удаления. Операция необратима.")
+        await message.answer(
+            "Введите логин пользователя для удаления. Операция необратима.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:menu")]
+                ]
+            ),
+        )
 
     @router.message(F.text == "🗑 Массовое удаление")
     async def mass_delete_button(message: Message, state: FSMContext) -> None:
@@ -251,12 +487,22 @@ def create_database_access_router():
         await state.set_state(MassDeleteForm.logins)
         await message.answer(
             "Отправьте логины для удаления: каждый с новой строки. Максимум 50. "
-            "Операция необратима."
+            "Операция необратима.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:menu")]
+                ]
+            ),
         )
 
     @router.message(MassDeleteForm.logins)
     async def delete_users_from_list(message: Message, state: FSMContext) -> None:
-        """Удаляет список логинов по одному и возвращает итог для каждой строки."""
+        """Запрашивает подтверждение массового удаления указанного списка логинов.
+
+        Метод защищает учётные записи от случайной отправки списка в Telegram:
+        до нажатия кнопки подтверждения SQL-команды не выполняются, а список
+        остаётся только во временном состоянии диалога руководителя.
+        """
 
         if not _is_manager_chat(message.chat.id, settings):
             await state.clear()
@@ -270,24 +516,27 @@ def create_database_access_router():
         if len(login_names) > 50:
             await message.answer("За один запуск можно удалить не более 50 логинов.")
             return
-        await state.clear()
-        service_settings = DatabaseAccessManagementSettings.from_env()
-        repository = AccessGrantRepository.from_database_url(
-            service_settings.database_url, schema_name=service_settings.schema_name
+        await state.update_data(login_names=login_names)
+        await state.set_state(MassDeleteForm.confirmation)
+        await message.answer(
+            "Будут безвозвратно удалены учётные записи:\n"
+            + "\n".join(f"• {login_name}" for login_name in login_names)
+            + "\n\nПодтвердите удаление.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="🗑 Подтвердить удаление", callback_data="dam_delete:mass_confirm")],
+                    [InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:mass_delete")],
+                ]
+            ),
         )
-        executor = PostgreSQLGrantExecutor(
-            repository=repository, secret_resolver=EnvironmentSecretResolver()
-        )
-        await message.answer(f"Начинаю удаление {len(login_names)} пользователей…")
-        results: list[str] = []
-        for login_name in login_names:
-            deleted = await asyncio.to_thread(executor.delete_user, login_name)
-            results.append(f"{'✅' if deleted else '❌'} {login_name}")
-        await message.answer("Итог массового удаления:\n" + "\n".join(results))
 
     @router.message(DeleteUserForm.login)
     async def delete_user_from_button(message: Message, state: FSMContext) -> None:
-        """Удаляет пользователя, логин которого руководитель ввёл после кнопки."""
+        """Запрашивает подтверждение удаления логина, введённого руководителем.
+
+        Метод не запускает `DROP ROLE` сразу после ввода, чтобы случайная ошибка
+        в логине не приводила к необратимому закрытию доступа сотрудника.
+        """
 
         if not _is_manager_chat(message.chat.id, settings):
             await state.clear()
@@ -296,6 +545,32 @@ def create_database_access_router():
         if not login_name:
             await message.answer("Введите непустой логин пользователя.")
             return
+        await state.update_data(login_name=login_name)
+        await state.set_state(DeleteUserForm.confirmation)
+        await message.answer(
+            f"Будет безвозвратно удалён пользователь {login_name}. Подтвердите удаление.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="🗑 Подтвердить удаление", callback_data="dam_delete:single_confirm")],
+                    [InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:single_delete")],
+                ]
+            ),
+        )
+
+    @router.callback_query(DeleteUserForm.confirmation, lambda query: query.data == "dam_delete:single_confirm")
+    async def confirm_single_user_deletion(query: CallbackQuery, state: FSMContext) -> None:
+        """Удаляет одного пользователя только после явного подтверждения руководителя."""
+
+        if query.message is None or not _is_manager_chat(query.message.chat.id, settings):
+            await query.answer("Доступ не разрешён", show_alert=True)
+            return
+        form_data = await state.get_data()
+        login_name = form_data.get("login_name")
+        if not isinstance(login_name, str):
+            await state.clear()
+            await query.answer("Данные формы устарели", show_alert=True)
+            return
+        await query.answer("Удаляю пользователя…")
         service_settings = DatabaseAccessManagementSettings.from_env()
         repository = AccessGrantRepository.from_database_url(
             service_settings.database_url, schema_name=service_settings.schema_name
@@ -303,15 +578,149 @@ def create_database_access_router():
         executor = PostgreSQLGrantExecutor(
             repository=repository, secret_resolver=EnvironmentSecretResolver()
         )
-        await message.answer(f"Удаляю пользователя {login_name}…")
         deleted = await asyncio.to_thread(executor.delete_user, login_name)
         await state.clear()
-        await message.answer(
-            f"Пользователь {login_name} удалён." if deleted else "Не удалось удалить пользователя."
+        await query.message.answer(
+            f"Пользователь {login_name} удалён, связанные активные доступы закрыты."
+            if deleted
+            else "Не удалось удалить пользователя."
         )
 
+    @router.callback_query(MassDeleteForm.confirmation, lambda query: query.data == "dam_delete:mass_confirm")
+    async def confirm_mass_user_deletion(query: CallbackQuery, state: FSMContext) -> None:
+        """Удаляет список пользователей только после явного подтверждения руководителя."""
+
+        if query.message is None or not _is_manager_chat(query.message.chat.id, settings):
+            await query.answer("Доступ не разрешён", show_alert=True)
+            return
+        form_data = await state.get_data()
+        login_names = form_data.get("login_names")
+        if not isinstance(login_names, list) or not all(isinstance(name, str) for name in login_names):
+            await state.clear()
+            await query.answer("Данные формы устарели", show_alert=True)
+            return
+        await query.answer("Удаляю пользователей…")
+        service_settings = DatabaseAccessManagementSettings.from_env()
+        repository = AccessGrantRepository.from_database_url(
+            service_settings.database_url, schema_name=service_settings.schema_name
+        )
+        executor = PostgreSQLGrantExecutor(
+            repository=repository, secret_resolver=EnvironmentSecretResolver()
+        )
+        results: list[str] = []
+        for login_name in login_names:
+            deleted = await asyncio.to_thread(executor.delete_user, login_name)
+            results.append(f"{'✅' if deleted else '❌'} {login_name}")
+        await state.clear()
+        await query.message.answer("Итог массового удаления:\n" + "\n".join(results))
+
+    @router.callback_query(lambda query: query.data and query.data.startswith("dam_back:"))
+    async def go_back(query: CallbackQuery, state: FSMContext) -> None:
+        """Возвращает руководителя на предыдущий шаг без запуска SQL-команд.
+
+        Навигация обслуживает безопасное заполнение форм: действие «Назад»
+        меняет только временное состояние Telegram-диалога и не создаёт,
+        не изменяет и не удаляет учётные записи или права в PostgreSQL.
+        """
+
+        if query.message is None or not _is_manager_chat(query.message.chat.id, settings):
+            await query.answer("Доступ не разрешён", show_alert=True)
+            return
+        destination = query.data.removeprefix("dam_back:")
+        if destination == "menu":
+            await state.clear()
+            await query.answer()
+            await query.message.answer("Вы вернулись в главное меню.", reply_markup=reply_keyboard)
+            return
+        if destination == "single_delete":
+            await state.set_state(DeleteUserForm.login)
+            await query.answer()
+            await query.message.answer("Введите другой логин пользователя для удаления.")
+            return
+        if destination == "mass_delete":
+            await state.set_state(MassDeleteForm.logins)
+            await query.answer()
+            await query.message.answer("Отправьте новый список логинов для удаления.")
+            return
+        if destination == "revoke_login":
+            await state.set_state(RevokeForm.login)
+            await query.answer()
+            await query.message.answer("Введите другой логин для поиска доступов.")
+            return
+        if destination == "active_login":
+            await state.set_state(ActiveAccessForm.login)
+            await query.answer()
+            await query.message.answer("Введите другой логин сотрудника.")
+            return
+        if destination == "grant_target":
+            await state.set_state(GrantForm.target)
+            await query.answer()
+            await start_grant(query.message, state)
+            return
+        if destination == "grant_level":
+            await state.set_state(GrantForm.level)
+            await query.answer()
+            await query.message.answer(
+                "Выберите роль:",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="Чтение схемы", callback_data="dam_level:read_all")],
+                        [InlineKeyboardButton(text="Запись в схему", callback_data="dam_level:write")],
+                        [InlineKeyboardButton(text="Управление схемой", callback_data="dam_level:full_access")],
+                        [InlineKeyboardButton(text="Чтение отдельных таблиц", callback_data="dam_level:read_tables")],
+                        [InlineKeyboardButton(text="Полный доступ ко всем схемам", callback_data="dam_level:full_all")],
+                        [InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:grant_target")],
+                    ]
+                ),
+            )
+            return
+        if destination == "grant_schema":
+            service_settings = DatabaseAccessManagementSettings.from_env()
+            adapter = PostgreSQLAccessAdapter(service_settings.database_url)
+            try:
+                schema_names = await asyncio.to_thread(adapter.list_user_schemas)
+            except Exception as error:
+                logger.error(
+                    "Не удалось получить схемы PostgreSQL при возврате в форме доступа | "
+                    "error_type=%s",
+                    type(error).__name__,
+                )
+                await state.clear()
+                await query.answer()
+                await query.message.answer("Не удалось загрузить схемы PostgreSQL. Начните заново: /grant")
+                return
+            if not schema_names:
+                await state.clear()
+                await query.answer()
+                await query.message.answer("В целевой базе не найдены прикладные схемы.")
+                return
+            await state.set_state(GrantForm.schema)
+            await query.answer()
+            await query.message.answer(
+                "Выберите схему:",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text=schema_name, callback_data=f"dam_schema:{schema_name}")]
+                        for schema_name in schema_names
+                    ] + [[InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:grant_level")]]
+                ),
+            )
+            return
+        await query.answer("Предыдущий шаг больше недоступен", show_alert=True)
+
+    @router.callback_query(lambda query: query.data == "dam_delete:cancel")
+    async def cancel_user_deletion(query: CallbackQuery, state: FSMContext) -> None:
+        """Отменяет неподтверждённое удаление до выполнения команд PostgreSQL."""
+
+        if query.message is None or not _is_manager_chat(query.message.chat.id, settings):
+            await query.answer("Доступ не разрешён", show_alert=True)
+            return
+        await state.clear()
+        await query.answer()
+        await query.message.answer("Удаление отменено. Учётные записи не изменены.")
+
     @router.callback_query(lambda query: query.data and query.data.startswith("dam_menu:"))
-    async def handle_menu(query: CallbackQuery) -> None:
+    async def handle_menu(query: CallbackQuery, state: FSMContext) -> None:
         """Обрабатывает кнопки главного меню без выполнения опасных действий."""
 
         if query.message is None or not _is_manager_chat(query.message.chat.id, settings):
@@ -320,11 +729,18 @@ def create_database_access_router():
         action = query.data.removeprefix("dam_menu:")
         prompts = {
             "grant": "Введите /grant, чтобы выбрать базу и роль.",
-            "accesses": "Введите /accesses, чтобы увидеть управляемые сервисом доступы.",
             "revoke": "Сначала найдите номер: /accesses, затем /revoke <номер>.",
             "delete": "Введите /delete_user <логин> для безвозвратного удаления пользователя.",
             "mass_delete": "Нажмите постоянную кнопку «🗑 Массовое удаление».",
         }
+        if action == "accesses":
+            await request_active_access_login(query.message, state)
+            await query.answer()
+            return
+        if action == "inventory":
+            await inventory_button(query.message, state)
+            await query.answer()
+            return
         if action != "inventory":
             prompt = prompts.get(action)
             if prompt is None:
@@ -333,22 +749,6 @@ def create_database_access_router():
             await query.message.answer(prompt)
             await query.answer()
             return
-        await query.answer("Ищу существующие доступы…")
-        await query.message.answer("Ищу существующие PostgreSQL-доступы…")
-        service_settings = DatabaseAccessManagementSettings.from_env()
-        inventory = PostgreSQLAccessInventory(service_settings.database_url)
-        accesses = await asyncio.to_thread(inventory.list_users_and_role_memberships)
-        if not accesses:
-            await query.message.answer("В PostgreSQL не найдены прикладные пользователи.")
-        else:
-            lines = ["Пользователи PostgreSQL и их роли:"]
-            lines.extend(
-                f"• {item.login_name} → {item.role_name or 'роль не назначена'}"
-                for item in accesses[:100]
-            )
-            if len(accesses) > 100:
-                lines.append(f"Показаны первые 100 из {len(accesses)} записей.")
-            await query.message.answer("\n".join(lines))
 
     @router.message(Command("grant"))
     async def start_grant(message: Message, state: FSMContext) -> None:
@@ -369,39 +769,33 @@ def create_database_access_router():
             inline_keyboard=[
                 [InlineKeyboardButton(text=target.display_name, callback_data=f"dam_target:{target.target_id}")]
                 for target in targets
-            ]
+            ] + [[InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:menu")]]
         )
         await state.set_state(GrantForm.target)
         await message.answer("Выберите PostgreSQL-базу:", reply_markup=keyboard)
 
     @router.message(Command("accesses"))
-    async def list_accesses(message: Message, command: CommandObject) -> None:
-        """Показывает активные доступы логина без раскрытия секретов."""
+    async def list_accesses(
+        message: Message,
+        command: CommandObject,
+        state: FSMContext,
+    ) -> None:
+        """Запускает просмотр действующих доступов конкретного логина.
+
+        Команда обслуживает тот же сценарий, что и кнопка «Активные доступы»,
+        и принимает логин как необязательный аргумент. Если аргумент не указан,
+        бот запрашивает его до выбора PostgreSQL-базы. Команда не обращается к
+        журналу заявок сервиса.
+        """
 
         if not _is_manager_chat(message.chat.id, settings):
             await message.answer("Доступ к управлению доступами не разрешён.")
             return
         login_name = (command.args or "").strip() or None
-        service_settings = DatabaseAccessManagementSettings.from_env()
-        repository = AccessGrantRepository.from_database_url(
-            service_settings.database_url, schema_name=service_settings.schema_name
-        )
-        grants = repository.list_active_grants(login_name)
-        if not grants:
-            await message.answer("Активные PostgreSQL-доступы не найдены.")
+        if login_name is None:
+            await request_active_access_login(message, state)
             return
-        lines = [
-            f"Активные доступы для {login_name}:"
-            if login_name
-            else "Все активные PostgreSQL-доступы:"
-        ]
-        for grant in grants:
-            lines.append(
-                f"• {grant['database_name']} — {grant['access_level']}\n"
-                f"  распоряжение: {grant['id']}"
-            )
-        lines.append("Фильтр: /accesses <логин>\nДля отзыва: /revoke <номер_распоряжения>")
-        await message.answer("\n".join(lines))
+        await request_active_access_target(message, state, login_name)
 
     @router.message(Command("revoke"))
     async def revoke_access(message: Message, command: CommandObject) -> None:
@@ -427,7 +821,7 @@ def create_database_access_router():
         )
 
     @router.callback_query(lambda query: query.data and query.data.startswith("dam_revoke:"))
-    async def revoke_grant_from_button(query: CallbackQuery) -> None:
+    async def revoke_grant_from_button(query: CallbackQuery, state: FSMContext) -> None:
         """Отзывает выбранный в интерфейсе активный доступ PostgreSQL."""
 
         if query.message is None or not _is_manager_chat(query.message.chat.id, settings):
@@ -443,11 +837,21 @@ def create_database_access_router():
             repository=repository, secret_resolver=EnvironmentSecretResolver()
         )
         revoked = await asyncio.to_thread(executor.revoke, grant_id)
+        await state.clear()
         await query.message.answer("Доступ отозван." if revoked else "Не удалось отозвать доступ.")
 
     @router.message(Command("delete_user"))
-    async def delete_user(message: Message, command: CommandObject) -> None:
-        """Удаляет непривилегированную учётную запись PostgreSQL по логину."""
+    async def delete_user(
+        message: Message,
+        command: CommandObject,
+        state: FSMContext,
+    ) -> None:
+        """Запрашивает подтверждение удаления логина из команды руководителя.
+
+        Метод защищает командный сценарий наравне с кнопкой интерфейса: ввод
+        `/delete_user` не должен запускать необратимый `DROP ROLE` без явного
+        нажатия кнопки подтверждения.
+        """
 
         if not _is_manager_chat(message.chat.id, settings):
             await message.answer("Доступ к управлению доступами не разрешён.")
@@ -456,16 +860,16 @@ def create_database_access_router():
         if not login_name:
             await message.answer("Укажите логин: /delete_user ivanov_i")
             return
-        service_settings = DatabaseAccessManagementSettings.from_env()
-        repository = AccessGrantRepository.from_database_url(
-            service_settings.database_url, schema_name=service_settings.schema_name
-        )
-        executor = PostgreSQLGrantExecutor(
-            repository=repository, secret_resolver=EnvironmentSecretResolver()
-        )
-        deleted = await asyncio.to_thread(executor.delete_user, login_name)
+        await state.update_data(login_name=login_name)
+        await state.set_state(DeleteUserForm.confirmation)
         await message.answer(
-            f"Пользователь {login_name} удалён." if deleted else "Не удалось удалить пользователя."
+            f"Будет безвозвратно удалён пользователь {login_name}. Подтвердите удаление.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="🗑 Подтвердить удаление", callback_data="dam_delete:single_confirm")],
+                    [InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:single_delete")],
+                ]
+            ),
         )
 
     @router.callback_query(GrantForm.target, lambda query: query.data and query.data.startswith("dam_target:"))
@@ -484,6 +888,7 @@ def create_database_access_router():
                 [InlineKeyboardButton(text="Управление схемой", callback_data="dam_level:full_access")],
                 [InlineKeyboardButton(text="Чтение отдельных таблиц", callback_data="dam_level:read_tables")],
                 [InlineKeyboardButton(text="Полный доступ ко всем схемам", callback_data="dam_level:full_all")],
+                [InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:grant_target")],
             ]
         )
         await state.set_state(GrantForm.level)
@@ -501,7 +906,14 @@ def create_database_access_router():
         if selected_level == "full_all":
             await state.update_data(level="full_access", schema_name=None)
             await state.set_state(GrantForm.details)
-            await query.message.answer("Отправьте логин пользователя PostgreSQL\n\nПример: ivanov_i")
+            await query.message.answer(
+                "Отправьте логин пользователя PostgreSQL\n\nПример: ivanov_i",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:grant_level")]
+                    ]
+                ),
+            )
             await query.answer()
             return
         await query.answer("Загружаю схемы…")
@@ -527,7 +939,7 @@ def create_database_access_router():
             inline_keyboard=[
                 [InlineKeyboardButton(text=schema_name, callback_data=f"dam_schema:{schema_name}")]
                 for schema_name in schema_names
-            ]
+            ] + [[InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:grant_level")]]
         )
         await query.message.answer("Выберите схему:", reply_markup=keyboard)
 
@@ -547,7 +959,14 @@ def create_database_access_router():
             if form_data["level"] == "read_tables"
             else "Отправьте логин пользователя PostgreSQL"
         )
-        await query.message.answer(f"{prompt}\n\nПример: ivanov_i")
+        await query.message.answer(
+            f"{prompt}\n\nПример: ivanov_i",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:grant_schema")]
+                ]
+            ),
+        )
         await query.answer()
 
     @router.message(GrantForm.details)

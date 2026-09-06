@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from src_oop.jobs.database_access_management.models import (
     AccessGrantRequest,
@@ -97,8 +98,9 @@ class PostgreSQLAccessAdapter:
         `vector_db_public_prod_manage`. Это реализует бизнес-правило понятных
         переиспользуемых ролей: сотрудники с одинаковыми правами получают
         членство в одной роли, а не индивидуальные `GRANT`. Для набора отдельных
-        таблиц имена таблиц добавляются в роль; хэш используется только если
-        читаемое имя превысило ограничение PostgreSQL в 63 символа.
+        таблиц используется суффикс `separate` и короткий хэш набора: имя не
+        раскрывает длинный перечень таблиц, но разные наборы не смешивают права
+        разных сотрудников в одной роли.
         """
 
         access_name = {
@@ -111,7 +113,12 @@ class PostgreSQLAccessAdapter:
         schema_part = (request.scope.schema_name or "all_schemas").lower()
         role_parts = [database_part, schema_part, _ROLE_ENVIRONMENT, access_name]
         if request.level is AccessLevel.READ_TABLES:
-            role_parts.extend(sorted(table_name.lower() for table_name in request.scope.tables))
+            readable_name = "_".join((*role_parts, "separate"))
+            scope_key = ":".join(
+                (*role_parts, *sorted(table_name.lower() for table_name in request.scope.tables))
+            )
+            digest = hashlib.sha256(scope_key.encode("utf-8")).hexdigest()[:12]
+            return f"{readable_name[:50]}_{digest}"
         readable_name = "_".join(role_parts)
         if len(readable_name) <= 63:
             return readable_name
@@ -253,16 +260,49 @@ class PostgreSQLAccessAdapter:
     def apply_grant_plan(self, plan: PostgreSQLGrantPlan) -> None:
         """Применяет подготовленный план выдачи прав в одной транзакции.
 
-        Метод вызывается техническим исполнителем после принятия распоряжения. Если любая команда
-        завершается ошибкой, транзакция откатывается и пользователь не получает
-        частичный набор прав; вызывающий слой должен перевести заявку в `failed`.
+        Метод вызывается техническим исполнителем после принятия распоряжения.
+        Если любая команда завершается ошибкой, транзакция откатывается и
+        пользователь не получает частичный набор прав. Для безопасной
+        диагностики в лог записываются SQLSTATE, порядковый номер и тип команды,
+        но не её текст, пароль или строка подключения.
         """
 
-        with self._engine.begin() as connection:
-            for statement in plan.statements:
-                connection.execute(text(statement))
+        statement_index = 0
+        statement_type = "не определён"
+        try:
+            with self._engine.begin() as connection:
+                for statement_index, statement in enumerate(plan.statements, start=1):
+                    statement_type = statement.split(maxsplit=1)[0].upper()
+                    connection.execute(text(statement))
+        except SQLAlchemyError as error:
+            logger.error(
+                "Не удалось применить команду плана прав PostgreSQL | "
+                "role_name=%s | statement_index=%s | statement_type=%s | sqlstate=%s",
+                plan.role_name,
+                statement_index,
+                statement_type,
+                self._get_sqlstate(error) or "не передан драйвером",
+            )
+            raise
 
         logger.info("Права PostgreSQL применены | role_name=%s", plan.role_name)
+
+    @staticmethod
+    def _get_sqlstate(error: SQLAlchemyError) -> str | None:
+        """Извлекает SQLSTATE драйвера без небезопасного текста исключения.
+
+        Вспомогательный метод защищает диагностику выдачи прав: `psycopg2`
+        передаёт код как `pgcode`, а современные драйверы могут использовать
+        `sqlstate`. Возвращается только стандартизированный код PostgreSQL,
+        который не содержит паролей, URL или текста запроса.
+        """
+
+        database_error = getattr(error, "orig", None)
+        for attribute_name in ("sqlstate", "pgcode"):
+            sqlstate = getattr(database_error, attribute_name, None)
+            if isinstance(sqlstate, str) and sqlstate:
+                return sqlstate
+        return None
 
     def ensure_login_role(self, login_name: str, password: str) -> None:
         """Создаёт или обновляет персональную учётную запись PostgreSQL.

@@ -35,17 +35,29 @@ class SecretResolver(Protocol):
 class EnvironmentSecretResolver:
     """Временный резолвер секретов из окружения до подключения Vault.
 
-    Резолвер обслуживает MVP: `env://postgresql/admin` использует существующие
-    `DB_*` настройки, а `env://ИМЯ_ПЕРЕМЕННОЙ` читает пароль только из окружения
-    процесса. Значение секрета не попадает в логи или исключения.
+    Резолвер обслуживает MVP: `env://postgresql/admin` использует `DB_*`, а
+    `env://postgresql/fbs_admin` — `DB_*_FBS`. Ссылки на пароли читаются только
+    из окружения процесса. Значение секрета не попадает в логи или исключения.
     """
 
     def resolve_database_url(self, secret_ref: str) -> str:
-        """Возвращает URL администратора PostgreSQL для зарегистрированной цели."""
+        """Возвращает URL администратора PostgreSQL для зарегистрированной цели.
 
-        if secret_ref != "env://postgresql/admin":
-            raise ValueError("Для PostgreSQL MVP поддерживается env://postgresql/admin.")
-        return DatabaseAccessManagementSettings.from_env().database_url
+        Метод обслуживает несколько баз в Telegram-боте: каждая разрешённая
+        ссылка соответствует фиксированному набору переменных окружения, поэтому
+        оператор не может подставить произвольный URL или раскрыть пароль.
+        """
+
+        variable_suffixes = {
+            "env://postgresql/admin": "",
+            "env://postgresql/fbs_admin": "_FBS",
+        }
+        variable_suffix = variable_suffixes.get(secret_ref)
+        if variable_suffix is None:
+            raise ValueError("Для PostgreSQL MVP указана неподдерживаемая ссылка администратора.")
+        return DatabaseAccessManagementSettings.build_database_url_from_environment(
+            variable_suffix,
+        )
 
     def resolve_password(self, secret_ref: str) -> str:
         """Возвращает пароль из явно разрешённой переменной окружения.
@@ -190,14 +202,17 @@ class PostgreSQLGrantExecutor:
 
         Метод обслуживает команду руководителя удаления учётной записи. Перед
         `DROP ROLE` используется только административное подключение из
-        окружения; пароль пользователя, его секретная ссылка и данные объектов
-        не читаются и не попадают в журнал.
+        окружения. После успешного удаления закрывает все активные управляемые
+        распоряжения логина в служебной базе и фиксирует аудит. Пароль
+        пользователя, его секретная ссылка и данные объектов не читаются и не
+        попадают в журнал.
         """
 
         try:
             database_url = self.secret_resolver.resolve_database_url("env://postgresql/admin")
             adapter = self.adapter_factory(database_url)
             adapter.delete_login_role(login_name)
+            self.repository.revoke_active_grants_for_deleted_login(login_name)
         except Exception as error:
             logger.error(
                 "Удаление учётной записи PostgreSQL завершилось ошибкой | "

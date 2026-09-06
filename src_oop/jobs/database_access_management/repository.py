@@ -260,6 +260,60 @@ class AccessGrantRepository:
                 )
             )
 
+    def revoke_active_grants_for_deleted_login(self, login_name: str) -> int:
+        """Закрывает активные PostgreSQL-распоряжения после удаления логина.
+
+        Метод обслуживает увольнение сотрудника или закрытие сервисной учётной
+        записи. После успешного `DROP ROLE` в PostgreSQL все управляемые этим
+        сервисом активные права данного логина становятся недействительными,
+        поэтому они одновременно получают статус `revoked`, время отзыва и
+        отдельную неизменяемую запись аудита. Пароли и ссылки на секреты в аудит
+        не включаются.
+        """
+
+        revoked_at = datetime.now(UTC)
+        with self.engine.begin() as connection:
+            grant_ids = connection.execute(
+                select(access_grants.c.id).where(
+                    access_grants.c.login_name == login_name,
+                    access_grants.c.engine == "postgresql",
+                    access_grants.c.status == AccessGrantStatus.ACTIVE.value,
+                )
+            ).scalars().all()
+            if not grant_ids:
+                return 0
+            connection.execute(
+                update(access_grants)
+                .where(access_grants.c.id.in_(grant_ids))
+                .values(
+                    status=AccessGrantStatus.REVOKED.value,
+                    revoked_at=revoked_at,
+                    updated_at=revoked_at,
+                )
+            )
+            connection.execute(
+                access_audit_log.insert(),
+                [
+                    {
+                        "id": str(uuid4()),
+                        "grant_id": grant_id,
+                        "action": "grant_revoked_user_deleted",
+                        "actor_id": "technical_executor",
+                        "details": {"login_name": login_name},
+                        "created_at": revoked_at,
+                    }
+                    for grant_id in grant_ids
+                ],
+            )
+
+        logger.info(
+            "Закрыты активные распоряжения удалённого PostgreSQL-логина | "
+            "login_name=%s | grants_count=%s",
+            login_name,
+            len(grant_ids),
+        )
+        return len(grant_ids)
+
     def get_applied_role_name(self, grant_id: str) -> str | None:
         """Возвращает фактическое имя роли, назначенной по распоряжению.
 
@@ -474,6 +528,30 @@ class AccessGrantRepository:
             ).mappings().all()
         return [DatabaseTargetResponse.model_validate(row) for row in target_rows]
 
+    def get_active_target_admin_secret_ref(
+        self,
+        target_id: str,
+        engine_name: str,
+    ) -> str:
+        """Возвращает ссылку на секрет активной цели для технического чтения.
+
+        Метод обслуживает read-only просмотр действующих доступов выбранной БД.
+        Ссылка на административный секрет не возвращается в Telegram и не
+        попадает в лог: она передаётся только внутреннему резолверу, который
+        открывает подключение для чтения каталога PostgreSQL.
+        """
+
+        query = select(database_targets.c.admin_secret_ref).where(
+            database_targets.c.target_id == target_id,
+            database_targets.c.engine == engine_name,
+            database_targets.c.is_active.is_(True),
+        )
+        with self.engine.connect() as connection:
+            secret_ref = connection.execute(query).scalar_one_or_none()
+        if not isinstance(secret_ref, str):
+            raise LookupError("Выбранная цель PostgreSQL недоступна.")
+        return secret_ref
+
     def list_active_grants(self, login_name: str | None = None) -> list[dict[str, str]]:
         """Возвращает активные PostgreSQL-доступы для просмотра и отзыва.
 
@@ -502,6 +580,42 @@ class AccessGrantRepository:
         with self.engine.connect() as connection:
             rows = connection.execute(query).mappings().all()
         return [dict(row) for row in rows]
+
+    def list_active_read_table_scopes(
+        self,
+        login_name: str,
+        target_id: str,
+    ) -> dict[str, tuple[str, ...]]:
+        """Возвращает таблицы активных ролей, выданных ботом выбранному логину.
+
+        Метод обслуживает точечный экран «Активные доступы». Таблицы берутся
+        только из активных распоряжений уровня `read_tables` в служебном
+        хранилище, поэтому бот не пытается восстановить их по имени роли и не
+        показывает отозванные или отменённые права.
+        """
+
+        query = select(access_grants.c.id, access_grants.c.table_names).where(
+            access_grants.c.login_name == login_name,
+            access_grants.c.target_id == target_id,
+            access_grants.c.engine == "postgresql",
+            access_grants.c.access_level == AccessLevel.READ_TABLES.value,
+            access_grants.c.status == AccessGrantStatus.ACTIVE.value,
+        )
+        with self.engine.connect() as connection:
+            rows = connection.execute(query).mappings().all()
+
+        table_scopes: dict[str, tuple[str, ...]] = {}
+        for row in rows:
+            role_name = self.get_applied_role_name(row["id"])
+            table_names = row["table_names"]
+            if role_name is None or not isinstance(table_names, list):
+                continue
+            normalized_table_names = tuple(
+                table_name for table_name in table_names if isinstance(table_name, str)
+            )
+            if normalized_table_names:
+                table_scopes[role_name] = normalized_table_names
+        return table_scopes
 
     def create_pending_grant(self, request: AccessGrantRequest) -> AccessGrantResponse:
         """Сохраняет новую заявку и аудит её создания в одной транзакции.
