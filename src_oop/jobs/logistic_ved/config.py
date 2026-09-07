@@ -93,18 +93,22 @@ SUPPLY_ACCEPTANCE_STATUS_QUERY = text(
     """
 )
 
-# SQL-запрос для заполнения фактической даты прибытия на склад по номеру трака.
-# Если по одному траку в БД встретится несколько разных дат, окончательное
-# решение принимает код: такие случаи не заполняются автоматически, чтобы не
-# подставить в ОТЧЁТ_2.0 неверную дату.
-TRUCK_ARRIVAL_DATE_QUERY = text(
+# SQL-запрос для заполнения фактической даты прибытия на склад по связке
+# номера трака и номера ТС. Если по одной связке в БД встретится несколько
+# разных дат, окончательное решение принимает код: такие случаи не заполняются
+# автоматически, чтобы не подставить в ОТЧЁТ_2.0 неверную дату.
+TRUCK_TRANSPORT_ARRIVAL_DATE_QUERY = text(
     """
     SELECT
-           DISTINCT btrim(s.truck_number) AS truck_number,
+           DISTINCT
+           btrim(s.truck_number) AS truck_number,
+           btrim(s.transport_number) AS transport_number,
            DATE(s.supply_date) AS supply_date
     FROM supply_to_sellers_warehouse s
     WHERE s.truck_number IS NOT NULL
       AND btrim(s.truck_number) <> ''
+      AND s.transport_number IS NOT NULL
+      AND btrim(s.transport_number) <> ''
       AND s.is_valid IS TRUE;
     """
 )

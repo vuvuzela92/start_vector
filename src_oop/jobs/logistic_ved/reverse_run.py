@@ -40,7 +40,7 @@ from src_oop.core.my_gspread import GoogleTabs
 from src_oop.jobs.logistic_ved.config import (
     LOGISTIC_TO_CHINA_SYNC_COLS,
     SUPPLY_ACCEPTANCE_STATUS_QUERY,
-    TRUCK_ARRIVAL_DATE_QUERY,
+    TRUCK_TRANSPORT_ARRIVAL_DATE_QUERY,
     delivery_calculation_china,
     ved_logistics_2026,
 )
@@ -153,8 +153,8 @@ BATCH_UPDATE_CHUNK_SIZE = 500
 LAST_SYNC_CELL = "B1"
 # Ключ автоматической приемки: номер трака, номер ТС, wild и номер заказа в 1С.
 AcceptanceKey = tuple[str, str, str, str]
-# Ключ словаря дат прибытия: номер трака.
-TruckNumberKey = str
+# Ключ словаря дат прибытия: номер трака и номер ТС.
+TruckTransportKey = tuple[str, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -575,15 +575,16 @@ class LogisticVedReverseUpdater:
         target_headers: list[str],
         target_rows_by_key: dict[str, TargetRowSnapshot],
     ) -> list[dict[str, object]]:
-        """Готовит обновления даты прибытия на склад в ОТЧЁТ_2.0 по номеру трака.
+        """Готовит обновления даты прибытия по связке номера трака и номера ТС.
 
         Бизнес-логика:
         поле ``ФАКТИЧЕСКАЯ ДАТА ПРИБЫТИЯ НА СКЛАД ОТ НАС`` заполняется из БД по
-        ``Номер Трака``. Если дата по траку не найдена, строка не меняется. Если
-        по одному траку найдено несколько разных дат, строка тоже не меняется,
-        потому что автоматический выбор даты в такой ситуации рискован.
+        связке ``Номер Трака + Номер ТС``. Если дата по связке не найдена, строка
+        не меняется. Если по одной связке найдено несколько разных дат, строка
+        тоже не меняется, потому что автоматический выбор даты в такой ситуации
+        рискован.
         """
-        arrival_dates_by_truck = self._load_truck_arrival_dates()
+        arrival_dates_by_key = self._load_truck_arrival_dates()
         target_header_map = {header: index + 1 for index, header in enumerate(target_headers)}
         update_map: dict[str, dict[str, object]] = {}
         summary = self._build_empty_truck_arrival_date_summary()
@@ -595,18 +596,22 @@ class LogisticVedReverseUpdater:
                 updated_rows=summary.updated_rows,
                 ambiguous_rows=summary.ambiguous_rows,
             )
-            truck_number = self._normalize_string(target_snapshot.values.get(TRUCK_NUMBER_COLUMN, ""))
-            if truck_number == "":
+            arrival_key = self._build_truck_transport_key(
+                truck_number=target_snapshot.values.get(TRUCK_NUMBER_COLUMN, ""),
+                transport_number=target_snapshot.values.get(TRANSPORT_NUMBER_COLUMN, ""),
+            )
+            if not all(arrival_key):
                 continue
 
-            arrival_dates = arrival_dates_by_truck.get(truck_number)
+            arrival_dates = arrival_dates_by_key.get(arrival_key)
             if not arrival_dates:
                 continue
 
             if len(arrival_dates) > 1:
                 logger.warning(
-                    "Автозаполнение даты прибытия на склад пропущено: по номеру трака найдено несколько дат в БД. Нужна ручная проверка: truck_number=%s order_line_id=%s dates=%s",
-                    truck_number,
+                    "Автозаполнение даты прибытия на склад пропущено: по связке трака и номера ТС найдено несколько дат в БД. Нужна ручная проверка: truck_number=%s transport_number=%s order_line_id=%s dates=%s",
+                    arrival_key[0],
+                    arrival_key[1],
                     order_line_id,
                     ", ".join(arrival_dates),
                 )
@@ -786,37 +791,41 @@ class LogisticVedReverseUpdater:
         )
         return acceptance_lookup
 
-    def _load_truck_arrival_dates(self) -> dict[TruckNumberKey, list[str]]:
-        """Читает из БД даты прибытия на склад и группирует их по номеру трака.
+    def _load_truck_arrival_dates(self) -> dict[TruckTransportKey, list[str]]:
+        """Читает из БД даты прибытия и группирует их по траку и номеру ТС.
 
         Бизнес-логика:
-        дата прибытия в ОТЧЁТ_2.0 ищется только по ``Номер Трака``. Запрос может
-        вернуть несколько дат для одного трака, поэтому метод не выбирает одну из
-        них самовольно, а сохраняет все уникальные даты для последующей проверки.
+        дата прибытия в ОТЧЁТ_2.0 ищется по связке ``Номер Трака + Номер ТС``.
+        Запрос может вернуть несколько дат для одной связки, поэтому метод не
+        выбирает одну из них самовольно, а сохраняет все уникальные даты для
+        последующей проверки.
         """
-        dataframe = self.database_cls.read_sql_to_dataframe(TRUCK_ARRIVAL_DATE_QUERY)
+        dataframe = self.database_cls.read_sql_to_dataframe(TRUCK_TRANSPORT_ARRIVAL_DATE_QUERY)
         logger.info(
-            "Из БД прочитаны даты прибытия на склад по тракам: rows=%s",
+            "Из БД прочитаны даты прибытия на склад по тракам и номерам ТС: rows=%s",
             len(dataframe.index),
         )
 
-        arrival_dates_by_truck: dict[TruckNumberKey, set[str]] = {}
+        arrival_dates_by_key: dict[TruckTransportKey, set[str]] = {}
         for row in dataframe.to_dict(orient="records"):
-            truck_number = self._normalize_string(row.get("truck_number", ""))
+            arrival_key = self._build_truck_transport_key(
+                truck_number=row.get("truck_number", ""),
+                transport_number=row.get("transport_number", ""),
+            )
             formatted_supply_date = self._format_sheet_date(row.get("supply_date"))
-            if truck_number == "" or formatted_supply_date == "":
+            if not all(arrival_key) or formatted_supply_date == "":
                 continue
 
-            arrival_dates_by_truck.setdefault(truck_number, set()).add(formatted_supply_date)
+            arrival_dates_by_key.setdefault(arrival_key, set()).add(formatted_supply_date)
 
         logger.info(
-            "Подготовлен справочник дат прибытия по тракам: unique_trucks=%s ambiguous_trucks=%s",
-            len(arrival_dates_by_truck),
-            sum(1 for dates in arrival_dates_by_truck.values() if len(dates) > 1),
+            "Подготовлен справочник дат прибытия по тракам и номерам ТС: unique_keys=%s ambiguous_keys=%s",
+            len(arrival_dates_by_key),
+            sum(1 for dates in arrival_dates_by_key.values() if len(dates) > 1),
         )
         return {
-            truck_number: sorted(dates)
-            for truck_number, dates in arrival_dates_by_truck.items()
+            arrival_key: sorted(dates)
+            for arrival_key, dates in arrival_dates_by_key.items()
         }
 
     def _build_final_acceptance_updates(
@@ -1095,6 +1104,23 @@ class LogisticVedReverseUpdater:
             self._normalize_string(transport_number),
             self._normalize_string(wild),
             self._normalize_string(order_number_1c),
+        )
+
+    def _build_truck_transport_key(
+        self,
+        truck_number: object,
+        transport_number: object,
+    ) -> TruckTransportKey:
+        """Собирает нормализованный ключ для поиска даты прибытия в БД.
+
+        Бизнес-логика:
+        один номер трака может быть связан с разными автомобилями. Поэтому дата
+        прибытия разрешается к автоматической записи только после совпадения
+        одновременно номера трака и номера ТС.
+        """
+        return (
+            self._normalize_string(truck_number),
+            self._normalize_string(transport_number),
         )
 
     def _normalize_quantity_for_match(self, value: object) -> Decimal | None:
