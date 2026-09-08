@@ -178,10 +178,11 @@ class SalesPlanManagerReferenceRepository:
         """Нормализует снимок листа перед сохранением в PostgreSQL.
 
         Бизнес-сценарий:
-        для исторического справочника нужно сохранить `wild`, предмет и
-        менеджера в стабильных колонках БД. На этом шаге строки очищаются от
-        пустых ключей, а полю `Артикул` присваивается роль `wild`, потому что
-        именно так текущий источник идентифицирует товар для плана продаж.
+        для исторического справочника нужно сохранить предмет и менеджера в
+        стабильных колонках БД. На этом шаге строки очищаются от пустых
+        значений, а при повторении предмета сохраняется первая строка листа.
+        Это защищает запись в БД, где на дату допускается только один менеджер
+        для одного предмета.
         """
 
         self._validate_required_columns(dataframe)
@@ -199,20 +200,20 @@ class SalesPlanManagerReferenceRepository:
         ].copy()
         duplicate_rows = int(
             prepared_dataframe.duplicated(
-                subset=["subject_name", "manager_name"],
-                keep="last",
+                subset=["subject_name"],
+                keep="first",
             ).sum()
         )
         if duplicate_rows:
             logger.warning(
-                "В источнике найдены повторяющиеся строки по ключу предмет + менеджер, будут сохранены последние значения | duplicate_rows=%s | snapshot_date=%s",
+                "В источнике найдены повторяющиеся предметы, сохранены первые строки листа | duplicate_rows=%s | snapshot_date=%s",
                 duplicate_rows,
                 snapshot_date,
             )
 
         prepared_dataframe = prepared_dataframe.drop_duplicates(
-            subset=["subject_name", "manager_name"],
-            keep="last",
+            subset=["subject_name"],
+            keep="first",
         ).copy()
         prepared_dataframe["snapshot_date"] = snapshot_date
         prepared_dataframe["loaded_at"] = datetime.now(MOSCOW_TIMEZONE).replace(tzinfo=None)
