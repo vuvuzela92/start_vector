@@ -488,6 +488,22 @@ class GoogleTabs:
             value_input_option=value_input_option,
         )
 
+    def format_range(self, range_name: str, format_properties: dict[str, object]) -> None:
+        """Применяет формат отображения к указанному диапазону с retry на временные ошибки.
+
+        Бизнес-сценарий:
+        часть витрин передает даты и время как значения Google Sheets. Метод
+        закрепляет читаемое представление таких данных без изменения самих
+        значений и без затрагивания соседних служебных областей листа.
+        """
+
+        self._execute_google_write_with_retry(
+            operation_name=f"format_range {self.sheet_title.title} {range_name}",
+            func=self.sheet_title.format,
+            ranges=range_name,
+            format=format_properties,
+        )
+
     def _update_df_in_google(self, df: pd.DataFrame, sheet):
         """Полностью перезаписывает рабочую область листа одним безопасным update.
 
