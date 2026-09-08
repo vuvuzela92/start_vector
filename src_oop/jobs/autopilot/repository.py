@@ -7,7 +7,11 @@ from decimal import Decimal
 from sqlalchemy import text
 
 from src_oop.core.database import Database
-from src_oop.jobs.autopilot.models import MetricValues, WBCardSnapshot
+from src_oop.jobs.autopilot.models import (
+    MetricValues,
+    ProfitCalculationInputs,
+    WBCardSnapshot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,20 +95,23 @@ class AutopilotRepository:
         logger.info("Рекламная активность загружена из БД для расчета ПУ: rows=%s", len(result))
         return result
 
-    def fetch_profit_by_cond_orders(
+    def fetch_profit_calculation_inputs(
         self,
         report_date: date,
         articles: list[int],
-    ) -> MetricValues:
+    ) -> ProfitCalculationInputs:
         """
-        Читает прибыль с заказов по ИУ из витрины `orders_articles_analyze`.
+        Читает справочные компоненты для расчета прибыли по ИУ.
 
         Бизнес-логика:
-        hourly-сценарий должен использовать тот же источник прибыли, что и
-        daily-сценарий. Сложная формула с количеством заказов, ценой,
-        индивидуальными условиями и закупкой остается в витрине
-        `orders_articles_analyze`; если по артикулу нет строки за дату отчета,
-        в ПУ остается пропуск, а не fallback-расчет по марже UNIT.
+        hourly-сценарий считает прибыль за текущий день из свежей Воронки WB,
+        но использует те же справочники, что daily-витрина
+        `orders_articles_analyze`: закупочную цену по `local_vendor_code` и
+        индивидуальные условия FBO по предмету товара. Для закупки берется
+        последняя доступная дата не позже даты отчета, потому что справочник
+        может обновляться позже текущего дня. Если справочник не нашелся,
+        calculator применит SQL fallback daily-формулы: закупка `0`,
+        индивидуальные условия `19`.
         """
         if not articles:
             return {}
@@ -121,36 +128,93 @@ class AutopilotRepository:
             text(
                 f"""
                 SELECT
-                    article_id,
-                    profit_by_cond_orders
-                FROM orders_articles_analyze
-                WHERE date = :report_date
-                    AND article_id IN ({placeholders})
+                    base.article_id,
+                    cp.price_date AS purchase_price_date,
+                    COALESCE(cp.purchase_price, 0) AS purchase_price,
+                    COALESCE(
+                        CASE
+                            WHEN :report_date >= DATE '2026-01-01'
+                                THEN ic_2026.fbo_individual_conditions
+                            WHEN :report_date BETWEEN DATE '2025-01-01' AND DATE '2025-12-31'
+                                THEN ic_2025.fbo_individual_conditions
+                            ELSE 19
+                        END,
+                        19
+                    ) AS fbo_individual_conditions
+                FROM (
+                    SELECT
+                        c.article_id,
+                        a.local_vendor_code,
+                        cd.subject_name
+                    FROM card_data AS c
+                    LEFT JOIN article AS a ON c.article_id = a.nm_id
+                    LEFT JOIN card_data AS cd ON c.article_id = cd.article_id
+                    WHERE c.article_id IN ({placeholders})
+                ) AS base
+                LEFT JOIN (
+                    SELECT DISTINCT ON (local_vendor_code)
+                        local_vendor_code,
+                        date AS price_date,
+                        ROUND(AVG(purchase_price) OVER (
+                            PARTITION BY local_vendor_code, date
+                        )) AS purchase_price
+                    FROM cost_price
+                    WHERE date <= :report_date
+                    ORDER BY local_vendor_code, date DESC
+                ) AS cp ON cp.local_vendor_code = base.local_vendor_code
+                LEFT JOIN (
+                    SELECT
+                        subject_name,
+                        AVG(fbo_individual_conditions) AS fbo_individual_conditions,
+                        date_from,
+                        date_to
+                    FROM individual_conditions
+                    WHERE date_from >= DATE '2026-01-01'
+                    GROUP BY subject_name, date_from, date_to
+                ) AS ic_2026
+                    ON ic_2026.subject_name = base.subject_name
+                    AND :report_date BETWEEN ic_2026.date_from AND ic_2026.date_to
+                LEFT JOIN (
+                    SELECT
+                        subject_name,
+                        AVG(fbo_individual_conditions) AS fbo_individual_conditions,
+                        date_from,
+                        date_to
+                    FROM individual_conditions
+                    WHERE date_from BETWEEN DATE '2025-01-01' AND DATE '2025-12-31'
+                    GROUP BY subject_name, date_from, date_to
+                ) AS ic_2025
+                    ON ic_2025.subject_name = base.subject_name
+                    AND :report_date BETWEEN ic_2025.date_from AND ic_2025.date_to
                 """
             ),
             params=params,
         )
         if dataframe.empty:
             logger.warning(
-                "Прибыль с заказов по ИУ не найдена в orders_articles_analyze для почасового ПУ: "
+                "Справочные данные для расчета прибыли по ИУ не найдены для почасового ПУ: "
                 "report_date=%s articles=%s",
                 report_date.strftime("%Y-%m-%d"),
                 len(set(articles)),
             )
             return {}
 
-        result: MetricValues = {}
+        result: ProfitCalculationInputs = {}
         for row in dataframe.to_dict(orient="records"):
             article_id = row.get("article_id")
-            profit = row.get("profit_by_cond_orders")
-            if article_id is None or profit is None:
+            if article_id is None:
                 continue
             try:
-                result[int(article_id)] = float(profit)
+                result[int(article_id)] = {
+                    "purchase_price": float(row.get("purchase_price") or 0),
+                    "fbo_individual_conditions": float(
+                        row.get("fbo_individual_conditions") or 19
+                    ),
+                }
             except (TypeError, ValueError):
                 continue
         logger.info(
-            "Прибыль с заказов по ИУ загружена из orders_articles_analyze для почасового ПУ: "
+            "Справочные данные для расчета прибыли по ИУ загружены для почасового ПУ: "
             "report_date=%s rows=%s",
             report_date.strftime("%Y-%m-%d"),
             len(result),

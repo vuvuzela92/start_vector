@@ -5,6 +5,7 @@ from datetime import datetime
 
 
 MetricValues = dict[int, float | int | str | None]
+ProfitCalculationInputs = dict[int, dict[str, float]]
 
 
 @dataclass(frozen=True, slots=True)

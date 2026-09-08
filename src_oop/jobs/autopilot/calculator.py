@@ -4,7 +4,11 @@ import math
 
 import pandas as pd
 
-from src_oop.jobs.autopilot.models import MetricValues, WBCardSnapshot
+from src_oop.jobs.autopilot.models import (
+    MetricValues,
+    ProfitCalculationInputs,
+    WBCardSnapshot,
+)
 
 
 class AutopilotCalculator:
@@ -34,16 +38,18 @@ class AutopilotCalculator:
     def calculate_financial_metrics(
         funnel_metrics: dict[str, MetricValues],
         adv_spend: MetricValues,
-        profit_by_article: MetricValues,
+        profit_inputs: ProfitCalculationInputs,
     ) -> dict[str, MetricValues]:
         """
         Считает прибыль, ЧП-РК, ДРР и CPO для почасового ПУ.
 
         Бизнес-логика:
-        прибыль с заказов по ИУ берется из `orders_articles_analyze`, чтобы
-        hourly и daily использовали единую формулу с индивидуальными условиями,
-        закупкой и ценой заказа. Если в витрине нет значения прибыли по
-        артикулу, в ПУ остаются пропуски для прибыли и ЧП-РК. ДРР и CPO
+        прибыль с заказов по ИУ считается по формуле daily-витрины
+        `orders_articles_analyze`, но для текущего дня берет количество и сумму
+        заказов из свежей Воронки WB. Закупка и индивидуальные условия приходят
+        из БД, при отсутствии справочников используются SQL fallback daily:
+        закупка `0`, индивидуальные условия `19`. Если Воронка не вернула
+        заказы по артикулу, прибыль и ЧП-РК остаются пропусками. ДРР и CPO
         используют расходы Cometa, потому что для автопилота согласован именно
         этот источник рекламных затрат.
         """
@@ -51,9 +57,27 @@ class AutopilotCalculator:
         orders_count = funnel_metrics.get("orders_count", {})
 
         profit: MetricValues = {}
-        for article_id, value in profit_by_article.items():
-            if AutopilotCalculator._is_present(value):
-                profit[article_id] = float(value)
+        for article_id, count_value in orders_count.items():
+            if not AutopilotCalculator._is_present(count_value):
+                continue
+            order_count = float(count_value or 0)
+            if order_count <= 0:
+                profit[article_id] = 0.0
+                continue
+
+            order_sum = orders_sum.get(article_id)
+            if not AutopilotCalculator._is_present(order_sum):
+                continue
+
+            inputs = profit_inputs.get(article_id, {})
+            purchase_price = float(inputs.get("purchase_price") or 0)
+            fbo_conditions = float(inputs.get("fbo_individual_conditions") or 19)
+            avg_price = float(order_sum or 0) / order_count
+            commission = avg_price / 100 * (8 + fbo_conditions)
+            profit[article_id] = round(
+                order_count * (avg_price - commission - purchase_price),
+                2,
+            )
 
         net_profit: MetricValues = {}
         for article_id in profit:

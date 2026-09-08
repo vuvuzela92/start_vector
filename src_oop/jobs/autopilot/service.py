@@ -63,9 +63,9 @@ class AutopilotHourlyService:
         Бизнес-логика:
         сначала читает артикула из ПУ, собирает Воронку продаж WB, записывает ее метрики
         в Google Sheets и сразу обновляет A2 временем актуализации. После этого сценарий
-        дописывает расходы Cometa, рекламную активность, прибыль по ИУ из
-        `orders_articles_analyze`, остатки UNIT и расчетные показатели порциями
-        по каждой метрике. Онлайн-парсинг цен/СПП/рейтинга WB временно защищен
+        дописывает расходы Cometa, рекламную активность, прибыль по ИУ по
+        формуле daily-витрины, остатки UNIT и расчетные показатели порциями по
+        каждой метрике. Онлайн-парсинг цен/СПП/рейтинга WB временно защищен
         флагом.
         """
         report_date = report_date or date.today()
@@ -112,7 +112,7 @@ class AutopilotHourlyService:
             sheet_title=unit_gs["unit_sheet"],
         )
         unit_remains = self._load_unit_remains(unit_connector)
-        profit_by_article = self.repository.fetch_profit_by_cond_orders(
+        profit_inputs = self.repository.fetch_profit_calculation_inputs(
             report_date=report_date,
             articles=articles,
         )
@@ -120,7 +120,7 @@ class AutopilotHourlyService:
         calculation_metrics = self.calculator.calculate_financial_metrics(
             funnel_metrics=funnel_metrics,
             adv_spend=adv_spend,
-            profit_by_article=profit_by_article,
+            profit_inputs=profit_inputs,
         )
         organic = self.calculator.calculate_organic(
             funnel_metrics=funnel_metrics,
