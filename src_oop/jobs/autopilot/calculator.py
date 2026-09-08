@@ -31,29 +31,32 @@ class AutopilotCalculator:
         return metrics
 
     @staticmethod
-    def calculate_margin_metrics(
+    def calculate_financial_metrics(
         funnel_metrics: dict[str, MetricValues],
         adv_spend: MetricValues,
-        margin_by_article: dict[int, float],
+        profit_by_article: MetricValues,
     ) -> dict[str, MetricValues]:
         """
-        Считает прибыль, ЧП-РК, ДРР и CPO по legacy-формулам.
+        Считает прибыль, ЧП-РК, ДРР и CPO для почасового ПУ.
 
         Бизнес-логика:
-        прибыль берется как сумма заказов из воронки, умноженная на маржу UNIT.
-        ЧП-РК, ДРР и CPO используют расходы Cometa, потому что для автопилота
-        согласован именно этот источник рекламных затрат.
+        прибыль с заказов по ИУ берется из `orders_articles_analyze`, чтобы
+        hourly и daily использовали единую формулу с индивидуальными условиями,
+        закупкой и ценой заказа. Если в витрине нет значения прибыли по
+        артикулу, в ПУ остаются пропуски для прибыли и ЧП-РК. ДРР и CPO
+        используют расходы Cometa, потому что для автопилота согласован именно
+        этот источник рекламных затрат.
         """
         orders_sum = funnel_metrics.get("orders_sum_rub", {})
         orders_count = funnel_metrics.get("orders_count", {})
 
         profit: MetricValues = {}
-        for article_id, order_sum in orders_sum.items():
-            if AutopilotCalculator._is_present(order_sum):
-                profit[article_id] = float(order_sum) * margin_by_article.get(article_id, 1.0)
+        for article_id, value in profit_by_article.items():
+            if AutopilotCalculator._is_present(value):
+                profit[article_id] = float(value)
 
         net_profit: MetricValues = {}
-        for article_id in set(profit) | set(adv_spend):
+        for article_id in profit:
             net_profit[article_id] = float(profit.get(article_id, 0) or 0) - float(
                 adv_spend.get(article_id, 0) or 0
             )

@@ -7,7 +7,7 @@ from decimal import Decimal
 from sqlalchemy import text
 
 from src_oop.core.database import Database
-from src_oop.jobs.autopilot.models import WBCardSnapshot
+from src_oop.jobs.autopilot.models import MetricValues, WBCardSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +89,72 @@ class AutopilotRepository:
                 "views": float(row.get("views") or 0),
             }
         logger.info("Рекламная активность загружена из БД для расчета ПУ: rows=%s", len(result))
+        return result
+
+    def fetch_profit_by_cond_orders(
+        self,
+        report_date: date,
+        articles: list[int],
+    ) -> MetricValues:
+        """
+        Читает прибыль с заказов по ИУ из витрины `orders_articles_analyze`.
+
+        Бизнес-логика:
+        hourly-сценарий должен использовать тот же источник прибыли, что и
+        daily-сценарий. Сложная формула с количеством заказов, ценой,
+        индивидуальными условиями и закупкой остается в витрине
+        `orders_articles_analyze`; если по артикулу нет строки за дату отчета,
+        в ПУ остается пропуск, а не fallback-расчет по марже UNIT.
+        """
+        if not articles:
+            return {}
+
+        params: dict[str, int | date] = {"report_date": report_date}
+        article_params = {
+            f"article_{index}": article_id
+            for index, article_id in enumerate(sorted(set(articles)))
+        }
+        params.update(article_params)
+        placeholders = ", ".join(f":{name}" for name in article_params)
+
+        dataframe = self.database_cls.read_sql_to_dataframe(
+            text(
+                f"""
+                SELECT
+                    article_id,
+                    profit_by_cond_orders
+                FROM orders_articles_analyze
+                WHERE date = :report_date
+                    AND article_id IN ({placeholders})
+                """
+            ),
+            params=params,
+        )
+        if dataframe.empty:
+            logger.warning(
+                "Прибыль с заказов по ИУ не найдена в orders_articles_analyze для почасового ПУ: "
+                "report_date=%s articles=%s",
+                report_date.strftime("%Y-%m-%d"),
+                len(set(articles)),
+            )
+            return {}
+
+        result: MetricValues = {}
+        for row in dataframe.to_dict(orient="records"):
+            article_id = row.get("article_id")
+            profit = row.get("profit_by_cond_orders")
+            if article_id is None or profit is None:
+                continue
+            try:
+                result[int(article_id)] = float(profit)
+            except (TypeError, ValueError):
+                continue
+        logger.info(
+            "Прибыль с заказов по ИУ загружена из orders_articles_analyze для почасового ПУ: "
+            "report_date=%s rows=%s",
+            report_date.strftime("%Y-%m-%d"),
+            len(result),
+        )
         return result
 
     def insert_spp_history_changes(self, snapshots: dict[int, WBCardSnapshot]) -> int:
