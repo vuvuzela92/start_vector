@@ -160,7 +160,7 @@ class AnnualProcurementPlan:
         из 4-й строки, а строки данных начинаются с 5-й, чтобы привязка по
         `wild` совпадала с тем, что видит бизнес в Google Sheets.
         """
-        data = self.annual_plan_connect_to_quarter_sheet.sheet_title.get_all_values()
+        data = self.annual_plan_connect_to_quarter_sheet.get_all_values_with_retry()
         df = pd.DataFrame(data[4:], columns=data[3])
         return df
 

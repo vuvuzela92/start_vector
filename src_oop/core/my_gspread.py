@@ -16,6 +16,7 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 GOOGLE_WRITE_RETRY_ATTEMPTS = 4
+GOOGLE_READ_RETRY_ATTEMPTS = 4
 GOOGLE_WRITE_RETRY_STATUS_CODES = (429, 500, 502, 503, 504)
 GOOGLE_CONNECT_RETRY_ATTEMPTS = 5
 
@@ -310,6 +311,98 @@ class GoogleTabs:
                 time.sleep(wait_seconds)
 
         raise RuntimeError(f"Не удалось завершить операцию записи в Google Sheets: {operation_name}")
+
+    def get_all_values_with_retry(self) -> list[list[str]]:
+        """Читает все значения листа с retry при временных ошибках Google Sheets.
+
+        Бизнес-сценарий:
+        загрузки справочников и планов читают крупные листы Google Sheets по
+        расписанию. Если сервис временно ограничил число запросов ответом
+        `429` или вернул `5xx`, задача выдерживает паузу и повторяет чтение,
+        чтобы не пропускать дневной снимок данных. Ошибки прав доступа и
+        структуры листа не повторяются и передаются вызывающему сценарию.
+        """
+
+        for attempt in range(1, GOOGLE_READ_RETRY_ATTEMPTS + 1):
+            try:
+                return self.sheet_title.get_all_values()
+            except gspread.exceptions.APIError as error:
+                if not self._is_retryable_google_error(error):
+                    logger.exception(
+                        "Чтение Google Sheets завершилось ошибкой, которая не требует повтора | table=%s | sheet=%s | attempt=%s",
+                        self.table_title,
+                        self.sheet_title.title,
+                        attempt,
+                    )
+                    raise
+
+                if attempt == GOOGLE_READ_RETRY_ATTEMPTS:
+                    logger.exception(
+                        "Чтение Google Sheets исчерпало все попытки retry | table=%s | sheet=%s | attempts=%s",
+                        self.table_title,
+                        self.sheet_title.title,
+                        GOOGLE_READ_RETRY_ATTEMPTS,
+                    )
+                    raise
+
+                wait_seconds = self._get_google_retry_delay_seconds(error=error, attempt=attempt)
+                status_code = self._get_google_error_status_code(error)
+                logger.warning(
+                    "Google Sheets временно ограничил чтение, повторяем попытку | table=%s | sheet=%s | status_code=%s | attempt=%s/%s | wait_seconds=%s",
+                    self.table_title,
+                    self.sheet_title.title,
+                    status_code,
+                    attempt,
+                    GOOGLE_READ_RETRY_ATTEMPTS,
+                    wait_seconds,
+                )
+                time.sleep(wait_seconds)
+            except requests.exceptions.RequestException as error:
+                if attempt == GOOGLE_READ_RETRY_ATTEMPTS:
+                    logger.exception(
+                        "Чтение Google Sheets исчерпало все попытки после сетевой ошибки | table=%s | sheet=%s | attempts=%s | error_type=%s",
+                        self.table_title,
+                        self.sheet_title.title,
+                        GOOGLE_READ_RETRY_ATTEMPTS,
+                        type(error).__name__,
+                    )
+                    raise
+
+                wait_seconds = self._get_google_network_retry_delay_seconds(attempt=attempt)
+                logger.warning(
+                    "Сетевая ошибка при чтении Google Sheets, повторяем попытку | table=%s | sheet=%s | attempt=%s/%s | wait_seconds=%s | error_type=%s",
+                    self.table_title,
+                    self.sheet_title.title,
+                    attempt,
+                    GOOGLE_READ_RETRY_ATTEMPTS,
+                    wait_seconds,
+                    type(error).__name__,
+                )
+                time.sleep(wait_seconds)
+            except google_auth_exceptions.TransportError as error:
+                if attempt == GOOGLE_READ_RETRY_ATTEMPTS:
+                    logger.exception(
+                        "Чтение Google Sheets исчерпало все попытки после ошибки транспортного слоя Google Auth | table=%s | sheet=%s | attempts=%s | error_type=%s",
+                        self.table_title,
+                        self.sheet_title.title,
+                        GOOGLE_READ_RETRY_ATTEMPTS,
+                        type(error).__name__,
+                    )
+                    raise
+
+                wait_seconds = self._get_google_network_retry_delay_seconds(attempt=attempt)
+                logger.warning(
+                    "Google Auth временно недоступен при чтении Google Sheets, повторяем попытку | table=%s | sheet=%s | attempt=%s/%s | wait_seconds=%s | error_type=%s",
+                    self.table_title,
+                    self.sheet_title.title,
+                    attempt,
+                    GOOGLE_READ_RETRY_ATTEMPTS,
+                    wait_seconds,
+                    type(error).__name__,
+                )
+                time.sleep(wait_seconds)
+
+        raise RuntimeError("Не удалось прочитать данные из Google Sheets после повторных попыток.")
 
     @staticmethod
     def _get_google_error_status_code(error: gspread.exceptions.APIError) -> int | None:
