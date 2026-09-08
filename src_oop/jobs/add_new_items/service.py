@@ -12,6 +12,7 @@ from src_oop.jobs.add_new_items.config import (
     SOPOST_INSERT_HEADERS,
     STATUS_NO,
     STATUS_YES,
+    UNIT_MAIN_COMMISSION_VALUE,
     UNIT_MAIN_INSERT_HEADERS,
 )
 from src_oop.jobs.add_new_items.models import NewItemCard
@@ -131,7 +132,21 @@ class AddNewItemsService:
         )
 
     def _append_unit_main_rows(self, cards: Sequence[NewItemCard]) -> int:
-        rows = [[card.sku, card.client, card.wild] for card in cards]
+        """Добавляет новые SKU в MAIN (tested) с обязательной комиссией по ИУ.
+
+        Для каждого нового SKU переносит артикул, личный кабинет и wild из
+        вкладки «Для юнит». Комиссия по ИУ фиксирована на уровне бизнес-правила
+        и должна составлять 26% для каждой строки, созданной этим job.
+        """
+        rows = [
+            [
+                card.sku,
+                card.client,
+                card.wild,
+                UNIT_MAIN_COMMISSION_VALUE,
+            ]
+            for card in cards
+        ]
         return self.repository.append_rows_by_headers(
             SHEETS.unit_main,
             rows,
