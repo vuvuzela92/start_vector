@@ -5,6 +5,7 @@ import logging
 from src_oop.jobs.sales_plan.repository import (
     SalesPlanAccountingCategoryRepository,
     SalesPlanManagerReferenceRepository,
+    SalesPlanReportRepository,
     SalesWildStatusDailyRepository,
 )
 
@@ -72,5 +73,24 @@ def sync_sales_wild_status_daily_to_db() -> None:
         result.source_rows,
         result.rows_after_cleanup,
         result.duplicate_rows,
+        result.written_rows,
+    )
+
+
+def sales_plan_run() -> None:
+    """Строит и публикует актуальную витрину плана продаж в Google Sheets.
+
+    Бизнес-сценарий:
+    функция запускает завершающий этап контура плана продаж. На текущую
+    московскую дату она объединяет месячный план, факт заказов и накопленные
+    дни наличия по `wild`, затем обновляет вкладку `План продаж v2.0` без
+    изменения ее итоговых формул и документации.
+    """
+
+    repository = SalesPlanReportRepository()
+    result = repository.sync_report()
+    logger.info(
+        "Выгрузка плана продаж завершена | report_date=%s | written_rows=%s",
+        result.report_date,
         result.written_rows,
     )

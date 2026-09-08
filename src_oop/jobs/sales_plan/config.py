@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 from sqlalchemy import Boolean, Date, DateTime, Numeric, String, text
 
 annual_procurement_plan = {
@@ -17,6 +19,42 @@ sales_plan_manager_reference_sheet = {
     "sheet_title": "Справочник Категория-Менеджер",
     "spreadsheet_id": "1j2H1sGdhuQYsMDs8JkDQ4DEL27pNxXtKVE6JcJbyvzo",
 }
+
+# Целевая витрина с расчетом плана продаж по каждому wild.
+sales_plan_report_sheet = {
+    "title": "План продаж",
+    "sheet_title": "План продаж v2.0",
+    "spreadsheet_id": "1_ZFKBxelzM3tJB9TTwab1watklasAtSoWSHhUsAZC7E",
+}
+
+# В витрине первые две строки заняты итогами и заголовками, а столбец U — документацией.
+SALES_PLAN_REPORT_FIRST_DATA_ROW = 3
+SALES_PLAN_REPORT_LAST_DATA_COLUMN = "T"
+SALES_PLAN_REPORT_DOCUMENTATION_COLUMN = "U"
+SALES_PLAN_REPORT_COLUMN_COUNT = 20
+SALES_PLAN_REPORT_UPDATED_AT_COLUMN = "updatet_at"
+SALES_PLAN_REPORT_HEADERS: tuple[str, ...] = (
+    "Месяц",
+    "Менеджер",
+    "WILD",
+    "Предмет",
+    "Дней с остатком",
+    "Количество план",
+    "Количество факт",
+    "Цена плановая",
+    "Цена фактическая",
+    "План заказов, руб",
+    "План заказов на дату, руб",
+    "Выполнение плана на дату, %",
+    "План заказов, руб с правилом 15 дней",
+    "Факт заказов, руб",
+    "Факт заказов, %",
+    "Линейный прогноз, руб",
+    "Линейны прогноз, %",
+    "Факт заказов, % с правилом 15 дней",
+    "Прогноз, % с правилом 15 дней",
+    SALES_PLAN_REPORT_UPDATED_AT_COLUMN,
+)
 
 # Таблица хранит ежедневные снимки справочника, чтобы дальше можно было
 # строить историю назначения менеджера и анализа категорий по дате.
@@ -53,6 +91,9 @@ QUARTER_PLAN_3Q_2026_UNITS_COLUMN = "3 квартал, шт 2026"
 QUARTER_PLAN_WILD_STATUS_COLUMN = "Статус вилд"
 QUARTER_PLAN_PRICE_COLUMN = "цена продажная плановая"
 
+# Служебная метка источника означает отсутствие доступной плановой цены.
+MISSING_PLAN_PRICE_VALUES: tuple[str, ...] = ("нет цены",)
+
 SALES_WILD_STATUS_DAILY_TABLE = "sales_wild_status_daily"
 SALES_WILD_STATUS_DAILY_KEY_COLUMNS: tuple[str, ...] = ("date", "wild")
 SALES_WILD_STATUS_DAILY_SCHEMA = {
@@ -65,6 +106,13 @@ SALES_WILD_STATUS_DAILY_SCHEMA = {
 # Базовое бизнес-правило для стартового накопления дней наличия:
 # только статус "активно" считается днём присутствия товара в продаже.
 ACTIVE_WILD_STATUSES: tuple[str, ...] = ("активно",)
+
+# Одноразовое восстановление пропуска после сбоя cron в сентябре 2026 года.
+# Границы snapshot-ов используются только как подтвержденные точки истории.
+SALES_WILD_STATUS_BACKFILL_DATE_FROM = date(2026, 9, 2)
+SALES_WILD_STATUS_BACKFILL_DATE_TO = date(2026, 9, 7)
+SALES_WILD_STATUS_BACKFILL_PREVIOUS_SNAPSHOT_DATE = date(2026, 9, 1)
+SALES_WILD_STATUS_BACKFILL_NEXT_SNAPSHOT_DATE = date(2026, 9, 8)
 
 funnel_query = text(
     """

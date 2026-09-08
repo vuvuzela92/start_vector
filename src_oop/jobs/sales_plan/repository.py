@@ -13,6 +13,7 @@ from src_oop.core.my_gspread import GoogleTabs
 from src_oop.jobs.annual_procurement_plan.annual_procurement_plan import AnnualProcurementPlan
 from src_oop.jobs.sales_plan.config import (
     ACTIVE_WILD_STATUSES,
+    MISSING_PLAN_PRICE_VALUES,
     QUARTER_PLAN_3Q_2026_UNITS_COLUMN,
     QUARTER_PLAN_PRICE_COLUMN,
     QUARTER_PLAN_SUBJECT_COLUMN,
@@ -27,9 +28,20 @@ from src_oop.jobs.sales_plan.config import (
     SALES_WILD_STATUS_DAILY_KEY_COLUMNS,
     SALES_WILD_STATUS_DAILY_SCHEMA,
     SALES_WILD_STATUS_DAILY_TABLE,
+    SALES_WILD_STATUS_BACKFILL_DATE_FROM,
+    SALES_WILD_STATUS_BACKFILL_DATE_TO,
+    SALES_WILD_STATUS_BACKFILL_NEXT_SNAPSHOT_DATE,
+    SALES_WILD_STATUS_BACKFILL_PREVIOUS_SNAPSHOT_DATE,
     SOURCE_MANAGER_COLUMN,
     SOURCE_SUBJECT_COLUMN,
     SOURCE_WILD_COLUMN,
+    SALES_PLAN_REPORT_COLUMN_COUNT,
+    SALES_PLAN_REPORT_DOCUMENTATION_COLUMN,
+    SALES_PLAN_REPORT_FIRST_DATA_ROW,
+    SALES_PLAN_REPORT_HEADERS,
+    SALES_PLAN_REPORT_LAST_DATA_COLUMN,
+    SALES_PLAN_REPORT_UPDATED_AT_COLUMN,
+    sales_plan_report_sheet,
     sales_plan_manager_reference_sheet,
 )
 
@@ -69,6 +81,25 @@ class SalesWildStatusDailySyncResult:
     duplicate_rows: int
     written_rows: int
     snapshot_date: date
+
+
+@dataclass(slots=True)
+class SalesWildStatusDailyBackfillResult:
+    """Итог точечного восстановления пропущенных дней статусов `wild`."""
+
+    stable_wilds: int
+    changed_status_wilds: int
+    confirmed_order_days: int
+    skipped_existing_rows: int
+    written_rows: int
+
+
+@dataclass(slots=True)
+class SalesPlanReportSyncResult:
+    """Итог построения и публикации витрины плана продаж."""
+
+    report_date: date
+    written_rows: int
 
 
 class SalesPlanManagerReferenceRepository:
@@ -441,12 +472,13 @@ class SalesPlanAccountingCategoryRepository:
         Бизнес-сценарий:
         цена `цена продажная плановая` нужна в том же справочнике, где уже
         живет `wild`, чтобы дальше можно было считать план продаж без
-        дополнительных соединений по Google Sheets. Пустое значение остается
-        `NULL`, а число приводится к формату с 2 знаками после запятой.
+        дополнительных соединений по Google Sheets. Пустое значение и
+        служебная метка `нет цены` остаются `NULL`, а число приводится к
+        формату с 2 знаками после запятой.
         """
 
         normalized_value = SalesPlanManagerReferenceRepository._normalize_string(value)
-        if not normalized_value:
+        if not normalized_value or normalized_value.lower() in MISSING_PLAN_PRICE_VALUES:
             return None
 
         numeric_value = float(
@@ -664,6 +696,258 @@ class SalesWildStatusDailyRepository:
             snapshot_date=effective_snapshot_date,
         )
 
+    def backfill_september_2026_gap(self) -> SalesWildStatusDailyBackfillResult:
+        """Восстанавливает пропуск статусов `wild` со 2 по 7 сентября 2026 года.
+
+        Бизнес-сценарий:
+        cron не сохранил ежедневные snapshot-ы между подтвержденными датами
+        1 и 8 сентября. Для товаров с одинаковым статусом в обе даты задача
+        копирует этот статус на пропущенные дни. Для изменившихся товаров она
+        записывает только дни с подтвержденным заказом из `funnel_daily` и не
+        подменяет остальные даты предположением.
+        """
+
+        snapshots_dataframe = self._read_backfill_status_snapshots()
+        funnel_dataframe = self._read_confirmed_order_days_for_backfill()
+        existing_dataframe = self._read_existing_backfill_rows()
+        (
+            payload_dataframe,
+            stable_wilds,
+            changed_status_wilds,
+            confirmed_order_days,
+            skipped_existing_rows,
+        ) = self._build_backfill_dataframe(
+            snapshots_dataframe=snapshots_dataframe,
+            funnel_dataframe=funnel_dataframe,
+            existing_dataframe=existing_dataframe,
+        )
+
+        if not payload_dataframe.empty:
+            Database.sync_data_to_postgres(
+                table_name=SALES_WILD_STATUS_DAILY_TABLE,
+                data=payload_dataframe,
+                schema_definition=SALES_WILD_STATUS_DAILY_SCHEMA,
+                unique_keys=SALES_WILD_STATUS_DAILY_KEY_COLUMNS,
+            )
+
+        logger.info(
+            "Восстановление пропуска дневных статусов wild завершено | date_from=%s | date_to=%s | stable_wilds=%s | changed_status_wilds=%s | confirmed_order_days=%s | skipped_existing_rows=%s | written_rows=%s",
+            SALES_WILD_STATUS_BACKFILL_DATE_FROM,
+            SALES_WILD_STATUS_BACKFILL_DATE_TO,
+            stable_wilds,
+            changed_status_wilds,
+            confirmed_order_days,
+            skipped_existing_rows,
+            len(payload_dataframe.index),
+        )
+        return SalesWildStatusDailyBackfillResult(
+            stable_wilds=stable_wilds,
+            changed_status_wilds=changed_status_wilds,
+            confirmed_order_days=confirmed_order_days,
+            skipped_existing_rows=skipped_existing_rows,
+            written_rows=len(payload_dataframe.index),
+        )
+
+    @staticmethod
+    def _read_backfill_status_snapshots() -> pd.DataFrame:
+        """Читает два подтвержденных snapshot-а для восстановления пропуска.
+
+        Бизнес-сценарий:
+        восстановление использует только реально сохраненные статусы на
+        границах пропуска. Текущий статус листа Google Sheets не участвует,
+        чтобы не исказить историю сентября.
+        """
+
+        query = text(
+            """
+            SELECT
+                date,
+                wild,
+                is_active
+            FROM sales_wild_status_daily
+            WHERE date IN :snapshot_dates
+            """
+        ).bindparams(
+            bindparam(
+                "snapshot_dates",
+                expanding=True,
+            )
+        )
+        return Database.read_sql_to_dataframe(
+            query,
+            params={
+                "snapshot_dates": [
+                    SALES_WILD_STATUS_BACKFILL_PREVIOUS_SNAPSHOT_DATE,
+                    SALES_WILD_STATUS_BACKFILL_NEXT_SNAPSHOT_DATE,
+                ]
+            },
+        )
+
+    @staticmethod
+    def _read_confirmed_order_days_for_backfill() -> pd.DataFrame:
+        """Читает дни с заказами как подтверждение активности изменившихся товаров.
+
+        Бизнес-сценарий:
+        для `wild`, чей статус изменился между двумя snapshot-ами, заказ в
+        конкретный день подтверждает активность товара. Отсутствие заказа не
+        считается подтверждением неактивности и не создает строку статуса.
+        """
+
+        query = text(
+            """
+            SELECT DISTINCT
+                fd.date,
+                a.local_vendor_code AS wild
+            FROM funnel_daily fd
+            JOIN article a
+                ON a.nm_id = fd.nm_id
+            WHERE fd.date BETWEEN :date_from AND :date_to
+              AND fd.orders_sum > 0
+              AND a.local_vendor_code IS NOT NULL
+            """
+        )
+        return Database.read_sql_to_dataframe(
+            query,
+            params={
+                "date_from": SALES_WILD_STATUS_BACKFILL_DATE_FROM,
+                "date_to": SALES_WILD_STATUS_BACKFILL_DATE_TO,
+            },
+        )
+
+    @staticmethod
+    def _read_existing_backfill_rows() -> pd.DataFrame:
+        """Читает уже существующие строки пропущенного периода перед backfill.
+
+        Бизнес-сценарий:
+        повторный запуск восстановления не должен перезаписывать фактический
+        snapshot, если часть дат уже была загружена вручную или cron-задачей.
+        """
+
+        query = text(
+            """
+            SELECT
+                date,
+                wild
+            FROM sales_wild_status_daily
+            WHERE date BETWEEN :date_from AND :date_to
+            """
+        )
+        return Database.read_sql_to_dataframe(
+            query,
+            params={
+                "date_from": SALES_WILD_STATUS_BACKFILL_DATE_FROM,
+                "date_to": SALES_WILD_STATUS_BACKFILL_DATE_TO,
+            },
+        )
+
+    @staticmethod
+    def _build_backfill_dataframe(
+        snapshots_dataframe: pd.DataFrame,
+        funnel_dataframe: pd.DataFrame,
+        existing_dataframe: pd.DataFrame,
+    ) -> tuple[pd.DataFrame, int, int, int, int]:
+        """Готовит безопасные строки для восстановления пропуска статусов `wild`.
+
+        Бизнес-сценарий:
+        одинаковый статус на обеих границах пропуска считается достаточным
+        основанием для заполнения всех промежуточных дат. При смене статуса
+        добавляются только дни с заказом, а уже существующие записи всегда
+        исключаются из payload, чтобы не заменить фактические данные.
+        """
+
+        normalized_snapshots = snapshots_dataframe.copy()
+        normalized_snapshots["date"] = pd.to_datetime(
+            normalized_snapshots["date"]
+        ).dt.date
+        previous_snapshot = normalized_snapshots.loc[
+            normalized_snapshots["date"] == SALES_WILD_STATUS_BACKFILL_PREVIOUS_SNAPSHOT_DATE,
+            ["wild", "is_active"],
+        ].rename(columns={"is_active": "is_active_before"})
+        next_snapshot = normalized_snapshots.loc[
+            normalized_snapshots["date"] == SALES_WILD_STATUS_BACKFILL_NEXT_SNAPSHOT_DATE,
+            ["wild", "is_active"],
+        ].rename(columns={"is_active": "is_active_after"})
+
+        if previous_snapshot.empty or next_snapshot.empty:
+            raise ValueError(
+                "Восстановление статусов wild отменено: отсутствует один из подтвержденных snapshot-ов за 1 или 8 сентября 2026 года."
+            )
+
+        compared_statuses = previous_snapshot.merge(
+            next_snapshot,
+            on="wild",
+            how="inner",
+            validate="one_to_one",
+        )
+        stable_statuses = compared_statuses.loc[
+            compared_statuses["is_active_before"] == compared_statuses["is_active_after"],
+            ["wild", "is_active_before"],
+        ].rename(columns={"is_active_before": "is_active"})
+        changed_wilds = compared_statuses.loc[
+            compared_statuses["is_active_before"] != compared_statuses["is_active_after"],
+            "wild",
+        ].tolist()
+
+        missing_dates = [
+            timestamp.date()
+            for timestamp in pd.date_range(
+                SALES_WILD_STATUS_BACKFILL_DATE_FROM,
+                SALES_WILD_STATUS_BACKFILL_DATE_TO,
+                freq="D",
+            )
+        ]
+        stable_rows = pd.concat(
+            [stable_statuses.assign(date=snapshot_date) for snapshot_date in missing_dates],
+            ignore_index=True,
+        )
+
+        normalized_funnel = funnel_dataframe.copy()
+        if normalized_funnel.empty:
+            confirmed_order_rows = pd.DataFrame(columns=["wild", "is_active", "date"])
+        else:
+            normalized_funnel["date"] = pd.to_datetime(normalized_funnel["date"]).dt.date
+            confirmed_order_rows = normalized_funnel.loc[
+                normalized_funnel["wild"].isin(changed_wilds),
+                ["wild", "date"],
+            ].drop_duplicates()
+            confirmed_order_rows["is_active"] = True
+            confirmed_order_rows = confirmed_order_rows.loc[:, ["wild", "is_active", "date"]]
+
+        candidates = pd.concat(
+            [stable_rows, confirmed_order_rows],
+            ignore_index=True,
+        ).drop_duplicates(subset=["date", "wild"], keep="first")
+        normalized_existing = existing_dataframe.copy()
+        if normalized_existing.empty:
+            existing_keys = pd.DataFrame(columns=["date", "wild"])
+        else:
+            normalized_existing["date"] = pd.to_datetime(normalized_existing["date"]).dt.date
+            existing_keys = normalized_existing.loc[:, ["date", "wild"]].drop_duplicates()
+
+        rows_with_marker = candidates.merge(
+            existing_keys,
+            on=["date", "wild"],
+            how="left",
+            indicator=True,
+        )
+        skipped_existing_rows = int((rows_with_marker["_merge"] == "both").sum())
+        payload_dataframe = rows_with_marker.loc[
+            rows_with_marker["_merge"] == "left_only",
+            ["wild", "is_active", "date"],
+        ].copy()
+        payload_dataframe["created_at"] = datetime.now(MOSCOW_TIMEZONE).replace(tzinfo=None)
+        payload_dataframe = payload_dataframe.loc[
+            :, list(SALES_WILD_STATUS_DAILY_SCHEMA.keys())
+        ].sort_values(["date", "wild"])
+
+        return (
+            payload_dataframe.astype(object).where(pd.notna(payload_dataframe), None),
+            len(stable_statuses.index),
+            len(changed_wilds),
+            len(confirmed_order_rows.index),
+            skipped_existing_rows,
+        )
+
     def _prepare_snapshot_dataframe(
         self,
         dataframe: pd.DataFrame,
@@ -749,3 +1033,371 @@ class SalesWildStatusDailyRepository:
 
         normalized_status = SalesPlanManagerReferenceRepository._normalize_string(value).lower()
         return normalized_status in ACTIVE_WILD_STATUSES
+
+
+class SalesPlanReportRepository:
+    """Строит техническую витрину плана продаж и публикует её в Google Sheets.
+
+    Бизнес-сценарий:
+    витрина объединяет месячный план из справочника учетной категории,
+    накопленные дни активности и факт заказов. Расчет ведется на уровне
+    `wild`, чтобы план и факт не дублировались между категориями.
+    """
+
+    def __init__(self) -> None:
+        """Инициализирует подключение к целевой вкладке плана продаж.
+
+        Бизнес-сценарий:
+        задача должна обновлять только технический диапазон отчета в заданной
+        вкладке. Стабильный `spreadsheet_id` защищает выгрузку от ручного
+        переименования документа.
+        """
+
+        self._connector = GoogleTabs(
+            table_title=sales_plan_report_sheet["title"],
+            sheet_title=sales_plan_report_sheet["sheet_title"],
+            spreadsheet_id=sales_plan_report_sheet["spreadsheet_id"],
+        )
+
+    def sync_report(self, report_date: date | None = None) -> SalesPlanReportSyncResult:
+        """Считает месячный план на дату отчета и заменяет данные витрины.
+
+        Бизнес-сценарий:
+        при обычном запуске используется текущая московская дата. Для каждого
+        `wild` рассчитываются план, план на дату, факт, линейный прогноз и
+        правило 15 дней. В Google Sheets обновляется только диапазон `A:R`
+        с третьей строки: формулы итогов в первой строке, заголовки во второй
+        строке и документация в столбце `T` сохраняются.
+        """
+
+        effective_report_date = report_date or datetime.now(MOSCOW_TIMEZONE).date()
+        report_dataframe = self._read_report_dataframe(report_date=effective_report_date)
+        prepared_dataframe = self._prepare_dataframe_for_sheet(report_dataframe)
+        prepared_dataframe = self._add_updated_at_column(prepared_dataframe)
+        self._write_report_dataframe(prepared_dataframe)
+
+        return SalesPlanReportSyncResult(
+            report_date=effective_report_date,
+            written_rows=len(prepared_dataframe.index),
+        )
+
+    @staticmethod
+    def _read_report_dataframe(report_date: date) -> pd.DataFrame:
+        """Читает из PostgreSQL расчетные показатели плана продаж на дату.
+
+        Бизнес-сценарий:
+        план берется из единственной учетной категории `wild`, факт — из
+        `funnel_daily`, а дни наличия — из дневных snapshot-ов статуса.
+        Правило 15 дней применяется только к итоговому плану; оперативный
+        план на дату рассчитывается от базового месячного плана.
+        """
+
+        query = text(
+            """
+            WITH params AS (
+                SELECT
+                    CAST(:report_date AS date) AS report_date,
+                    date_trunc('month', CAST(:report_date AS date))::date AS month_start,
+                    (
+                        date_trunc('month', CAST(:report_date AS date))
+                        + INTERVAL '1 month - 1 day'
+                    )::date AS month_end,
+                    to_char(CAST(:report_date AS date), 'MM-YYYY') AS month_label
+            ),
+            base AS (
+                SELECT
+                    sp.wild,
+                    sp.subject_name,
+                    ROUND(sp.quarter_3_units_2026) AS quantity_plan,
+                    sp.plan_price,
+                    ROUND(
+                        sp.plan_price * ROUND(sp.quarter_3_units_2026),
+                        2
+                    ) AS plan_orders_rub
+                FROM sales_plan_accounting_category_reference AS sp
+            ),
+            status_daily AS (
+                SELECT
+                    sd.wild,
+                    COUNT(*) FILTER (WHERE sd.is_active IS TRUE) AS days_with_stocks
+                FROM sales_wild_status_daily AS sd
+                CROSS JOIN params AS p
+                WHERE sd.date BETWEEN p.month_start AND p.month_end
+                GROUP BY sd.wild
+            ),
+            manager_map AS (
+                SELECT DISTINCT ON (cmr.subject_name)
+                    cmr.subject_name,
+                    cmr.manager_name
+                FROM sales_plan_category_manager_reference AS cmr
+                CROSS JOIN params AS p
+                WHERE cmr.snapshot_date <= p.report_date
+                ORDER BY cmr.subject_name, cmr.snapshot_date DESC
+            ),
+            funnel AS (
+                SELECT
+                    a.local_vendor_code AS wild,
+                    SUM(fd.order_count) AS fact_order_count,
+                    SUM(fd.orders_sum) AS fact_orders_rub
+                FROM funnel_daily AS fd
+                LEFT JOIN article AS a
+                    ON a.nm_id = fd.nm_id
+                CROSS JOIN params AS p
+                WHERE fd.date BETWEEN p.month_start AND p.report_date
+                    AND fd.orders_sum > 0
+                GROUP BY a.local_vendor_code
+            ),
+            date_params AS (
+                SELECT
+                    month_label,
+                    report_date - month_start + 1 AS elapsed_days,
+                    month_end - month_start + 1 AS days_in_month
+                FROM params
+            ),
+            prepared AS (
+                SELECT
+                    dp.month_label,
+                    mm.manager_name,
+                    sp.wild,
+                    sp.subject_name,
+                    COALESCE(sd.days_with_stocks, 0) AS days_with_stocks,
+                    sp.quantity_plan,
+                    COALESCE(fd.fact_order_count, 0) AS fact_order_count,
+                    sp.plan_price,
+                    ROUND(
+                        COALESCE(fd.fact_orders_rub, 0)
+                        / NULLIF(fd.fact_order_count, 0)
+                    ) AS fact_price,
+                    sp.plan_orders_rub,
+                    ROUND(
+                        sp.plan_orders_rub * dp.elapsed_days
+                        / NULLIF(dp.days_in_month, 0),
+                        2
+                    ) AS plan_orders_rub_to_date,
+                    CASE
+                        WHEN COALESCE(sd.days_with_stocks, 0) < 15 THEN 0
+                        ELSE sp.plan_orders_rub
+                    END AS plan_orders_rub_after_15_days_rule,
+                    COALESCE(fd.fact_orders_rub, 0) AS fact_orders_rub,
+                    ROUND(
+                        COALESCE(fd.fact_orders_rub, 0)
+                        / NULLIF(dp.elapsed_days, 0)
+                        * dp.days_in_month,
+                        2
+                    ) AS linear_forecast_rub
+                FROM base AS sp
+                CROSS JOIN date_params AS dp
+                LEFT JOIN status_daily AS sd
+                    ON sd.wild = sp.wild
+                LEFT JOIN manager_map AS mm
+                    ON mm.subject_name = sp.subject_name
+                LEFT JOIN funnel AS fd
+                    ON fd.wild = sp.wild
+            ),
+            calculated AS (
+                SELECT
+                    prepared.*,
+                    ROUND(
+                        prepared.fact_orders_rub
+                        / NULLIF(prepared.plan_orders_rub_to_date, 0),
+                        2
+                    ) AS plan_execution_to_date_percent,
+                    ROUND(
+                        prepared.fact_orders_rub
+                        / NULLIF(prepared.plan_orders_rub, 0),
+                        2
+                    ) AS fact_orders_percent,
+                    ROUND(
+                        prepared.linear_forecast_rub
+                        / NULLIF(prepared.plan_orders_rub, 0),
+                        2
+                    ) AS forecast_percent,
+                    ROUND(
+                        prepared.fact_orders_rub
+                        / NULLIF(prepared.plan_orders_rub_after_15_days_rule, 0),
+                        2
+                    ) AS fact_orders_percent_after_15_days_rule,
+                    ROUND(
+                        prepared.linear_forecast_rub
+                        / NULLIF(prepared.plan_orders_rub_after_15_days_rule, 0),
+                        2
+                    ) AS forecast_percent_after_15_days_rule
+                FROM prepared
+            )
+            SELECT
+                month_label,
+                manager_name,
+                wild,
+                subject_name,
+                days_with_stocks,
+                quantity_plan,
+                fact_order_count,
+                plan_price,
+                fact_price,
+                plan_orders_rub,
+                plan_orders_rub_to_date,
+                plan_execution_to_date_percent,
+                plan_orders_rub_after_15_days_rule,
+                fact_orders_rub,
+                fact_orders_percent,
+                linear_forecast_rub,
+                forecast_percent,
+                fact_orders_percent_after_15_days_rule,
+                forecast_percent_after_15_days_rule
+            FROM calculated
+            ORDER BY subject_name, wild
+            """
+        )
+        return Database.read_sql_to_dataframe(query, params={"report_date": report_date})
+
+    @staticmethod
+    def _prepare_dataframe_for_sheet(dataframe: pd.DataFrame) -> pd.DataFrame:
+        """Заменяет отсутствующие значения и служебную строку `[NULL]` на пустые ячейки.
+
+        Бизнес-сценарий:
+        пустая цена или показатель без доступных данных — нормальная ситуация
+        для новинки или товара без заказов. В витрине такие случаи должны быть
+        визуально пустыми, а не выглядеть как строковое значение `[NULL]`.
+        """
+
+        prepared_dataframe = dataframe.copy()
+        prepared_dataframe = prepared_dataframe.replace(
+            r"^\s*\[NULL\]\s*$",
+            "",
+            regex=True,
+        )
+        return prepared_dataframe.where(pd.notna(prepared_dataframe), "")
+
+    @staticmethod
+    def _add_updated_at_column(dataframe: pd.DataFrame) -> pd.DataFrame:
+        """Добавляет время публикации, общее для всех строк одной выгрузки.
+
+        Бизнес-сценарий:
+        пользователи витрины должны видеть, когда именно были актуализированы
+        данные. Для сопоставимости всех строк запуска используется одно
+        московское время, а имя колонки сохраняется как согласованное
+        `updatet_at`.
+        """
+
+        prepared_dataframe = dataframe.copy()
+        updated_at = datetime.now(MOSCOW_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+        prepared_dataframe[SALES_PLAN_REPORT_UPDATED_AT_COLUMN] = updated_at
+        return prepared_dataframe
+
+    def _write_report_dataframe(self, dataframe: pd.DataFrame) -> None:
+        """Перезаписывает данные отчета, не затрагивая формулы, заголовки и документацию.
+
+        Бизнес-сценарий:
+        витрина должна показывать только актуальный набор `wild`. Поэтому
+        диапазон данных заполняется до последней доступной строки пустыми
+        значениями после результата, что удаляет устаревшие строки предыдущей
+        выгрузки. Области итогов, шапки и документации не изменяются.
+        """
+
+        if len(dataframe.columns) != SALES_PLAN_REPORT_COLUMN_COUNT:
+            raise ValueError(
+                "Выгрузка плана продаж отменена: число колонок расчета не совпадает "
+                f"с техническим диапазоном | expected={SALES_PLAN_REPORT_COLUMN_COUNT} "
+                f"| actual={len(dataframe.columns)}"
+            )
+
+        worksheet = self._connector.sheet_title
+        available_rows = worksheet.row_count - SALES_PLAN_REPORT_FIRST_DATA_ROW + 1
+        if len(dataframe.index) > available_rows:
+            raise ValueError(
+                "Выгрузка плана продаж отменена: в техническом диапазоне недостаточно строк "
+                f"| available_rows={available_rows} | required_rows={len(dataframe.index)}"
+            )
+
+        self._prepare_sheet_layout(worksheet)
+
+        values = dataframe.astype(object).values.tolist()
+        empty_row = ["" for _ in range(SALES_PLAN_REPORT_COLUMN_COUNT)]
+        values.extend(
+            [empty_row.copy() for _ in range(available_rows - len(values))]
+        )
+        target_range = (
+            f"A{SALES_PLAN_REPORT_FIRST_DATA_ROW}:"
+            f"{SALES_PLAN_REPORT_LAST_DATA_COLUMN}{worksheet.row_count}"
+        )
+        self._connector.update_range(range_name=target_range, values=values)
+        self._connector.format_range(
+            range_name=(
+                f"T{SALES_PLAN_REPORT_FIRST_DATA_ROW}:T{worksheet.row_count}"
+            ),
+            format_properties={
+                "numberFormat": {
+                    "type": "DATE_TIME",
+                    "pattern": "yyyy-mm-dd hh:mm:ss",
+                }
+            },
+        )
+        logger.info(
+            "Витрина плана продаж обновлена в Google Sheets | report_rows=%s | range=%s",
+            len(dataframe.index),
+            target_range,
+        )
+
+    def _prepare_sheet_layout(self, worksheet) -> None:
+        """Подготавливает колонки витрины после добавления менеджера в столбец `B`.
+
+        Бизнес-сценарий:
+        менеджер нужен для сводных итогов, поэтому его добавляют рядом с
+        месяцем. Метод переносит документацию из прежнего столбца `T` в `U`,
+        обновляет заголовки и пересчитывает адреса итоговых формул так, чтобы
+        сдвиг данных не исказил суммарные показатели.
+        """
+
+        layout_values = worksheet.get(
+            f"T1:{SALES_PLAN_REPORT_DOCUMENTATION_COLUMN}{worksheet.row_count}",
+            value_render_option="FORMULA",
+        )
+        legacy_documentation_header = ""
+        current_documentation_header = ""
+        if len(layout_values) > 1:
+            legacy_documentation_header = layout_values[1][0] if layout_values[1] else ""
+            current_documentation_header = (
+                layout_values[1][1] if len(layout_values[1]) > 1 else ""
+            )
+
+        if (
+            legacy_documentation_header == "Документация"
+            and current_documentation_header != "Документация"
+        ):
+            documentation_values = []
+            for row_index in range(worksheet.row_count):
+                row = layout_values[row_index] if row_index < len(layout_values) else []
+                documentation_values.append([row[0] if row else ""])
+            self._connector.update_range(
+                range_name=(
+                    f"{SALES_PLAN_REPORT_DOCUMENTATION_COLUMN}1:"
+                    f"{SALES_PLAN_REPORT_DOCUMENTATION_COLUMN}{worksheet.row_count}"
+                ),
+                values=documentation_values,
+            )
+
+        self._connector.update_range(
+            range_name="A1:T1",
+            values=[["" for _ in range(SALES_PLAN_REPORT_COLUMN_COUNT)]],
+        )
+        self._connector.update_range(
+            range_name="F1:Q1",
+            values=[[
+                "=SUBTOTAL(9;F3:F)",
+                "=SUBTOTAL(9;G3:G)",
+                "",
+                "",
+                "=SUBTOTAL(9;J3:J)",
+                "=SUBTOTAL(9;K3:K)",
+                "",
+                "=SUBTOTAL(9;M3:M)",
+                "=SUBTOTAL(9;N3:N)",
+                "=N1/J1",
+                "=SUBTOTAL(9;P3:P)",
+                "=P1/J1",
+            ]],
+        )
+        self._connector.update_range(
+            range_name="A2:T2",
+            values=[list(SALES_PLAN_REPORT_HEADERS)],
+        )
