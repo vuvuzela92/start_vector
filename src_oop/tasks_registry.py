@@ -76,6 +76,7 @@ from src_oop.jobs.returns_to_customers.run import returns_to_customers
 from src_oop.jobs.sales_analyze.run import update_sales_warehouse_analytics
 from src_oop.jobs.seller_balance.run import seller_balance_run
 from src_oop.jobs.sales_plan.run import (
+    sales_plan_run,
     sync_sales_plan_accounting_category_reference_to_db,
     sync_sales_plan_manager_reference_to_db,
     sync_sales_wild_status_daily_to_db,
@@ -188,6 +189,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "sync_sales_wild_status_daily_to_db": {
         "func": smart_run(sync_sales_wild_status_daily_to_db),
         "desc": "Сохранение ежедневного snapshot статусов wild из Поквартально в PostgreSQL",
+    },
+    "sales_plan_run": {
+        "func": smart_run(sales_plan_run),
+        "desc": "Расчет и выгрузка плана продаж по wild в Google Sheets План продаж v2.0",
     },
     # Бухгалтерские и регламентные выгрузки.
     "seller_balance_run": {

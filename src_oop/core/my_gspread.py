@@ -465,6 +465,29 @@ class GoogleTabs:
         retry_delays = (5, 10, 20, 30)
         return retry_delays[min(attempt - 1, len(retry_delays) - 1)]
 
+    def update_range(
+        self,
+        range_name: str,
+        values: list[list[object]],
+        value_input_option: str = "USER_ENTERED",
+    ) -> None:
+        """Записывает значения в указанный диапазон листа с retry на временные ошибки.
+
+        Бизнес-сценарий:
+        некоторые витрины занимают только часть листа и должны сохранять
+        формулы, документацию и служебные области рядом с данными. Метод
+        позволяет задаче обновить строго свой диапазон, не очищая весь лист,
+        и пережить кратковременное ограничение Google Sheets по запросам.
+        """
+
+        self._execute_google_write_with_retry(
+            operation_name=f"update_range {self.sheet_title.title} {range_name}",
+            func=self.sheet_title.update,
+            range_name=range_name,
+            values=values,
+            value_input_option=value_input_option,
+        )
+
     def _update_df_in_google(self, df: pd.DataFrame, sheet):
         """Полностью перезаписывает рабочую область листа одним безопасным update.
 
