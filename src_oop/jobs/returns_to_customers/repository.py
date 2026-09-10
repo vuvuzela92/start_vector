@@ -341,7 +341,7 @@ class BuyersReturnsRepository:
         """Гарантирует уникальность `account + claim_id`, чтобы upsert обновлял заявку вместо дублирования."""
         if DB_KEY_COLUMNS == ("id",):
             logger.info(
-                "Р”РѕРїРѕР»РЅРёС‚РµР»СЊРЅС‹Р№ СѓРЅРёРєР°Р»СЊРЅС‹Р№ РёРЅРґРµРєСЃ РґР»СЏ claims РЅРµ С‚СЂРµР±СѓРµС‚СЃСЏ: upsert РёРґС‘С‚ РїРѕ РєР»СЋС‡Сѓ id."
+                "Дополнительный уникальный индекс для claims не требуется: upsert идет по ключу id."
             )
             return
         index_sql = text(
@@ -387,10 +387,10 @@ class BuyersReturnsRepository:
         return prepared_dataframe.astype(object).where(pd.notna(prepared_dataframe), None)
 
     def _build_database_records(self, dataframe: pd.DataFrame) -> list[dict[str, object]]:
-        """Р¤РёРЅР°Р»СЊРЅРѕ РѕС‡РёС‰Р°РµС‚ Р·Р°РїРёСЃРё РїРµСЂРµРґ upsert РІ `public.claims`.
+        """Финально очищает записи перед upsert в `public.claims`.
 
-        Р‘РёР·РЅРµСЃ-РїСЂР°РІРёР»Рѕ: РїСѓСЃС‚С‹Рµ РґР°С‚С‹ Рё РґСЂСѓРіРёРµ pandas-РїСЂРѕРїСѓСЃРєРё РЅРµ РґРѕР»Р¶РЅС‹ РїРѕРїР°РґР°С‚СЊ РІ PostgreSQL
-        РєР°Рє `NaT`, `NA` РёР»Рё СЃС‚СЂРѕРєР° `"NaT"`, РёРЅР°С‡Рµ РІС‹РіСЂСѓР·РєР° РїР°РґР°РµС‚ РЅР° РїСѓСЃС‚С‹С… РїРѕР»СЏС….
+        Бизнес-правило: пустые даты и другие pandas-пропуски не должны попадать в PostgreSQL
+        как `NaT`, `NA` или строка `"NaT"`, иначе выгрузка падает на пустых полях.
         """
         records = dataframe.to_dict(orient="records")
         sanitized_records: list[dict[str, object]] = []
@@ -428,10 +428,10 @@ class BuyersReturnsRepository:
         return value
 
     def _normalize_record_value(self, value: object) -> object:
-        """РџСЂРµРѕР±СЂР°Р·СѓРµС‚ РѕРґРЅРѕ Р·РЅР°С‡РµРЅРёРµ Рє Р±РµР·РѕРїР°СЃРЅРѕРјСѓ РІРёРґСѓ РґР»СЏ psycopg2.
+        """Преобразует одно значение к безопасному виду для psycopg2.
 
-        Р‘РёР·РЅРµСЃ-РїСЂР°РІРёР»Рѕ: РїСѓСЃС‚С‹Рµ РґР°С‚С‹ Рё РїСЂРѕРїСѓС‰РµРЅРЅС‹Рµ РїРѕР»СЏ WB РґРѕР»Р¶РЅС‹ СѓС…РѕРґРёС‚СЊ РІ Р‘Р” РєР°Рє `NULL`,
-        Р° РЅРµ РєР°Рє СЃР»СѓР¶РµР±РЅС‹Рµ РјР°СЂРєРµСЂС‹ pandas, РёР·-Р·Р° РєРѕС‚РѕСЂС‹С… РїР°РґР°РµС‚ РјР°СЃСЃРѕРІС‹Р№ upsert.
+        Бизнес-правило: пустые даты и пропущенные поля WB должны уходить в БД как `NULL`,
+        а не как служебные маркеры pandas, из-за которых падает массовый upsert.
         """
         if value is None:
             return None
