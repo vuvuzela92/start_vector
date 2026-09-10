@@ -7,8 +7,56 @@ import pandas as pd
 from src_oop.jobs.sales_plan.repository import (
     SalesPlanAccountingCategoryRepository,
     SalesPlanManagerReferenceRepository,
+    SalesPlanReportRepository,
     SalesWildStatusDailyRepository,
 )
+
+
+def test_prepare_sales_plan_report_dataframe_clears_null_markers() -> None:
+    """Проверяет очистку пропусков перед публикацией витрины в Google Sheets.
+
+    Бизнес-сценарий:
+    в готовом плане продаж отсутствие цены или процента не должно выглядеть
+    как текст `[NULL]`. Такие значения выгружаются как визуально пустые
+    ячейки, а числовые показатели сохраняются без изменения.
+    """
+
+    source_dataframe = pd.DataFrame(
+        {
+            "plan_price": [None, "[NULL]", " [NULL] ", 1200],
+            "fact_orders_rub": [pd.NA, 10, 20, 30],
+        }
+    )
+
+    prepared_dataframe = SalesPlanReportRepository._prepare_dataframe_for_sheet(
+        source_dataframe
+    )
+
+    assert prepared_dataframe.to_dict(orient="list") == {
+        "plan_price": ["", "", "", 1200],
+        "fact_orders_rub": ["", 10, 20, 30],
+    }
+
+
+def test_add_updated_at_column_sets_one_timestamp_for_all_report_rows() -> None:
+    """Проверяет добавление времени публикации к каждой строке витрины.
+
+    Бизнес-сценарий:
+    поле `updatet_at` должно показывать момент актуализации отчета. Все строки
+    одной выгрузки получают одинаковое значение, чтобы их можно было считать
+    единым снимком данных.
+    """
+
+    source_dataframe = pd.DataFrame({"wild": ["wild100", "wild200"]})
+
+    prepared_dataframe = SalesPlanReportRepository._add_updated_at_column(
+        source_dataframe
+    )
+
+    assert "updatet_at" in prepared_dataframe.columns
+    assert prepared_dataframe["updatet_at"].nunique() == 1
+    assert pd.notna(prepared_dataframe["updatet_at"]).all()
+    assert isinstance(prepared_dataframe.loc[0, "updatet_at"], str)
 
 
 def test_prepare_snapshot_dataframe_normalizes_and_deduplicates_rows() -> None:
@@ -61,6 +109,38 @@ def test_validate_required_columns_raises_for_changed_sheet_header() -> None:
         assert "обязательные колонки" in str(error)
     else:
         raise AssertionError("Ожидалась ошибка при отсутствии обязательных колонок.")
+
+
+def test_prepare_snapshot_dataframe_keeps_first_manager_for_duplicate_subject() -> None:
+    """Проверяет сохранение первого менеджера при повторении предмета в источнике.
+
+    Бизнес-сценарий:
+    в дневном справочнике один предмет может иметь только одного менеджера.
+    Если лист временно содержит два назначения, для стабильной загрузки в БД
+    сохраняется первое назначение в порядке строк Google Sheets.
+    """
+
+    source_dataframe = pd.DataFrame(
+        {
+            "Предмет": ["Дозаторы для ванной", "Дозаторы для ванной"],
+            "Менеджер": ["Анастасия Гусакова", "Мадина Хидирова"],
+            "Артикул": ["wild100", "wild200"],
+        }
+    )
+
+    repository = SalesPlanManagerReferenceRepository.__new__(SalesPlanManagerReferenceRepository)
+    prepared_dataframe, duplicate_rows = repository._prepare_snapshot_dataframe(
+        dataframe=source_dataframe,
+        snapshot_date=date(2026, 9, 8),
+    )
+
+    assert duplicate_rows == 1
+    assert prepared_dataframe[["subject_name", "manager_name"]].to_dict(orient="records") == [
+        {
+            "subject_name": "Дозаторы для ванной",
+            "manager_name": "Анастасия Гусакова",
+        }
+    ]
 
 
 def test_prepare_accounting_category_dataframe_raises_on_wild_conflict() -> None:
@@ -187,6 +267,30 @@ def test_prepare_accounting_category_dataframe_divides_3q_units_by_three() -> No
     )
 
 
+def test_prepare_accounting_category_dataframe_maps_missing_price_marker_to_null() -> None:
+    """Проверяет преобразование служебной метки отсутствующей цены в `NULL`.
+
+    Бизнес-сценарий:
+    значение `нет цены` не является числом и не должно останавливать дневную
+    синхронизацию справочника. Оно означает отсутствие плановой цены, поэтому
+    в БД сохраняется как `NULL` без подстановки фиктивного нуля.
+    """
+
+    source_dataframe = pd.DataFrame(
+        {
+            "wild": ["wild100"],
+            "предмет": ["Весы"],
+            "3 квартал, шт 2026": ["300"],
+            "цена продажная плановая": ["нет цены"],
+        }
+    )
+
+    repository = SalesPlanAccountingCategoryRepository.__new__(SalesPlanAccountingCategoryRepository)
+    prepared_dataframe = repository._prepare_reference_dataframe(source_dataframe)
+
+    assert pd.isna(prepared_dataframe.loc[0, "plan_price"])
+
+
 def test_prepare_sales_wild_status_daily_snapshot_maps_statuses() -> None:
     """Проверяет подготовку дневного snapshot-а статусов `wild` для плана продаж.
 
@@ -217,3 +321,61 @@ def test_prepare_sales_wild_status_daily_snapshot_maps_statuses() -> None:
         date(2026, 8, 28),
         date(2026, 8, 28),
     ]
+
+
+def test_build_backfill_dataframe_keeps_only_confirmed_days_for_changed_wild() -> None:
+    """Проверяет безопасное восстановление статусов в пропущенный период.
+
+    Бизнес-сценарий:
+    стабильный статус между 1 и 8 сентября можно перенести на все пропущенные
+    дни. Если статус изменился, задача добавляет только дни с заказами и не
+    заменяет неизвестную историю значением `false` или текущим статусом.
+    """
+
+    snapshots_dataframe = pd.DataFrame(
+        {
+            "date": [
+                date(2026, 9, 1),
+                date(2026, 9, 1),
+                date(2026, 9, 8),
+                date(2026, 9, 8),
+            ],
+            "wild": ["wild100", "wild200", "wild100", "wild200"],
+            "is_active": [True, False, True, True],
+        }
+    )
+    funnel_dataframe = pd.DataFrame(
+        {
+            "date": [date(2026, 9, 2), date(2026, 9, 4)],
+            "wild": ["wild200", "wild200"],
+        }
+    )
+    existing_dataframe = pd.DataFrame(columns=["date", "wild"])
+
+    repository = SalesWildStatusDailyRepository.__new__(SalesWildStatusDailyRepository)
+    (
+        payload_dataframe,
+        stable_wilds,
+        changed_status_wilds,
+        confirmed_order_days,
+        skipped_existing_rows,
+    ) = repository._build_backfill_dataframe(
+        snapshots_dataframe=snapshots_dataframe,
+        funnel_dataframe=funnel_dataframe,
+        existing_dataframe=existing_dataframe,
+    )
+
+    assert stable_wilds == 1
+    assert changed_status_wilds == 1
+    assert confirmed_order_days == 2
+    assert skipped_existing_rows == 0
+    assert len(payload_dataframe.index) == 8
+    assert payload_dataframe.loc[
+        payload_dataframe["wild"] == "wild100", "is_active"
+    ].tolist() == [True] * 6
+    assert payload_dataframe.loc[
+        payload_dataframe["wild"] == "wild200", "date"
+    ].tolist() == [date(2026, 9, 2), date(2026, 9, 4)]
+    assert payload_dataframe.loc[
+        payload_dataframe["wild"] == "wild200", "is_active"
+    ].tolist() == [True, True]
