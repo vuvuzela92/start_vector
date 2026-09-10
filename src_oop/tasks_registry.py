@@ -87,7 +87,7 @@ from src_oop.jobs.wb_api.measurements.run import (
     collect_and_store_measurements,
     set_measurements_to_google,
 )
-from src_oop.jobs.wms_stocks.run import wms_stocks_run
+from src_oop.jobs.wms_stocks.run import historical_stocks_run
 from src_oop.jobs.wms_stocks.run_stock import wms_stock_backfill_run, wms_stock_run
 
 
@@ -292,13 +292,9 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(fbo_supplies_run),
         "desc": "Выгрузка заказов по округам из PostgreSQL в Google Sheets Отгрузка ФБО",
     },
-    "wms_stocks_run": {
-        "func": smart_run(wms_stocks_run),
-        "desc": "Выгрузка данных об остатках из WMS",
-    },
-    "wms_stock_run": {
-        "func": smart_run(wms_stock_run),
-        "desc": "Обновление агрегированных дневных WMS-остатков в public.wms_stock за последние 7 дней",
+    "historical_stocks_run": {
+        "func": smart_run(historical_stocks_run),
+        "desc": "Загрузка исторических FBS-остатков из WMS в PostgreSQL",
     },
     "wms_stock_backfill_run": {
         "func": smart_run(wms_stock_backfill_run),
