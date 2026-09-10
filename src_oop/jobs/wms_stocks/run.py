@@ -5,7 +5,15 @@ from src_oop.jobs.wms_stocks.tables_scheme import historical_stocks_fbs_service_
 
 from datetime import datetime, timedelta
 
-async def wms_stocks_run(date_from: str = None, date_to: str = None):
+async def historical_stocks_run(date_from: str = None, date_to: str = None):
+    """Наполняет историческую таблицу FBS-остатков данными WMS за заданный период.
+
+    Бизнес-сценарий:
+    job получает историю остатков из WMS, приводит её к структуре
+    `historical_stocks_fbs_service` и синхронизирует в PostgreSQL. По умолчанию
+    загружается скользящее окно последних 28 дней, чтобы учитывать изменения
+    остатков, которые источник мог отдать задним числом.
+    """
     if date_from is None:
         date_from = (datetime.now() - timedelta(days=28)).strftime("%Y-%m-%d")
     if date_to is None:
