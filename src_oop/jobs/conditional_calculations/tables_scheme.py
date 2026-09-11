@@ -18,6 +18,9 @@ conditional_calculations ={
         'cost_price_orders': BigInteger,
         'cost_price_sales': BigInteger,
         'general_profit_orders': BigInteger,
+        'penalties': BigInteger,
+        'total_to_pay': BigInteger,
+        'credit_transfers': BigInteger,
         'date': Date
     },
     "unique_keys": ["date", "account"]

@@ -11,8 +11,14 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+
 def conditional_calculation_to_db_run():
-    """Функция получает данные по Условному расчету и добавляет их в БД"""
+    """Получает данные по Условному расчету и добавляет их в БД.
+
+    Бизнес-сценарий: пересчитывает дневные показатели по аккаунтам, дополняет
+    их финансовыми полями WB, доводит схему таблицы до актуальной версии и
+    записывает результат в `conditions_calculation` по ключу `date + account`.
+    """
     repo = ConditionalCalculationsRepository()
     df = ProcessConditionalCalculation(repo).process_df()
 
@@ -24,6 +30,7 @@ def conditional_calculation_to_db_run():
     table = conditional_calculations.get("title")
     keys = conditional_calculations.get("unique_keys")
 
+    repo.ensure_conditions_calculation_columns()
     Database.sync_data_to_postgres(
         table_name=table,
         data=df,
@@ -31,7 +38,17 @@ def conditional_calculation_to_db_run():
         unique_keys=keys
     )
 
-def update_conditional_calculations_to_gs(table_name: str = "Условный расчет", sheet_name: str = "Справочная информация"):
+
+def update_conditional_calculations_to_gs(
+    table_name: str = "Условный расчет",
+    sheet_name: str = "Справочная информация",
+):
+    """Выгружает сохраненный Условный расчет из БД в Google Sheets.
+
+    Бизнес-сценарий: публикует в справочный лист те же данные, которые были
+    записаны в `conditions_calculation`, включая штрафы по `date_from`, итог к
+    оплате и кредитные перечисления.
+    """
     df = ConditionalCalculationsRepository().get_conditional_calculations()
 
     try:
@@ -47,4 +64,4 @@ def update_conditional_calculations_to_gs(table_name: str = "Условный р
     except StopIteration:
         print(f"Не найден лист {sheet_name} в таблице {table_name}")
     except RuntimeError as e:
-        print(f"Ошибка подключения: {e}")     
+        print(f"Ошибка подключения: {e}")
