@@ -66,7 +66,24 @@ class BukhDocsParser:
         return extracted_files
 
     def parse_weekly_reports(self, files: list[ExtractedFile]) -> pd.DataFrame:
-        pdf_files = [file for file in files if file.path.lower().endswith(".pdf")]
+        """Разбирает PDF еженедельных отчетов реализации WB.
+
+        Бизнес-сценарий получает из архива только табличную часть отчета
+        реализации. Служебные PDF из вложенных архивов МЧД не относятся к
+        бухгалтерским строкам отчета и пропускаются, чтобы доверенности не
+        ломали объединение данных по аккаунту.
+        """
+        pdf_files = []
+        for file in files:
+            if self._is_weekly_report_pdf(file):
+                pdf_files.append(file)
+                continue
+            if file.path.lower().endswith(".pdf"):
+                logger.info(
+                    "PDF weekly report пропущен как служебный файл: account=%s path=%s",
+                    file.account,
+                    file.path,
+                )
         dataframes: list[pd.DataFrame] = []
 
         for file in pdf_files:
@@ -89,6 +106,11 @@ class BukhDocsParser:
                 continue
 
             dataframe.columns = [self._normalize_header(column) for column in dataframe.columns]
+            dataframe = self._drop_duplicate_columns(
+                dataframe=dataframe,
+                account=file.account,
+                path=file.path,
+            )
             if "Сумма, руб." in dataframe.columns:
                 dataframe["Сумма, руб."] = dataframe["Сумма, руб."].map(self._clean_number)
             if "в т.ч НДС, руб." in dataframe.columns:
@@ -122,6 +144,51 @@ class BukhDocsParser:
             len(result.index),
         )
         return result
+
+    def _is_weekly_report_pdf(self, file: ExtractedFile) -> bool:
+        """Проверяет, что PDF является именно еженедельным отчетом реализации.
+
+        WB кладет внутрь архивов отчета служебные архивы МЧД с PDF доверенности.
+        Для бизнес-выгрузки нужны только файлы отчета вида ``Отчет №...pdf``;
+        эта проверка защищает загрузку БД от попадания юридических вложений с
+        другой структурой таблиц.
+        """
+        normalized_path = file.path.replace("\\", "/")
+        normalized_path_lower = normalized_path.lower()
+        file_name = normalized_path.rsplit("/", maxsplit=1)[-1].lower()
+
+        if not file_name.endswith(".pdf"):
+            return False
+        if "/mchd.zip/" in normalized_path_lower:
+            return False
+        if file_name.startswith("on_emchd"):
+            return False
+        return file_name.startswith("отчет №")
+
+    def _drop_duplicate_columns(
+        self,
+        dataframe: pd.DataFrame,
+        account: str,
+        path: str,
+    ) -> pd.DataFrame:
+        """Удаляет повторяющиеся колонки перед объединением отчетов.
+
+        Защищает основной сценарий загрузки бухгалтерских документов от сбоя
+        pandas при ``concat``: если в одном PDF WB вернет неуникальные заголовки,
+        мы сохраняем первое значение колонки и продолжаем обработку аккаунта.
+        """
+        duplicated_mask = dataframe.columns.duplicated()
+        if not duplicated_mask.any():
+            return dataframe
+
+        duplicated_columns = dataframe.columns[duplicated_mask].tolist()
+        logger.warning(
+            "В PDF weekly report найдены повторяющиеся колонки, лишние колонки пропущены: account=%s path=%s columns=%s",
+            account,
+            path,
+            duplicated_columns,
+        )
+        return dataframe.loc[:, ~duplicated_mask].copy()
 
     def parse_redeem_notifications(self, files: list[ExtractedFile]) -> pd.DataFrame:
         xlsx_files = [file for file in files if file.path.lower().endswith(".xlsx")]
