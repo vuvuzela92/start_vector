@@ -68,6 +68,7 @@ from src_oop.jobs.fbs_stocks.run import (
     auto_refill_fbs_stocks_from_unit,
     update_fbs_stocks_in_unit,
 )
+from src_oop.jobs.health_check.run import health_check_run
 from src_oop.jobs.logistic_ved.run import logistic_ved_full_run
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 from src_oop.jobs.orders_feed.run import order_feed
@@ -176,6 +177,11 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "add_new_items_telegram_bot": {
         "func": smart_run(add_new_items_telegram_bot),
         "desc": "Запуск Telegram-бота для серверного запуска add_new_items_run",
+    },
+    # Контроль ежедневных выгрузок и сервисные health-check.
+    "health_check": {
+        "func": smart_run(health_check_run),
+        "desc": "Проверка свежести и полноты критичных ежедневных выгрузок",
     },
     # План продаж
     "sync_sales_plan_manager_reference_to_db": {
