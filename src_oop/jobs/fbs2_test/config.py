@@ -36,7 +36,8 @@ SHIPMENTS_DATABASE_QUERY = text(
             'wild1971', 'wild1972', 'wild1973', 'wild1974', 'wild1975',
             'wild1976', 'wild1977', 'wild1978', 'wild1979', 'wild1980',
             'wild1981', 'wild1982', 'wild1983', 'wild2082', 'wild2083',
-            'wild2093', 'wild2094', 'wild2123', 'wild2132', 'wild1892'
+            'wild2093', 'wild2094', 'wild2123', 'wild2132', 'wild1892',
+            'wild1897'
         ]::varchar[]) AS product_id
     ),
     fbs_agg AS (
@@ -188,7 +189,8 @@ STOCKS_DATABASE_QUERY = text(
             'wild1975','wild1976','wild1977','wild1978',
             'wild1979','wild1980','wild1981','wild1982',
             'wild1983','wild2082','wild2083','wild2093',
-            'wild2094','wild2123','wild2132', 'wild1892'
+            'wild2094','wild2123','wild2132', 'wild1892',
+            'wild1897'
         ]) AS product_id
     )
     SELECT
