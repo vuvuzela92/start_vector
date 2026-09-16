@@ -7,6 +7,7 @@ from typing import Sequence
 
 from src_oop.jobs.add_new_items.config import (
     AUTOPILOT_INSERT_INDEXES,
+    AUTOPILOT_SKU_HEADER,
     SHEETS,
     SOPOST_ADD_FLAG,
     SOPOST_INSERT_HEADERS,
@@ -14,6 +15,7 @@ from src_oop.jobs.add_new_items.config import (
     STATUS_YES,
     UNIT_MAIN_COMMISSION_VALUE,
     UNIT_MAIN_INSERT_HEADERS,
+    UNIT_MAIN_SKU_HEADER,
 )
 from src_oop.jobs.add_new_items.models import NewItemCard
 from src_oop.jobs.add_new_items.repository import AddNewItemsRepository
@@ -40,6 +42,14 @@ class AddNewItemsService:
     repository: AddNewItemsRepository
 
     def run(self) -> AddNewItemsResult:
+        """Запускает полный сценарий переноса и финальный контроль дублей.
+
+        Job берёт строки со статусом `добавить` из вкладки «Для юнит», переносит
+        недостающие данные в Сопост, MAIN (tested), Автопилот, Конкуренты и
+        products, обновляет флаги результата в источнике, а затем проверяет
+        целевые таблицы MAIN (tested) и Автопилот на дубли SKU для отчёта
+        сотрудникам в Telegram.
+        """
         cards = self.repository.fetch_new_item_cards()
         if not cards:
             logger.info("Нет строк со статусом 'добавить'. Завершаем job.")
@@ -101,6 +111,7 @@ class AddNewItemsService:
             )
 
         self.repository.update_input_status_flags(status_by_row=status_by_row)
+        self._log_target_duplicate_summary()
 
         result = AddNewItemsResult(
             loaded_cards=len(cards),
@@ -198,6 +209,76 @@ class AddNewItemsService:
             return 0, set()
 
         return inserted_count, {record.wild for record in product_records}
+
+    def _log_target_duplicate_summary(self) -> None:
+        """Пишет в лог итоговую проверку дублей в таблицах для Telegram-отчёта.
+
+        После вставки данных сотрудникам важно быстро увидеть, остались ли в
+        MAIN (tested) или Автопилоте повторяющиеся SKU. Лог пишется в стабильном
+        формате, чтобы Telegram-бот мог распознать его и показать аккуратную
+        сводку без технического хвоста выполнения.
+        """
+        unit_main_duplicates = self.repository.fetch_duplicate_int_values(
+            SHEETS.unit_main,
+            UNIT_MAIN_SKU_HEADER,
+        )
+        autopilot_duplicates = self.repository.fetch_duplicate_int_values(
+            SHEETS.autopilot,
+            AUTOPILOT_SKU_HEADER,
+        )
+        logger.info(
+            "Проверка дублей add_new_items: "
+            "MAIN (tested): duplicated_values=%s extra_rows=%s examples=%s | "
+            "Автопилот: duplicated_values=%s extra_rows=%s examples=%s",
+            len(unit_main_duplicates),
+            self._count_extra_duplicate_rows(unit_main_duplicates),
+            self._format_duplicate_examples(unit_main_duplicates),
+            len(autopilot_duplicates),
+            self._count_extra_duplicate_rows(autopilot_duplicates),
+            self._format_duplicate_examples(autopilot_duplicates),
+        )
+
+    @staticmethod
+    def _count_extra_duplicate_rows(duplicates: dict[int, int]) -> int:
+        """Считает лишние повторные строки среди найденных дублей SKU.
+
+        Для бизнес-отчёта недостаточно знать количество артикулов с дублями:
+        сотруднику полезно видеть примерный объём ручной чистки, поэтому каждая
+        первая строка SKU считается допустимой, а остальные входят в показатель
+        лишних повторов.
+        """
+        return sum(count - 1 for count in duplicates.values())
+
+    @staticmethod
+    def _format_duplicate_examples(duplicates: dict[int, int]) -> str:
+        """Формирует короткие примеры дублей SKU для итогового сообщения.
+
+        Telegram-отчёт должен оставаться лаконичным, поэтому показываются только
+        первые несколько SKU в человекочитаемом виде. Полный список дублей
+        можно увидеть уже в самой Google-таблице по колонке `Артикул`.
+        """
+        if not duplicates:
+            return "нет"
+
+        examples = [
+            f"SKU {sku} встречается {count} {AddNewItemsService._pluralize_times(count)}"
+            for sku, count in sorted(duplicates.items())[:5]
+        ]
+        return "; ".join(examples)
+
+    @staticmethod
+    def _pluralize_times(count: int) -> str:
+        """Подбирает русскую форму слова `раз` для примеров дублей.
+
+        Отчёт читают сотрудники, а не разработчики, поэтому количество повторов
+        SKU показывается обычной фразой: `2 раза`, `5 раз`, без технических
+        сокращений вроде `x2`.
+        """
+        if 11 <= count % 100 <= 14:
+            return "раз"
+        if count % 10 in {2, 3, 4}:
+            return "раза"
+        return "раз"
 
     @staticmethod
     def _unique_by(

@@ -39,6 +39,15 @@ _ADD_NEW_ITEMS_RESULT_PATTERN = re.compile(
     r"added_to_products=(?P<added_to_products>\d+)"
     r"\)"
 )
+_ADD_NEW_ITEMS_DUPLICATES_PATTERN = re.compile(
+    r"Проверка дублей add_new_items: "
+    r"MAIN \(tested\): duplicated_values=(?P<unit_main_values>\d+) "
+    r"extra_rows=(?P<unit_main_extra>\d+) "
+    r"examples=(?P<unit_main_examples>.*?) \| "
+    r"Автопилот: duplicated_values=(?P<autopilot_values>\d+) "
+    r"extra_rows=(?P<autopilot_extra>\d+) "
+    r"examples=(?P<autopilot_examples>.*)"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +65,22 @@ class ParsedAddNewItemsStats:
     added_to_autopilot: int
     added_to_competitors: int
     added_to_products: int
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedDuplicateStats:
+    """Хранит результат проверки дублей в целевых таблицах add_new_items.
+
+    Модель используется только в Telegram-отчёте: она отделяет важную для
+    сотрудников информацию о дублях SKU от технического лога выполнения job.
+    """
+
+    unit_main_values: int
+    unit_main_extra_rows: int
+    unit_main_examples: str
+    autopilot_values: int
+    autopilot_extra_rows: int
+    autopilot_examples: str
 
 
 class AddNewItemsTelegramService:
@@ -282,6 +307,7 @@ class AddNewItemsTelegramService:
             )
 
         parsed_stats = self._extract_add_new_items_stats(combined_output)
+        duplicate_stats = self._extract_duplicate_stats(combined_output)
         if exit_code == 0:
             return TaskRunResult(
                 status="success",
@@ -291,7 +317,7 @@ class AddNewItemsTelegramService:
                 exit_code=exit_code,
                 duration_seconds=duration_seconds,
                 summary="Статус: завершено",
-                details_text=self._build_success_details(parsed_stats),
+                details_text=self._build_success_details(parsed_stats, duplicate_stats),
                 log_excerpt="",
             )
 
@@ -303,7 +329,7 @@ class AddNewItemsTelegramService:
             exit_code=exit_code,
             duration_seconds=duration_seconds,
             summary="Статус: ошибка",
-            details_text=self._build_failure_details(parsed_stats),
+            details_text=self._build_failure_details(parsed_stats, duplicate_stats),
             log_excerpt=self._build_compact_diagnostic(log_excerpt),
         )
 
@@ -458,13 +484,38 @@ class AddNewItemsTelegramService:
         )
 
     @staticmethod
-    def _build_success_details(parsed_stats: ParsedAddNewItemsStats | None) -> str:
+    def _extract_duplicate_stats(raw_output: str) -> ParsedDuplicateStats | None:
+        """Извлекает из лога результат финальной проверки дублей SKU.
+
+        Основная job пишет контрольную строку после вставки в таблицы. Telegram
+        распознаёт её, чтобы сотрудники сразу видели риск дублей в MAIN (tested)
+        и Автопилоте без просмотра серверного журнала.
+        """
+        match = _ADD_NEW_ITEMS_DUPLICATES_PATTERN.search(raw_output)
+        if match is None:
+            return None
+
+        return ParsedDuplicateStats(
+            unit_main_values=int(match.group("unit_main_values")),
+            unit_main_extra_rows=int(match.group("unit_main_extra")),
+            unit_main_examples=match.group("unit_main_examples").strip(),
+            autopilot_values=int(match.group("autopilot_values")),
+            autopilot_extra_rows=int(match.group("autopilot_extra")),
+            autopilot_examples=match.group("autopilot_examples").strip(),
+        )
+
+    @staticmethod
+    def _build_success_details(
+        parsed_stats: ParsedAddNewItemsStats | None,
+        duplicate_stats: ParsedDuplicateStats | None,
+    ) -> str:
         """Собирает пояснение для успешного завершения add_new_items.
 
         Даже если процесс завершился без системной ошибки, перенос по бизнесу
         может быть частичным: часть строк уже существовала или запись в один из
-        контуров могла не состояться. Поэтому бот всегда напоминает проверять
-        итоговые флаги `да/нет` в исходной таблице.
+        контуров могла не состояться. Дополнительно в сообщение попадает
+        проверка дублей, потому что повторяющиеся SKU требуют ручной чистки
+        даже после успешного завершения job.
         """
         lines = [
             "Проверьте флаги в таблице `Для юнит`: MAIN, Автопилот, products."
@@ -483,15 +534,21 @@ class AddNewItemsTelegramService:
             )
             if parsed_stats.added_to_sopost:
                 lines.append(f"Сопост: {parsed_stats.added_to_sopost}")
+        duplicate_lines = AddNewItemsTelegramService._build_duplicate_lines(duplicate_stats)
+        if duplicate_lines:
+            lines.extend(["", *duplicate_lines])
         return "\n".join(lines)
 
     @staticmethod
-    def _build_failure_details(parsed_stats: ParsedAddNewItemsStats | None) -> str:
+    def _build_failure_details(
+        parsed_stats: ParsedAddNewItemsStats | None,
+        duplicate_stats: ParsedDuplicateStats | None,
+    ) -> str:
         """Собирает пояснение для случая, когда add_new_items завершился с ошибкой.
 
         При ошибке часть записей могла уже успеть пройти до сбоя. Поэтому бот
-        напоминает о возможном частичном результате и, если доступны счетчики,
-        показывает их как ориентир для ручной проверки.
+        напоминает о возможном частичном результате и, если доступны счетчики
+        или проверка дублей, показывает их как ориентир для ручной проверки.
         """
         lines = [
             "Процесс завершился с ошибкой. Часть данных могла записаться.",
@@ -511,7 +568,66 @@ class AddNewItemsTelegramService:
             )
             if parsed_stats.added_to_sopost:
                 lines.append(f"Сопост: {parsed_stats.added_to_sopost}")
+        duplicate_lines = AddNewItemsTelegramService._build_duplicate_lines(duplicate_stats)
+        if duplicate_lines:
+            lines.extend(["", *duplicate_lines])
         return "\n".join(lines)
+
+    @staticmethod
+    def _build_duplicate_lines(duplicate_stats: ParsedDuplicateStats | None) -> list[str]:
+        """Готовит короткий блок о дублях SKU для итогового Telegram-сообщения.
+
+        Блок должен быть понятен сотруднику без чтения лога: ноль означает, что
+        дублей по колонке `Артикул` не найдено; ненулевые значения показывают
+        количество проблемных SKU, лишних строк и несколько примеров.
+        """
+        if duplicate_stats is None:
+            return []
+
+        if (
+            duplicate_stats.unit_main_values == 0
+            and duplicate_stats.autopilot_values == 0
+        ):
+            return ["Проверка дублей: дублей SKU не найдено."]
+
+        return [
+            "Проверка дублей:",
+            AddNewItemsTelegramService._format_duplicate_line(
+                title="MAIN (tested)",
+                duplicated_values=duplicate_stats.unit_main_values,
+                extra_rows=duplicate_stats.unit_main_extra_rows,
+                examples=duplicate_stats.unit_main_examples,
+            ),
+            AddNewItemsTelegramService._format_duplicate_line(
+                title="Автопилот",
+                duplicated_values=duplicate_stats.autopilot_values,
+                extra_rows=duplicate_stats.autopilot_extra_rows,
+                examples=duplicate_stats.autopilot_examples,
+            ),
+        ]
+
+    @staticmethod
+    def _format_duplicate_line(
+        *,
+        title: str,
+        duplicated_values: int,
+        extra_rows: int,
+        examples: str,
+    ) -> str:
+        """Форматирует одну строку проверки дублей для конкретной таблицы.
+
+        Если дублей нет, сотрудник видит короткое подтверждение без технических
+        нулей. Если дубли есть, строка показывает масштаб проблемы и несколько
+        SKU, с которых удобно начать ручную проверку.
+        """
+        if duplicated_values == 0:
+            return f"{title}: дублей не найдено."
+
+        return (
+            f"{title}: найдены дубли по {duplicated_values} SKU, "
+            f"лишних строк: {extra_rows}, "
+            f"примеры: {examples}"
+        )
 
     @staticmethod
     def _build_compact_diagnostic(log_excerpt: str) -> str:

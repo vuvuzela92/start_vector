@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence, TypeVar
@@ -130,6 +131,45 @@ class AddNewItemsRepository:
 
     def fetch_existing_skus_in_autopilot(self) -> set[int]:
         return self._fetch_existing_int_values(SHEETS.autopilot, AUTOPILOT_SKU_HEADER)
+
+    def fetch_duplicate_int_values(
+        self,
+        sheet_config: WorksheetConfig,
+        column_name: str,
+    ) -> dict[int, int]:
+        """Находит дубли числового ключа в целевой вкладке после переноса.
+
+        Проверка обслуживает контроль качества добавления новых товаров: после
+        записи в MAIN (tested) и Автопилот job перечитывает колонку `Артикул` и
+        показывает оператору, какие SKU уже встречаются больше одного раза.
+        Нечисловые значения игнорируются так же, как при основной сверке
+        уникальности, чтобы служебные подписи в таблице не ломали сценарий.
+        """
+        worksheet = self.get_worksheet(sheet_config)
+        column_values = self._get_column_values(
+            worksheet=worksheet,
+            header_row=sheet_config.header_row,
+            column_name=column_name,
+        )
+        normalized_values = [
+            int(value.strip())
+            for value in column_values
+            if value and value.strip().isdigit()
+        ]
+        counts = Counter(normalized_values)
+        duplicates = {
+            value: count
+            for value, count in counts.items()
+            if count > 1
+        }
+        logger.info(
+            "Проверены дубли в %s -> %s по колонке '%s': %s",
+            sheet_config.table_title,
+            sheet_config.sheet_title,
+            column_name,
+            len(duplicates),
+        )
+        return duplicates
 
     def fetch_existing_wilds_in_competitors(self) -> set[str]:
         return self._fetch_existing_string_values(SHEETS.competitors, COMPETITORS_WILD_HEADER)
