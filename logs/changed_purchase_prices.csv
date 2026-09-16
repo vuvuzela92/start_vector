@@ -1,0 +1,4 @@
+product_name,local_vendor_code,guid,document_number,quantity,unit_price,price_per_item,price_diff_rub,update_document_datetime,insert_date
+т.Казан-скороварка Rashko Bara 10л двухцветный,wild1512,b9ceb749-b00e-11f1-8506-50ebf6b2ce7c,BBЦБ-002488,745.0,1850.0,2471,-621.0,2026-09-14,2026-09-16
+т.Казан Rashko Bara 10л черный,wild1515,b9ceb749-b00e-11f1-8506-50ebf6b2ce7c,BBЦБ-002488,887.0,1700.0,2271,-571.0,2026-09-14,2026-09-16
+т.Казан-скороварка Rashko Bara 5л двухцветный,wild1517,b9ceb749-b00e-11f1-8506-50ebf6b2ce7c,BBЦБ-002488,272.0,1600.0,2134,-534.0,2026-09-14,2026-09-16
