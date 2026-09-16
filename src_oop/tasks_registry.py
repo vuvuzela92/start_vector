@@ -302,6 +302,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(historical_stocks_run),
         "desc": "Загрузка исторических FBS-остатков из WMS в PostgreSQL",
     },
+    "wms_stock_run": {
+        "func": smart_run(wms_stock_run),
+        "desc": "Обновление агрегированных дневных WMS-остатков в public.wms_stock за последние 7 дней",
+    },
     "wms_stock_backfill_run": {
         "func": smart_run(wms_stock_backfill_run),
         "desc": "Историческая загрузка агрегированных дневных WMS-остатков в public.wms_stock с 2026-07-29",
