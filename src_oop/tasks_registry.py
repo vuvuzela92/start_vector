@@ -90,6 +90,7 @@ from src_oop.jobs.wb_api.measurements.run import (
 )
 from src_oop.jobs.wms_stocks.run import historical_stocks_run
 from src_oop.jobs.wms_stocks.run_stock import wms_stock_backfill_run, wms_stock_run
+from src_oop.jobs.yandex_designer_output.run import yandex_designer_output_run
 
 
 def smart_run(func: Callable):
@@ -115,6 +116,11 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "orders_report_today": {
         "func": smart_run(orders_report_today),
         "desc": "Запуск обновления отчета о заказах за сегодня",
+    },
+    # Yandex Disk и ежедневная выработка дизайнеров.
+    "yandex_designer_output": {
+        "func": smart_run(yandex_designer_output_run),
+        "desc": "Создание папок дизайнеров и выгрузка ежедневной выработки в Google Sheets",
     },
     "order_feed": {
         "func": smart_run(order_feed),
