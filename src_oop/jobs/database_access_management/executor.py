@@ -161,6 +161,41 @@ class PostgreSQLGrantExecutor:
         logger.info("Права назначены существующему логину PostgreSQL | grant_id=%s", grant_id)
         return True
 
+    def execute_with_password(self, grant_id: str, password: str) -> bool:
+        """Создаёт логин и выдаёт права с паролем, полученным из Telegram-формы.
+
+        Пароль используется только в оперативной памяти технического исполнителя:
+        он не сохраняется в распоряжении, аудите или логах. Метод обслуживает
+        новый MVP-сценарий, в котором руководитель не выполняет SQL вручную.
+        """
+
+        if not password:
+            raise ValueError("Пароль учётной записи не может быть пустым.")
+        claimed_grant = self.repository.claim_pending_grant(grant_id)
+        if claimed_grant is None:
+            return False
+        request, admin_secret_ref = claimed_grant
+        try:
+            if request.engine is not DatabaseEngine.POSTGRESQL:
+                raise ValueError("Исполнитель PostgreSQL получил распоряжение другой СУБД.")
+            database_url = self.secret_resolver.resolve_database_url(admin_secret_ref)
+            adapter = self.adapter_factory(database_url)
+            adapter.ensure_login_role(request.principal.login_name, password)
+            plan = adapter.build_grant_plan(request)
+            adapter.apply_grant_plan(plan)
+            self.repository.mark_grant_active(grant_id, plan.role_name)
+        except (OSError, RuntimeError, ValueError, SQLAlchemyError) as error:
+            self.repository.mark_grant_failed(grant_id, "Не удалось создать логин и применить права PostgreSQL.")
+            logger.error(
+                "Создание логина и выдача прав PostgreSQL завершились ошибкой | "
+                "grant_id=%s | error_type=%s",
+                grant_id,
+                type(error).__name__,
+            )
+            return False
+        logger.info("Логин создан и права PostgreSQL применены | grant_id=%s", grant_id)
+        return True
+
     def revoke(self, grant_id: str) -> bool:
         """Отзывает роль PostgreSQL у одного логина без удаления групповой роли.
 

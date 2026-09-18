@@ -60,7 +60,7 @@ def create_database_access_router():
         level = State()
         schema = State()
         details = State()
-        login_created = State()
+        password = State()
 
     class ActiveAccessForm(StatesGroup):
         """Хранит логин и выбор базы для точечного просмотра доступов сотрудника."""
@@ -664,11 +664,11 @@ def create_database_access_router():
                 "Выберите роль:",
                 reply_markup=InlineKeyboardMarkup(
                     inline_keyboard=[
-                        [InlineKeyboardButton(text="Чтение схемы", callback_data="dam_level:read_all")],
-                        [InlineKeyboardButton(text="Запись в схему", callback_data="dam_level:write")],
-                        [InlineKeyboardButton(text="Управление схемой", callback_data="dam_level:full_access")],
-                        [InlineKeyboardButton(text="Чтение отдельных таблиц", callback_data="dam_level:read_tables")],
-                        [InlineKeyboardButton(text="Полный доступ ко всем схемам", callback_data="dam_level:full_all")],
+                        [InlineKeyboardButton(text="Чтение схемы (read)", callback_data="dam_level:read_all")],
+                        [InlineKeyboardButton(text="Запись в схему (write)", callback_data="dam_level:write")],
+                        [InlineKeyboardButton(text="Управление схемой (manage)", callback_data="dam_level:full_access")],
+                        [InlineKeyboardButton(text="Чтение отдельных таблиц (read)", callback_data="dam_level:read_tables")],
+                        [InlineKeyboardButton(text="Полный доступ ко всем схемам (manage)", callback_data="dam_level:full_all")],
                         [InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:grant_target")],
                     ]
                 ),
@@ -883,11 +883,11 @@ def create_database_access_router():
         await state.update_data(target_id=target_id)
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="Чтение схемы", callback_data="dam_level:read_all")],
-                [InlineKeyboardButton(text="Запись в схему", callback_data="dam_level:write")],
-                [InlineKeyboardButton(text="Управление схемой", callback_data="dam_level:full_access")],
-                [InlineKeyboardButton(text="Чтение отдельных таблиц", callback_data="dam_level:read_tables")],
-                [InlineKeyboardButton(text="Полный доступ ко всем схемам", callback_data="dam_level:full_all")],
+                [InlineKeyboardButton(text="Чтение схемы (read)", callback_data="dam_level:read_all")],
+                [InlineKeyboardButton(text="Запись в схему (write)", callback_data="dam_level:write")],
+                [InlineKeyboardButton(text="Управление схемой (manage)", callback_data="dam_level:full_access")],
+                [InlineKeyboardButton(text="Чтение отдельных таблиц (read)", callback_data="dam_level:read_tables")],
+                [InlineKeyboardButton(text="Полный доступ ко всем схемам (manage)", callback_data="dam_level:full_all")],
                 [InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:grant_target")],
             ]
         )
@@ -1022,7 +1022,6 @@ def create_database_access_router():
         except (LookupError, ValueError) as error:
             await message.answer(f"Не удалось создать распоряжение: {error}")
             return
-        adapter = PostgreSQLAccessAdapter(service_settings.database_url)
         await state.update_data(
             grant_id=grant.id,
             login_name=login_name,
@@ -1032,34 +1031,40 @@ def create_database_access_router():
             reason=reason,
             requested_by=str(message.from_user.id if message.from_user else message.chat.id),
         )
-        await state.set_state(GrantForm.login_created)
+        await state.set_state(GrantForm.password)
         await message.answer(
-            f"Распоряжение {grant.id} зарегистрировано. Сначала создайте учётную запись "
-            "командой ниже, подставив пароль. После успешного выполнения нажмите «Создано»."
-        )
-        await send_sql_plan(
-            message,
-            "Команда создания учётной записи",
-            adapter.build_create_login_statement(login_name),
+            f"Распоряжение {grant.id} зарегистрировано. Введите пароль новой учётной записи "
+            "одним сообщением. Пароль не сохраняется в сервисе."
         )
         await message.answer(
-            "Продолжить выдачу доступа?",
+            "После ввода пароль будет удалён из чата, если у бота есть такое право.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="✅ Создано", callback_data="dam_manual:login_created")],
-                    [InlineKeyboardButton(text="↩️ Вернуться назад", callback_data="dam_manual:cancel")],
+                    [InlineKeyboardButton(text="↩️ Вернуться назад", callback_data="dam_password:cancel")],
                 ]
             ),
         )
 
-    @router.callback_query(GrantForm.login_created, lambda query: query.data == "dam_manual:login_created")
-    async def confirm_login_created(query: CallbackQuery, state: FSMContext) -> None:
-        """Выдаёт права существующему логину после нажатия «Создано»."""
+    @router.message(GrantForm.password)
+    async def create_login_and_grant_access(message: Message, state: FSMContext) -> None:
+        """Создаёт логин и выдаёт права после получения пароля из формы.
 
-        if query.message is None or not _is_manager_chat(query.message.chat.id, settings):
-            await query.answer("Доступ не разрешён", show_alert=True)
+        Пароль сразу извлекается из сообщения, сообщение удаляется из Telegram,
+        а технический исполнитель использует значение только во время операции.
+        В служебное хранилище попадает только распоряжение без пароля.
+        """
+
+        if not _is_manager_chat(message.chat.id, settings):
+            await state.clear()
             return
-        await query.answer("Выдаю права…")
+        password = (message.text or "").strip()
+        if not password:
+            await message.answer("Пароль не может быть пустым. Введите его ещё раз.")
+            return
+        try:
+            await message.delete()
+        except Exception:
+            logger.warning("Не удалось удалить сообщение с паролем из Telegram")
         form_data = await state.get_data()
         service_settings = DatabaseAccessManagementSettings.from_env()
         repository = AccessGrantRepository.from_database_url(
@@ -1068,21 +1073,23 @@ def create_database_access_router():
         executor = PostgreSQLGrantExecutor(
             repository=repository, secret_resolver=EnvironmentSecretResolver()
         )
-        granted = await asyncio.to_thread(executor.execute_for_existing_login, form_data["grant_id"])
+        granted = await asyncio.to_thread(
+            executor.execute_with_password, form_data["grant_id"], password
+        )
         login_name = form_data["login_name"]
         await state.clear()
-        await query.message.answer(
+        await message.answer(
             f"Доступ для {login_name} выдан и отмечен активным."
             if granted
-            else f"Не удалось выдать доступ для {login_name}. Проверьте, что учётная запись создана."
+            else f"Не удалось выдать доступ для {login_name}. Проверьте параметры подключения и права технического администратора."
         )
 
     @router.callback_query(
-        GrantForm.login_created,
-        lambda query: query.data == "dam_manual:cancel",
+        GrantForm.password,
+        lambda query: query.data == "dam_password:cancel",
     )
-    async def cancel_manual_grant(query: CallbackQuery, state: FSMContext) -> None:
-        """Отменяет незавершённое распоряжение и возвращает к выбору базы."""
+    async def cancel_password_entry(query: CallbackQuery, state: FSMContext) -> None:
+        """Отменяет распоряжение до отправки пароля и возвращает к выбору базы."""
 
         if query.message is None or not _is_manager_chat(query.message.chat.id, settings):
             await query.answer("Доступ не разрешён", show_alert=True)
@@ -1098,7 +1105,7 @@ def create_database_access_router():
         await state.clear()
         await query.answer()
         await query.message.answer(
-            "Распоряжение отменено. Выберите базу для новой выдачи доступа."
+            "Распоряжение отменено. Пароль не запрашивался. Выберите базу для новой выдачи доступа."
             if cancelled else "Распоряжение уже нельзя отменить: оно не находится в ожидании."
         )
         if cancelled:
