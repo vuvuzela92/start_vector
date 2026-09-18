@@ -170,6 +170,49 @@ def test_executor_applies_rights_without_receiving_manual_password() -> None:
     assert adapter.calls == ["plan", "grant"]
 
 
+def test_executor_creates_login_with_transient_password() -> None:
+    """Проверяет создание логина и прав без сохранения пароля в заявке."""
+
+    repository = AccessGrantRepository.from_database_url("sqlite://")
+    repository.initialize_schema()
+    repository.register_database_target(
+        DatabaseTargetCreateRequest(
+            target_id="analytics-postgresql-prod",
+            display_name="Аналитика PostgreSQL, production",
+            engine="postgresql",
+            database_name="analytics",
+            admin_secret_ref="env://postgresql/admin",
+            created_by="petrova",
+        )
+    )
+    grant = repository.create_pending_grant(
+        AccessGrantRequest(
+            principal={
+                "principal_id": "ivanov",
+                "principal_type": "human",
+                "login_name": "ivanov",
+                "display_name": "Иванов Иван",
+                "secret_ref": "manual://password",
+            },
+            target_id="analytics-postgresql-prod",
+            engine="postgresql",
+            level="read_all",
+            scope={"database": "analytics"},
+            reason="Работа с отчётами",
+            requested_by="petrova",
+        )
+    )
+    adapter = FakePostgreSQLAdapter()
+    executor = PostgreSQLGrantExecutor(
+        repository=repository,
+        secret_resolver=FakeSecretResolver(),
+        adapter_factory=lambda _: adapter,
+    )
+
+    assert executor.execute_with_password(grant.id, "test-password") is True
+    assert adapter.calls == ["login", "plan", "grant"]
+
+
 def test_executor_closes_active_grants_after_deleting_login() -> None:
     """Проверяет аудит и закрытие доступов после успешного удаления пользователя.
 

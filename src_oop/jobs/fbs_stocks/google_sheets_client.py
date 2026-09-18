@@ -125,6 +125,28 @@ class FBSStocksGoogleSheetsClient:
         )
         return rows, headers
 
+    def read_unit_article_ids(self) -> set[int]:
+        """Возвращает все артикулы из MAIN (tested), включая строки без заполненного ЛК.
+
+        Бизнес-правило: для исключения товара из предупреждений достаточно самого
+        факта присутствия SKU в UNIT. В отличие от операций с остатками здесь
+        нельзя отбрасывать строку только из-за незаполненного соседнего поля.
+        """
+        headers = self.worksheet.row_values(HEADER_ROW_INDEX)
+        article_column_index = self._resolve_article_column_index(headers)
+        article_values = self.worksheet.col_values(article_column_index)[DATA_START_ROW - 1 :]
+        article_ids = {
+            article_id
+            for value in article_values
+            if (article_id := self._coerce_article_id(value)) is not None
+        }
+        logger.info(
+            "Артикулы UNIT для контроля остатков прочитаны без фильтра по ЛК | sheet=%s | articles=%s",
+            self.worksheet.title,
+            len(article_ids),
+        )
+        return article_ids
+
     def read_auto_refill_rows(self) -> list[UnitAutoRefillRow]:
         """Читает строки MAIN (tested), по которым cron проверяет автопополнение остатков.
 

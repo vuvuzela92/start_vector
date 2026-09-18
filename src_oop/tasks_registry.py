@@ -90,6 +90,7 @@ from src_oop.jobs.wb_api.measurements.run import (
 )
 from src_oop.jobs.wms_stocks.run import historical_stocks_run
 from src_oop.jobs.wms_stocks.run_stock import wms_stock_backfill_run, wms_stock_run
+from src_oop.jobs.wb_stock_control.run import wb_stock_control_run
 from src_oop.jobs.yandex_designer_output.run import yandex_designer_output_run
 
 
@@ -359,6 +360,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "auto_refill_fbs_stocks_from_unit": {
         "func": smart_run(auto_refill_fbs_stocks_from_unit),
         "desc": "Cron-автопополнение FBS-остатков по минимальному остатку UNIT",
+    },
+    "wb_stock_control_run": {
+        "func": smart_run(wb_stock_control_run),
+        "desc": "Полный read-only контроль опубликованных FBS-остатков WB с записью в ClickHouse",
     },
     # UNIT: сервисные обновления справочников, статусов и ценовых витрин.
     "update_adv_participants_to_gs": {

@@ -55,8 +55,11 @@ class AutopilotSheetsWriter:
 
         Бизнес-логика:
         именно порядок этих артикулов определяет порядок записи всех метрик.
+        Перед чтением удаляются повторные строки: первое вхождение артикула
+        сохраняется, а вся строка второго и последующих вхождений удаляется.
         Нечисловые строки пропускаются как служебные или пустые.
         """
+        self.remove_duplicate_article_rows()
         raw_articles = self.worksheet.col_values(1)[self.values_first_row - 1 :]
         articles: list[int] = []
         for value in raw_articles:
@@ -65,6 +68,70 @@ class AutopilotSheetsWriter:
                 articles.append(int(value_text))
         logger.info("Артикулы загружены из листа ПУ: rows=%s", len(articles))
         return articles
+
+    def remove_duplicate_article_rows(self) -> int:
+        """
+        Находит и удаляет повторные строки артикулов из листа ПУ.
+
+        Бизнес-логика:
+        один артикул должен иметь одну строку, иначе hourly-запись одной и той
+        же метрики повторяет значение и завышает суммы в дневном блоке. Первая
+        строка артикула считается основной, все последующие точные вхождения
+        удаляются целиком. Заголовки и строки выше `values_first_row` не
+        затрагиваются. При ошибке пакетного удаления исключение передается
+        вызывающему коду, чтобы hourly-сценарий не записывал метрики в
+        потенциально задублированную таблицу.
+        """
+        raw_articles = self.worksheet.col_values(1)
+        seen_articles: set[int] = set()
+        duplicate_rows: list[int] = []
+
+        for row_number, value in enumerate(
+            raw_articles[self.values_first_row - 1 :],
+            start=self.values_first_row,
+        ):
+            value_text = str(value).strip()
+            if not value_text.isdigit():
+                continue
+            article_id = int(value_text)
+            if article_id in seen_articles:
+                duplicate_rows.append(row_number)
+                continue
+            seen_articles.add(article_id)
+
+        if not duplicate_rows:
+            logger.info("Дубли артикулов в ПУ не найдены.")
+            return 0
+
+        requests = [
+            {
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": self.worksheet.id,
+                        "dimension": "ROWS",
+                        "startIndex": row_number - 1,
+                        "endIndex": row_number,
+                    }
+                }
+            }
+            for row_number in sorted(duplicate_rows, reverse=True)
+        ]
+
+        try:
+            self.worksheet.spreadsheet.batch_update({"requests": requests})
+        except Exception:
+            logger.exception(
+                "Не удалось удалить дубли артикулов из ПУ, hourly-сценарий прерван "
+                "до записи метрик: rows=%s",
+                len(duplicate_rows),
+            )
+            raise
+
+        logger.warning(
+            "Из ПУ удалены повторные строки артикулов, сохранены первые вхождения: rows=%s",
+            len(duplicate_rows),
+        )
+        return len(duplicate_rows)
 
     def write_metric(
         self,

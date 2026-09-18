@@ -1,5 +1,5 @@
 from __future__ import annotations
-"""Минимальная проектная обёртка для чтения данных из ClickHouse.
+"""Проектная обёртка для чтения и пакетной записи данных в ClickHouse.
 
 Этот модуль нужен для unit-джобы конкурентов. Исторически соответствующий
 скрипт читал данные из ClickHouse, а в `src_oop` своей обёртки над
@@ -9,6 +9,7 @@ ClickHouse раньше не было.
 - собрать настройки из окружения;
 - создать `clickhouse_driver.Client`;
 - выполнить запрос;
+- выполнить безопасную пакетную запись;
 - вернуть `pandas.DataFrame`.
 
 Мы сознательно не превращаем его в большой универсальный слой доступа к данным,
@@ -93,7 +94,7 @@ class ClickHouseSettings:
 
 
 class ClickHouseDatabase:
-    """Тонкий read-only клиент для ClickHouse.
+    """Тонкий клиент ClickHouse для чтения и пакетной записи.
 
     Класс делает только то, что требуется текущей джобе:
     - создаёт клиент;
@@ -141,3 +142,29 @@ class ClickHouseDatabase:
             columns,
         )
         return dataframe
+
+    def execute(self, query: str, parameters: object | None = None) -> None:
+        """Выполняет DDL или другой служебный запрос ClickHouse.
+
+        Метод обслуживает инициализацию витрин job-ов; секретные параметры не
+        попадают в логи, а соединение закрывается после каждого вызова.
+        """
+        client = self._create_client()
+        try:
+            client.execute(query, parameters)
+        finally:
+            client.disconnect()
+
+    def insert(self, query: str, rows: list[tuple[object, ...]]) -> None:
+        """Пакетно записывает строки в ClickHouse без промежуточного DataFrame.
+
+        Пакетная запись обслуживает оперативные job-ы и уменьшает число сетевых
+        обращений при загрузке снимка остатков.
+        """
+        if not rows:
+            return
+        client = self._create_client()
+        try:
+            client.execute(query, rows)
+        finally:
+            client.disconnect()
