@@ -86,3 +86,87 @@ class WBStockControlClient:
                 await asyncio.sleep(RETRY_DELAYS_SECONDS[min(attempt - 1, len(RETRY_DELAYS_SECONDS) - 1)])
         logger.error("Проверка остатков WB завершилась неполно | account=%s | warehouse_id=%s", account, wb_warehouse_id)
         return None
+
+    async def zero_stocks(
+        self,
+        session: aiohttp.ClientSession,
+        account: str,
+        token: str,
+        wb_warehouse_id: int,
+        chrt_ids: Sequence[int],
+    ) -> tuple[bool, str | None]:
+        """Обнуляет только переданные положительные остатки вне UNIT на складе WB.
+
+        Бизнес-правило: автоматическое изменение выполняется только для SKU,
+        которые уже успешно прочитаны из WB и признаны неподконтрольными.
+        Запрос разбивается на чанки по 1000 `chrtId`; при ошибке возвращается
+        безопасный результат для последующего уведомления, без повторного
+        обнуления неизвестных позиций.
+        """
+        prepared = sorted({int(value) for value in chrt_ids if value})
+        for start in range(0, len(prepared), CHRT_IDS_CHUNK_SIZE):
+            chunk = prepared[start : start + CHRT_IDS_CHUNK_SIZE]
+            if not await self._zero_chunk(
+                session, account, token, wb_warehouse_id, chunk
+            ):
+                return False, "stocks_update_failed"
+        return True, None
+
+    async def _zero_chunk(
+        self,
+        session: aiohttp.ClientSession,
+        account: str,
+        token: str,
+        wb_warehouse_id: int,
+        chrt_ids: Sequence[int],
+    ) -> bool:
+        """Отправляет один безопасный PUT-чанк обнуления остатков в WB."""
+        url = STOCKS_URL_TEMPLATE.format(warehouse_id=wb_warehouse_id)
+        timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                async with session.put(
+                    url,
+                    headers={"Authorization": token},
+                    json={
+                        "stocks": [
+                            {"chrtId": chrt_id, "amount": 0}
+                            for chrt_id in chrt_ids
+                        ]
+                    },
+                    timeout=timeout,
+                ) as response:
+                    if response.status == 204:
+                        return True
+                    if response.status not in {429, 500, 502, 503, 504}:
+                        logger.error(
+                            "WB отклонил обнуление остатков | account=%s | warehouse_id=%s | status=%s",
+                            account,
+                            wb_warehouse_id,
+                            response.status,
+                        )
+                        return False
+                    logger.warning(
+                        "WB временно не принял обнуление остатков, повторяем | account=%s | warehouse_id=%s | status=%s | attempt=%s",
+                        account,
+                        wb_warehouse_id,
+                        response.status,
+                        attempt,
+                    )
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                logger.warning(
+                    "Ошибка сети при обнулении остатков WB, повторяем | account=%s | warehouse_id=%s | attempt=%s",
+                    account,
+                    wb_warehouse_id,
+                    attempt,
+                )
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(
+                    RETRY_DELAYS_SECONDS[min(attempt - 1, len(RETRY_DELAYS_SECONDS) - 1)]
+                )
+        logger.error(
+            "Обнуление остатков WB не выполнено после повторных попыток | account=%s | warehouse_id=%s",
+            account,
+            wb_warehouse_id,
+        )
+        return False

@@ -80,6 +80,13 @@ class WBStockControlService:
 
             results = await asyncio.gather(*(check_group(group, rows) for group, rows in grouped.items()))
         observations = [item for result in results for item in result]
+        zeroing_errors, found_count, zeroed_count = (
+            await self._zero_uncontrolled_positive_stocks(
+                session_tokens=tokens,
+                observations=observations,
+            )
+        )
+        observations.extend(zeroing_errors)
         previous = self.repository.fetch_previous_states(
             [
                 (item.target.account, item.target.wb_warehouse_id, item.target.chrt_id)
@@ -87,8 +94,150 @@ class WBStockControlService:
             ]
         )
         self.repository.save_observations(observations)
-        await self._notify(observations, previous)
+        # Успешно обнуленные остатки не являются проблемой для сотрудников.
+        # В Bitrix передаются только ошибки получения или изменения остатков.
+        notification_observations = [
+            observation
+            for observation in observations
+            if observation.check_status != "ok"
+        ]
+        await self._notify(notification_observations, previous)
+        await self._send_run_report(
+            found_count=found_count,
+            zeroed_count=zeroed_count,
+            zeroing_errors=zeroing_errors,
+        )
         logger.info("Контроль остатков WB завершен | targets=%s | observations=%s", len(targets), len(observations))
+
+    async def _zero_uncontrolled_positive_stocks(
+        self,
+        session_tokens: dict[str, str],
+        observations: list[StockObservation],
+    ) -> tuple[list[StockObservation], int, int]:
+        """Обнуляет положительные остатки SKU вне UNIT и считает итог операции.
+
+        Бизнес-правило: обнуление выполняется только по успешно полученным
+        положительным остаткам. Неполученные `chrtId`, товары из UNIT и нулевые
+        значения в PUT-запрос не попадают. Ошибка обнуления сохраняется как
+        отдельное наблюдение для уведомления сотрудников через Bitrix24.
+        """
+        candidates: dict[tuple[str, int], list[StockObservation]] = defaultdict(list)
+        for observation in observations:
+            target = observation.target
+            if (
+                not target.is_in_unit
+                and observation.check_status == "ok"
+                and observation.amount is not None
+                and observation.amount > 0
+            ):
+                candidates[(target.account, target.wb_warehouse_id)].append(observation)
+
+        errors: list[StockObservation] = []
+        found_count = sum(len(rows) for rows in candidates.values())
+        zeroed_count = 0
+        semaphore = asyncio.Semaphore(self.settings.concurrency)
+        async with aiohttp.ClientSession() as session:
+            async def zero_group(
+                group: tuple[str, int],
+                rows: list[StockObservation],
+            ) -> list[StockObservation]:
+                account, warehouse_id = group
+                token = session_tokens.get(account.casefold())
+                if not token:
+                    return [
+                        StockObservation(
+                            row.target,
+                            row.amount,
+                            "zeroing_error",
+                            "token_missing",
+                            row.checked_at,
+                        )
+                        for row in rows
+                    ]
+                async with semaphore:
+                    success, error_type = await self.client.zero_stocks(
+                        session,
+                        account,
+                        token,
+                        warehouse_id,
+                        [row.target.chrt_id for row in rows],
+                    )
+                if success:
+                    zeroed_count += len(rows)
+                    logger.info(
+                        "Положительные остатки неподконтрольных SKU обнулены в WB | account=%s | warehouse_id=%s | rows=%s",
+                        account,
+                        warehouse_id,
+                        len(rows),
+                    )
+                    return []
+                return [
+                    StockObservation(
+                        row.target,
+                        row.amount,
+                        "zeroing_error",
+                        error_type or "stocks_update_failed",
+                        row.checked_at,
+                    )
+                    for row in rows
+                ]
+
+            results = await asyncio.gather(
+                *(zero_group(group, rows) for group, rows in candidates.items())
+            )
+        for result in results:
+            errors.extend(result)
+        return errors, found_count, zeroed_count
+
+    async def _send_run_report(
+        self,
+        found_count: int,
+        zeroed_count: int,
+        zeroing_errors: list[StockObservation],
+    ) -> None:
+        """Отправляет итог прогона о найденных и обнуленных остатках.
+
+        Бизнес-правило: сотрудники должны видеть факт обнаружения остатков вне
+        UNIT и результат автоматического обнуления даже тогда, когда список
+        SKU не отправляется в чат. При отключенном Bitrix отчёт печатается.
+        """
+        error_count = len(zeroing_errors)
+        if found_count == 0:
+            report = "Контроль остатков WB: остатков вне юнитки не обнаружено."
+        else:
+            report = (
+                "Контроль остатков WB:\n"
+                f"Остатки вне юнитки найдены: да ({found_count} SKU)\n"
+                f"Успешно обнулено: {zeroed_count} SKU\n"
+                f"Ошибок обнуления: {error_count}"
+            )
+            if zeroing_errors:
+                error_rows = "\n".join(
+                    "ЛК: {account} | wild: {wild} | SKU: {article_id}".format(
+                        account=observation.target.account,
+                        wild=observation.target.wild,
+                        article_id=observation.target.article_id,
+                    )
+                    for observation in zeroing_errors
+                )
+                report += "\n\nОшибки обнуления:\n" + error_rows
+        print(report)
+        if not self.settings.bitrix_enabled:
+            logger.info(
+                "Итоговый отчёт контроля остатков в Bitrix24 отключен; отчёт выведен в консоль."
+            )
+            return
+        if not self.settings.bitrix_dialog_id:
+            logger.error(
+                "Итоговый отчёт контроля остатков не отправлен: не задан ID чата Bitrix24."
+            )
+            return
+        bitrix_client = ReadonlyBitrixRESTClient(BitrixChatControlSettings.from_env())
+        await bitrix_client.send_chat_message(
+            self.settings.bitrix_dialog_id,
+            report,
+        )
+        logger.info("Итоговый отчёт контроля остатков отправлен в Bitrix24")
 
     async def _notify(
         self,
@@ -115,7 +264,7 @@ class WBStockControlService:
             if previous_state is not None:
                 old_item = previous_grouped.setdefault(
                     group_key,
-                    {"amount": 0, "has_amount": False, "incomplete": False},
+                    {"amount": 0, "has_amount": False, "incomplete": False, "zeroing_failed": False},
                 )
                 old_amount, old_status = previous_state
                 if old_amount is not None and old_status == "ok":
@@ -125,8 +274,10 @@ class WBStockControlService:
                     old_item["incomplete"] = True
             item = grouped.setdefault(
                 group_key,
-                {"amount": 0, "has_amount": False, "incomplete": False},
+                {"amount": 0, "has_amount": False, "incomplete": False, "zeroing_failed": False},
             )
+            if observation.error_type == "stocks_update_failed":
+                item["zeroing_failed"] = True
             if observation.amount is not None and observation.check_status == "ok":
                 item["amount"] = int(item["amount"]) + observation.amount
                 item["has_amount"] = True
@@ -135,7 +286,13 @@ class WBStockControlService:
 
         messages: list[str] = []
         for (account, wild, article_id), item in sorted(grouped.items()):
-            if item["incomplete"] and not item["has_amount"]:
+            if item["zeroing_failed"]:
+                text = (
+                    f"ЛК: {account} | wild: {wild} | SKU: {article_id} | "
+                    "остаток: не удалось обнулить в WB."
+                )
+                state = "zeroing_error"
+            elif item["incomplete"] and not item["has_amount"]:
                 text = (
                     f"ЛК: {account} | wild: {wild} | SKU: {article_id} | "
                     "остаток: не удалось определить."
