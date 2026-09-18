@@ -124,6 +124,19 @@ class ReadonlyBitrixRESTClient:
             payload["FIRST_ID"] = int(last_synced_message_id)
         return await self._call_method("im.dialog.messages.get", payload)
 
+    async def send_chat_message(self, dialog_id: str, message: str) -> Any:
+        """Отправляет служебное уведомление в указанный рабочий чат Bitrix24.
+
+        Бизнес-сценарий: оперативные сигналы контроля остатков должны попадать
+        в коммерческий отдел, при этом текст сообщения не содержит секретов.
+        """
+        if not dialog_id.strip() or not message.strip():
+            raise ValueError("Для сообщения Bitrix24 нужны dialog_id и непустой текст.")
+        return await self._call_method(
+            "im.message.add",
+            {"DIALOG_ID": dialog_id.strip(), "MESSAGE": message[:4000]},
+        )
+
     def _build_request_context(self) -> BitrixRESTRequestContext:
         """Проверяет настройки авторизации и строит базовый endpoint REST.
 

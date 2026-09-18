@@ -105,7 +105,10 @@ def build_bitrix_chat_control_router():
         if not chats:
             return "Активные чаты для мониторинга пока не настроены."
         lines = [f"Отслеживаемые чаты: {len(chats)}", ""]
-        lines.extend(f"{index}. {chat.name}" for index, chat in enumerate(chats, start=1))
+        lines.extend(
+            f"{index}. {chat.name} — Bitrix ID: {chat.bitrix_dialog_id}"
+            for index, chat in enumerate(chats, start=1)
+        )
         lines.extend(
             [
                 "",
