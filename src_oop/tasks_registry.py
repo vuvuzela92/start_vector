@@ -16,7 +16,11 @@ from src_oop.jobs.annual_procurement_plan.run import (
     transport_unit_data_to_annual_procurement_plan,
     update_quarterly_prices_to_annual_procurement_plan,
 )
-from src_oop.jobs.autopilot.run import autopilot_hourly_run, update_individual_info
+from src_oop.jobs.autopilot.run import (
+    autopilot_hourly_run,
+    autopilot_remove_duplicates,
+    update_individual_info,
+)
 from src_oop.jobs.bukh_docs.run import get_bukh_docs_async
 from src_oop.jobs.bukh_docs.week_n_redeem_run import update_week_n_redeem
 from src_oop.jobs.bitrix_chat_control.run import (
@@ -404,6 +408,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "autopilot_hourly_run": {
         "func": smart_run(autopilot_hourly_run),
         "desc": "Почасовое обновление метрик панели управления автопилотом",
+    },
+    "autopilot_remove_duplicates": {
+        "func": smart_run(autopilot_remove_duplicates),
+        "desc": "Удаление повторных строк артикулов из листа Автопилот",
     },
     "autopilot_daily_run": {
         "func": smart_run(autopilot_daily_run),

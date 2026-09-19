@@ -12,6 +12,7 @@ from gspread.utils import a1_to_rowcol, rowcol_to_a1
 from src_oop.core.my_gspread import GoogleTabs
 from src_oop.jobs.autopilot.config import (
     AUTOPILOT_DATE_COLUMN_OFFSET,
+    AUTOPILOT_DUPLICATE_DELETE_BATCH_SIZE,
     AUTOPILOT_STATUS_CELL,
     AUTOPILOT_VALUES_FIRST_ROW,
     METRIC_TO_BASE_COLUMN,
@@ -55,11 +56,11 @@ class AutopilotSheetsWriter:
 
         Бизнес-логика:
         именно порядок этих артикулов определяет порядок записи всех метрик.
-        Перед чтением удаляются повторные строки: первое вхождение артикула
-        сохраняется, а вся строка второго и последующих вхождений удаляется.
-        Нечисловые строки пропускаются как служебные или пустые.
+        Удаление повторных строк вынесено в отдельную задачу
+        `autopilot_remove_duplicates`, чтобы почасовая загрузка метрик не
+        прерывалась из-за обслуживания структуры листа. Нечисловые строки
+        пропускаются как служебные или пустые.
         """
-        self.remove_duplicate_article_rows()
         raw_articles = self.worksheet.col_values(1)[self.values_first_row - 1 :]
         articles: list[int] = []
         for value in raw_articles:
@@ -103,22 +104,13 @@ class AutopilotSheetsWriter:
             logger.info("Дубли артикулов в ПУ не найдены.")
             return 0
 
-        requests = [
-            {
-                "deleteDimension": {
-                    "range": {
-                        "sheetId": self.worksheet.id,
-                        "dimension": "ROWS",
-                        "startIndex": row_number - 1,
-                        "endIndex": row_number,
-                    }
-                }
-            }
-            for row_number in sorted(duplicate_rows, reverse=True)
-        ]
-
         try:
-            self.worksheet.spreadsheet.batch_update({"requests": requests})
+            for requests in self._build_duplicate_delete_batches(duplicate_rows):
+                self.connector._execute_google_write_with_retry(
+                    "удаление дублей артикулов из ПУ",
+                    self.worksheet.spreadsheet.batch_update,
+                    {"requests": requests},
+                )
         except Exception:
             logger.exception(
                 "Не удалось удалить дубли артикулов из ПУ, hourly-сценарий прерван "
@@ -132,6 +124,38 @@ class AutopilotSheetsWriter:
             len(duplicate_rows),
         )
         return len(duplicate_rows)
+
+    def _build_duplicate_delete_batches(
+        self,
+        duplicate_rows: list[int],
+    ) -> list[list[dict[str, object]]]:
+        """
+        Делит удаление дублей на безопасные порции Google Sheets.
+
+        Бизнес-логика:
+        Google Sheets периодически возвращает `500` на один большой запрос
+        удаления. Порции идут от конца листа к началу, поэтому удаление строк
+        ниже не меняет номера строк в ещё не отправленных порциях и сохраняет
+        первое вхождение каждого артикула.
+        """
+        requests = [
+            {
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": self.worksheet.id,
+                        "dimension": "ROWS",
+                        "startIndex": row_number - 1,
+                        "endIndex": row_number,
+                    }
+                }
+            }
+            for row_number in sorted(duplicate_rows, reverse=True)
+        ]
+        batch_size = AUTOPILOT_DUPLICATE_DELETE_BATCH_SIZE
+        return [
+            requests[start_index : start_index + batch_size]
+            for start_index in range(0, len(requests), batch_size)
+        ]
 
     def write_metric(
         self,
