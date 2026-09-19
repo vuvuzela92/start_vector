@@ -27,6 +27,7 @@ from src_oop.jobs.autopilot.product_clients import WBPriceClient, WBPublicCardCl
 from src_oop.jobs.autopilot.repository import AutopilotRepository
 from src_oop.jobs.autopilot.sheets_writer import (
     AutopilotSheetsWriter,
+    MetricWriteResult,
     execute_google_write_pause,
 )
 
@@ -62,7 +63,8 @@ class AutopilotHourlyService:
 
         Бизнес-логика:
         сначала читает артикула из ПУ, собирает Воронку продаж WB, записывает ее метрики
-        в Google Sheets и сразу обновляет A2 временем актуализации. После этого сценарий
+        в Google Sheets и обновляет A2 только после успешной записи суммы заказов.
+        После этого сценарий
         дописывает расходы Cometa, рекламную активность, прибыль по ИУ по
         формуле daily-витрины, остатки UNIT и расчетные показатели порциями по
         каждой метрике. Онлайн-парсинг цен/СПП/рейтинга WB временно защищен
@@ -90,13 +92,33 @@ class AutopilotHourlyService:
         )
         summary.funnel_rows = len(funnel_df.index)
         funnel_metrics = self.calculator.dataframe_to_metric_dicts(funnel_df)
-        self._write_metrics(
+        orders_sum_values = funnel_metrics.get("orders_sum_rub", {})
+        expected_articles_count = len(set(articles))
+        funnel_write_results = self._write_metrics(
             writer=writer,
             metrics=funnel_metrics,
             articles=articles,
             summary=summary,
         )
-        writer.update_status(datetime.now())
+        orders_sum_result = funnel_write_results.get("orders_sum_rub")
+        if (
+            articles
+            and len(orders_sum_values) == expected_articles_count
+            and orders_sum_result is not None
+            and orders_sum_result.written
+            and orders_sum_result.rows == len(articles)
+        ):
+            writer.update_status(datetime.now())
+        else:
+            logger.warning(
+                "Статус A2 не обновлён: сумма заказов не записана для всех строк ПУ | "
+                "articles=%s | expected_articles=%s | funnel_values=%s | written=%s | written_rows=%s",
+                len(articles),
+                expected_articles_count,
+                len(orders_sum_values),
+                orders_sum_result.written if orders_sum_result else False,
+                orders_sum_result.rows if orders_sum_result else 0,
+            )
 
         adv_spend = await self.cometa_client.fetch_today_spend(articles=articles)
         summary.cometa_rows = len(adv_spend)
@@ -405,14 +427,17 @@ class AutopilotHourlyService:
         metrics: dict[str, MetricValues],
         articles: list[int],
         summary: AutopilotHourlySummary,
-    ) -> None:
+    ) -> dict[str, MetricWriteResult]:
         """
         Последовательно записывает все подготовленные метрики в ПУ.
 
         Бизнес-логика:
         одна метрика равна одной порции записи. Ошибка конкретной метрики фиксируется
-        в summary, но не останавливает запись следующих метрик.
+        в summary, но не останавливает запись следующих метрик. Результаты
+        возвращаются вызывающему сценарию, чтобы A2 подтверждал только успешную
+        запись суммы заказов.
         """
+        results_by_metric: dict[str, MetricWriteResult] = {}
         for metric_name, values_by_article in metrics.items():
             summary.metrics_attempted += 1
             result = writer.write_metric(
@@ -424,4 +449,6 @@ class AutopilotHourlyService:
                 summary.metrics_written += 1
             else:
                 summary.metrics_failed.append(metric_name)
+            results_by_metric[metric_name] = result
             execute_google_write_pause()
+        return results_by_metric
