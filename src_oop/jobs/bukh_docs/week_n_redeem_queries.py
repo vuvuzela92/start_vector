@@ -39,7 +39,10 @@ WITH week_rep AS (
         ) AS amount_withheld_to_org,
         SUM(
             CASE
-                WHEN w.title IN ('Возмещение расходов по перевозке')
+                WHEN w.title IN (
+                    'Возмещение расходов по перевозке',
+                    'Возмещение издержек по перемещению и операционной обработке товара'
+                )
                     THEN COALESCE(w.sum_rub, 0)
                 ELSE 0
             END

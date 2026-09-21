@@ -10,6 +10,12 @@ src/modules/COMETA - модуль для работы с сервисом авт
 src/GOOGLE_SHEETS - модуль для работы с гугл-таблицами.
 src/WB - модуль для работы с API WB.
 
+## Документация
+
+Корневой `README.md` содержит только общую документацию проекта. Документация
+отдельных модулей хранится в файлах с названием модуля, например
+`src_oop/jobs/bukh_docs/BUKH_DOCS.md`.
+
 ## Server deployment
 
 Для server-ready контура `Bitrix Chat Control` с `systemd`, автозапуском и таймерами
