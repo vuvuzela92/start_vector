@@ -1,5 +1,8 @@
+from src_oop.core.my_gspread import GoogleTabs
 from src_oop.jobs.autopilot.autopilot import Autopilot
+from src_oop.jobs.autopilot.config import autopilot_gs
 from src_oop.jobs.autopilot.service import AutopilotHourlyService
+from src_oop.jobs.autopilot.sheets_writer import AutopilotSheetsWriter
 
 
 def update_individual_info():
@@ -28,3 +31,22 @@ async def autopilot_hourly_run():
     """
     service = AutopilotHourlyService()
     return await service.run()
+
+
+def autopilot_remove_duplicates() -> int:
+    """
+    Удаляет повторные строки артикулов в листе автопилота отдельной задачей.
+
+    Бизнес-логика:
+    сохраняет первое вхождение каждого артикула и удаляет последующие дубли,
+    чтобы почасовая запись метрик работала с однозначным соответствием
+    «артикул — строка». Задача отделена от `autopilot_hourly_run`, потому что
+    массовая правка структуры Google Sheets не должна останавливать обновление
+    оперативных показателей продаж.
+    """
+    connector = GoogleTabs(
+        table_title=autopilot_gs["title"],
+        sheet_title=autopilot_gs["hourly_sheet"],
+    )
+    writer = AutopilotSheetsWriter(connector)
+    return writer.remove_duplicate_article_rows()

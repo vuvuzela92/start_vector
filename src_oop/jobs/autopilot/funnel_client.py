@@ -52,7 +52,19 @@ class WBFunnelClient:
             headers={"Authorization": token},
             payload=payload,
         )
-        products = response_payload.get("data", {}).get("products", [])
+        data = response_payload.get("data")
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                "WB вернул успешный ответ воронки без объекта data: "
+                f"account={account}"
+            )
+
+        products = data.get("products")
+        if not isinstance(products, list):
+            raise RuntimeError(
+                "WB вернул успешный ответ воронки без списка товаров: "
+                f"account={account}"
+            )
         if not products:
             logger.warning("Воронка WB не вернула товары, кабинет будет пропущен: account=%s", account)
             return pd.DataFrame()
@@ -90,8 +102,45 @@ class WBFunnelClient:
         )
         result_df = result_df.dropna(subset=["article_id"]).copy()
         result_df["article_id"] = result_df["article_id"].astype(int)
+        self._log_missing_requested_articles(
+            account=account,
+            requested_article_ids=nm_ids,
+            returned_article_ids=result_df["article_id"].tolist(),
+        )
         logger.info("Воронка WB загружена для кабинета: account=%s rows=%s", account, len(result_df.index))
         return result_df
+
+    @staticmethod
+    def _log_missing_requested_articles(
+        account: str,
+        requested_article_ids: list[int],
+        returned_article_ids: list[int],
+    ) -> None:
+        """
+        Фиксирует неполный ответ Воронки WB по запрошенным артикулам.
+
+        Бизнес-логика:
+        автопилот обновляет сумму заказов только для строк, которые вернул WB.
+        Лог с количеством и примерами отсутствующих артикулов помогает отличить
+        отсутствие свежего фактического значения в ПУ от реального нулевого
+        значения в личном кабинете.
+        """
+        requested_ids = set(requested_article_ids)
+        missing_ids = requested_ids.difference(returned_article_ids)
+        if not missing_ids:
+            return
+
+        examples = ", ".join(str(article_id) for article_id in sorted(missing_ids)[:10])
+        logger.warning(
+            "Воронка WB вернула не все запрошенные артикула; для отсутствующих строк "
+            "не получено свежее значение суммы заказов: account=%s requested=%s returned=%s "
+            "missing=%s examples=%s",
+            account,
+            len(requested_ids),
+            len(set(returned_article_ids)),
+            len(missing_ids),
+            examples,
+        )
 
     @staticmethod
     def _build_payload(nm_ids: list[int], report_date: date) -> dict:
@@ -185,12 +234,12 @@ class WBFunnelClient:
         )
         logger.warning(
             "Повторяем запрос Воронки WB после временной ошибки: account=%s attempt=%s/%s "
-            "status=%s error=%s sleep_seconds=%s",
+            "status=%s error_type=%s sleep_seconds=%s",
             account,
             attempt,
             self.max_retries,
             status,
-            repr(error) if error else None,
+            type(error).__name__ if error else None,
             sleep_seconds,
         )
         await asyncio.sleep(sleep_seconds)
