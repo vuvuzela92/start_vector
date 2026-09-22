@@ -55,6 +55,9 @@ from src_oop.jobs.fin_reports_analyze.run import (
     update_stock_analyze,
     update_weekly_profit_report,
 )
+from src_oop.jobs.fin_reports_analyze.system_penalties_analytics import (
+    run_system_penalties_analysis,
+)
 from src_oop.jobs.fbo_supplies.run import fbo_supplies_run
 from src_oop.jobs.fbs2_test.run import fbs2_test_movements_run, fbs2_test_stocks_run
 from src_oop.jobs.funnel_sales.run import funnel_sales
@@ -304,6 +307,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_stock_analyze),
         "desc": "Выгрузка данных об остатках из арт анализа",
     },
+    "run_system_penalties_analysis": {
+        "func": smart_run(run_system_penalties_analysis),
+        "desc": "Построение системной витрины штрафов с событиями FBS и контрольной сверкой",
+    },
     # Логистика, склады и операционные остатки.
     "fbo_supplies_run": {
         "func": smart_run(fbo_supplies_run),
@@ -367,7 +374,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
     },
     "wb_stock_control_run": {
         "func": smart_run(wb_stock_control_run),
-        "desc": "Полный read-only контроль опубликованных FBS-остатков WB с записью в ClickHouse",
+        "desc": "Полный read-only контроль опубликованных FBS-остатков вне юнитки",
     },
     # UNIT: сервисные обновления справочников, статусов и ценовых витрин.
     "update_adv_participants_to_gs": {
