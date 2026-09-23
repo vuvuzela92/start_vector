@@ -38,7 +38,10 @@ DETAIL_COLUMNS = [
     "nm_id",
     "penalty",
     "wild",
+    "supply_id",
     "stock_on_order_date",
+    "stock_reference_date",
+    "stock_reference_source",
     "stock_state",
     "acceptance_act_found",
     "acceptance_document_numbers",
@@ -47,6 +50,7 @@ DETAIL_COLUMNS = [
     "service_task_found",
     "wb_created_at",
     "fbs_real_status",
+    "fbs_real_status_at",
     "status_row_count",
     "shipped_at",
     "wb_status_sorted",
@@ -308,9 +312,11 @@ class SystemPenaltiesAnalyzer:
         """Загружает задания и агрегированные статусы из FBS-БД.
 
         Бизнес-правило: по каждому `wb_assembly_task.id` возвращается ровно
-        одна строка. Отгрузкой считается самое раннее событие с
-        `real_status = 'shipped'`, а сортировкой WB — последнее непустое
-        значение `wb_status_sorted`.
+        одна строка. История операционных событий читается из
+        `wb_assembly_task_live`: отгрузкой считается самое раннее событие
+        `shipped`, финальным статусом и его датой — последнее событие истории.
+        Поля сортировки WB берутся из текущей статусной таблицы, потому что в
+        `wb_assembly_task_live` их нет.
         """
 
         columns = [
@@ -323,6 +329,7 @@ class SystemPenaltiesAnalyzer:
             "warehouse_id",
             "office_id",
             "fbs_real_status",
+            "fbs_real_status_at",
             "status_row_count",
             "shipped_at",
             "wb_status_sorted",
@@ -334,6 +341,23 @@ class SystemPenaltiesAnalyzer:
 
         query = text(
             """
+            WITH live_events AS (
+                SELECT
+                    task_id,
+                    (ARRAY_AGG(status ORDER BY date_changed DESC NULLS LAST))[1]
+                        AS fbs_real_status,
+                    (ARRAY_AGG(
+                        date_changed
+                        ORDER BY date_changed DESC NULLS LAST
+                    ))[1] AS fbs_real_status_at,
+                    COUNT(*)::integer AS status_row_count,
+                    MIN(date_changed) FILTER (
+                        WHERE LOWER(status) = 'shipped'
+                    ) AS shipped_at
+                FROM public.wb_assembly_task_live
+                WHERE task_id = ANY(:assembly_ids)
+                GROUP BY task_id
+            )
             SELECT
                 t.id AS assembly_id,
                 TRUE AS service_task_found,
@@ -343,15 +367,14 @@ class SystemPenaltiesAnalyzer:
                 t.account AS service_account,
                 t.warehouse_id,
                 t.office_id,
-                (ARRAY_AGG(s.real_status ORDER BY s.real_status_date_changed DESC NULLS LAST))[1]
-                    AS fbs_real_status,
-                COUNT(s.id)::integer AS status_row_count,
-                MIN(s.real_status_date_changed) FILTER (
-                    WHERE LOWER(s.real_status) = 'shipped'
-                ) AS shipped_at,
+                le.fbs_real_status,
+                le.fbs_real_status_at,
+                COALESCE(le.status_row_count, 0)::integer AS status_row_count,
+                le.shipped_at,
                 MAX(s.wb_status_sorted) AS wb_status_sorted
             FROM public.wb_assembly_task t
             LEFT JOIN public.wb_assembly_task_status s ON s.id = t.id
+            LEFT JOIN live_events le ON le.task_id = t.id
             WHERE t.id = ANY(:assembly_ids)
             GROUP BY
                 t.id,
@@ -360,7 +383,11 @@ class SystemPenaltiesAnalyzer:
                 t.article,
                 t.account,
                 t.warehouse_id,
-                t.office_id
+                t.office_id,
+                le.fbs_real_status,
+                le.fbs_real_status_at,
+                le.status_row_count,
+                le.shipped_at
             """
         )
         frames: list[pd.DataFrame] = []
@@ -374,10 +401,52 @@ class SystemPenaltiesAnalyzer:
         dataframe = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=columns)
         if dataframe.empty:
             return dataframe
-        for column in ("wb_created_at", "shipped_at", "wb_status_sorted"):
+        for column in (
+            "wb_created_at",
+            "shipped_at",
+            "fbs_real_status_at",
+            "wb_status_sorted",
+        ):
             dataframe[column] = pd.to_datetime(dataframe[column], utc=True, errors="coerce")
         dataframe["has_shipped"] = dataframe["shipped_at"].notna()
         dataframe["has_wb_sorted"] = dataframe["wb_status_sorted"].notna()
+        return dataframe.drop_duplicates("assembly_id", keep="first")
+
+    def _load_supply_ids(self, assembly_ids: list[int]) -> pd.DataFrame:
+        """Загружает номер FBS-поставки для сборочных заданий.
+
+        Бизнес-правило: для FBS номер поставки хранится в
+        `public.assembly_task.supply_id` и имеет формат `WB-GI-*`. Таблица
+        `wb_supplies` содержит поставки другой модели с числовым `id`, поэтому
+        она не используется для неподтвержденного соединения с FBS-заказом.
+        """
+
+        columns = ["assembly_id", "supply_id"]
+        if not assembly_ids:
+            return pd.DataFrame(columns=columns)
+
+        query = text(
+            """
+            SELECT
+                task_id AS assembly_id,
+                MAX(NULLIF(BTRIM(supply_id), '')) AS supply_id
+            FROM public.assembly_task
+            WHERE task_id = ANY(:assembly_ids)
+            GROUP BY task_id
+            """
+        )
+        frames: list[pd.DataFrame] = []
+        for batch in self._chunks(assembly_ids):
+            frames.append(
+                self.database_cls.read_sql_to_dataframe(
+                    query,
+                    params={"assembly_ids": batch},
+                )
+            )
+        if not frames:
+            return pd.DataFrame(columns=columns)
+        dataframe = pd.concat(frames, ignore_index=True)
+        dataframe["supply_id"] = dataframe["supply_id"].astype("string")
         return dataframe.drop_duplicates("assembly_id", keep="first")
 
     def _load_acceptance_acts(self, assembly_ids: list[int]) -> pd.DataFrame:
@@ -437,8 +506,9 @@ class SystemPenaltiesAnalyzer:
 
         Бизнес-правило: остаток используется только как объясняющий признак
         для штрафов по невыполненным заказам; остальные основания не требуют
-        дополнительного чтения дневной WMS-витрины. В поле
-        `stock_on_order_date` переносится общий остаток `wms_stock.stock_qty`.
+        дополнительного чтения дневной WMS-витрины. Основной датой является
+        дата появления задания `wb_created_at` в московской таймзоне, а при
+        ее отсутствии используется финансовая дата `order_dt`.
         """
 
         target = dataframe[
@@ -450,7 +520,42 @@ class SystemPenaltiesAnalyzer:
         ].copy()
         target = target.dropna(subset=["wild"])
         if target.empty:
-            return pd.DataFrame(columns=["assembly_id", "stock_on_order_date"])
+            return pd.DataFrame(
+                columns=[
+                    "assembly_id",
+                    "nm_id",
+                    "stock_on_order_date",
+                    "stock_reference_date",
+                    "stock_reference_source",
+                ]
+            )
+
+        target["financial_order_date"] = pd.to_datetime(
+            target["order_dt"], utc=True, errors="coerce"
+        ).dt.tz_convert(MOSCOW_TZ).dt.date
+        target["service_order_date"] = pd.to_datetime(
+            target["wb_created_at"], utc=True, errors="coerce"
+        ).dt.tz_convert(MOSCOW_TZ).dt.date
+        target["stock_reference_date"] = target["service_order_date"].fillna(
+            target["financial_order_date"]
+        )
+        target["stock_reference_source"] = "wb_created_at"
+        target.loc[target["service_order_date"].isna(), "stock_reference_source"] = (
+            "order_dt"
+        )
+        reference_dates = target["stock_reference_date"].dropna()
+        if reference_dates.empty:
+            return pd.DataFrame(
+                columns=[
+                    "assembly_id",
+                    "nm_id",
+                    "stock_on_order_date",
+                    "stock_reference_date",
+                    "stock_reference_source",
+                ]
+            )
+        stock_date_from = min(reference_dates)
+        stock_date_to = max(reference_dates) + timedelta(days=1)
 
         wilds = target["wild"].astype(str).unique().tolist()
         query = text(
@@ -462,8 +567,8 @@ class SystemPenaltiesAnalyzer:
                 COUNT(*)::integer AS stock_row_count
             FROM public.wms_stock ws
             WHERE ws.product_id = ANY(:wilds)
-              AND ws.balance_date >= :date_from
-              AND ws.balance_date < :date_to
+              AND ws.balance_date >= :stock_date_from
+              AND ws.balance_date < :stock_date_to
             GROUP BY ws.product_id, ws.balance_date
             """
         )
@@ -475,30 +580,49 @@ class SystemPenaltiesAnalyzer:
                     query,
                     params={
                         "wilds": wilds[start:start + 500],
-                        "date_from": self.date_from,
-                        "date_to": self.date_to,
+                        "stock_date_from": stock_date_from,
+                        "stock_date_to": stock_date_to,
                     },
                 )
             )
         stock = pd.concat(stock_frames, ignore_index=True) if stock_frames else pd.DataFrame()
         if stock.empty:
-            return pd.DataFrame(columns=["assembly_id", "stock_on_order_date"])
+            return pd.DataFrame(
+                columns=[
+                    "assembly_id",
+                    "nm_id",
+                    "stock_on_order_date",
+                    "stock_reference_date",
+                    "stock_reference_source",
+                ]
+            )
 
         stock["transaction_date"] = pd.to_datetime(stock["transaction_date"], errors="coerce").dt.date
-        target["order_date"] = pd.to_datetime(target["order_dt"], utc=True).dt.tz_convert(
-            MOSCOW_TZ
-        ).dt.date
         target["wild"] = target["wild"].astype(str).str.strip()
         stock["wild"] = stock["wild"].astype(str).str.strip()
-        merged = target[["assembly_id", "nm_id", "wild", "order_date"]].merge(
+        merged = target[
+            [
+                "assembly_id",
+                "nm_id",
+                "wild",
+                "stock_reference_date",
+                "stock_reference_source",
+            ]
+        ].merge(
             stock,
-            left_on=["wild", "order_date"],
+            left_on=["wild", "stock_reference_date"],
             right_on=["wild", "transaction_date"],
             how="left",
         )
-        return merged[["assembly_id", "nm_id", "stock_on_order_date"]].drop_duplicates(
-            ["assembly_id", "nm_id"], keep="first"
-        )
+        return merged[
+            [
+                "assembly_id",
+                "nm_id",
+                "stock_on_order_date",
+                "stock_reference_date",
+                "stock_reference_source",
+            ]
+        ].drop_duplicates(["assembly_id", "nm_id"], keep="first")
 
     @staticmethod
     def _calculate_intervals(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -509,12 +633,23 @@ class SystemPenaltiesAnalyzer:
         """
 
         dataframe = dataframe.copy()
-        for column in ("wb_created_at", "shipped_at", "wb_status_sorted"):
+        if "fbs_real_status" not in dataframe:
+            dataframe["fbs_real_status"] = pd.NA
+        if "fbs_real_status_at" not in dataframe:
+            dataframe["fbs_real_status_at"] = pd.NaT
+        for column in (
+            "wb_created_at",
+            "shipped_at",
+            "fbs_real_status_at",
+            "wb_status_sorted",
+        ):
             dataframe[column] = pd.to_datetime(dataframe[column], utc=True, errors="coerce")
         dataframe["hours_created_to_shipped"] = (
             dataframe["shipped_at"] - dataframe["wb_created_at"]
         ).dt.total_seconds() / 3600
-        dataframe["order_processing_hours"] = dataframe["hours_created_to_shipped"]
+        dataframe["order_processing_hours"] = (
+            dataframe["fbs_real_status_at"] - dataframe["wb_created_at"]
+        ).dt.total_seconds() / 3600
         dataframe["hours_shipped_to_wb_sorted"] = (
             dataframe["wb_status_sorted"] - dataframe["shipped_at"]
         ).dt.total_seconds() / 3600
@@ -539,6 +674,11 @@ class SystemPenaltiesAnalyzer:
             "event_state",
         ] = "отгружен и отсортирован WB"
         dataframe.loc[
+            dataframe["has_shipped"]
+            & dataframe["fbs_real_status"].fillna("").str.lower().eq("canceled"),
+            "event_state",
+        ] = "отгружен, затем отменен"
+        dataframe.loc[
             dataframe.get(
                 "acceptance_act_found",
                 pd.Series(False, index=dataframe.index),
@@ -549,6 +689,7 @@ class SystemPenaltiesAnalyzer:
         dataframe["event_data_quality"] = "ok"
         invalid = (
             dataframe["hours_created_to_shipped"].lt(0)
+            | dataframe["order_processing_hours"].lt(0)
             | dataframe["hours_shipped_to_wb_sorted"].lt(0)
             | dataframe["hours_created_to_wb_sorted"].lt(0)
         )
@@ -679,9 +820,16 @@ class SystemPenaltiesAnalyzer:
 
         assembly_ids = financial["assembly_id"].dropna().astype(int).unique().tolist()
         fbs = self._load_fbs_orders(assembly_ids)
+        supplies = self._load_supply_ids(assembly_ids)
         acceptance = self._load_acceptance_acts(assembly_ids)
-        stock = self._load_stock_snapshot(financial)
         dataframe = financial.merge(fbs, how="left", on="assembly_id", validate="many_to_one")
+        dataframe = dataframe.merge(
+            supplies,
+            how="left",
+            on="assembly_id",
+            validate="many_to_one",
+        )
+        stock = self._load_stock_snapshot(dataframe)
         dataframe = dataframe.merge(
             acceptance,
             how="left",
@@ -777,6 +925,7 @@ class SystemPenaltiesAnalyzer:
             nm_id bigint,
             penalty numeric(18, 2) NOT NULL,
             wild text,
+            supply_id text,
             stock_on_order_date numeric(18, 2),
             stock_state text,
             acceptance_act_found boolean NOT NULL,
@@ -786,6 +935,7 @@ class SystemPenaltiesAnalyzer:
             service_task_found boolean NOT NULL,
             wb_created_at timestamptz,
             fbs_real_status text,
+            fbs_real_status_at timestamptz,
             status_row_count integer,
             shipped_at timestamptz,
             wb_status_sorted timestamptz,
@@ -804,7 +954,13 @@ class SystemPenaltiesAnalyzer:
             is_focus_penalty boolean NOT NULL,
             loaded_at timestamptz NOT NULL,
             CONSTRAINT uq_{DETAIL_TABLE}_grain
-                UNIQUE (analysis_month_msk, assembly_id, bonus_type_name, nm_id)
+                UNIQUE (
+                    analysis_month_msk,
+                    realizationreport_id,
+                    assembly_id,
+                    bonus_type_name,
+                    nm_id
+                )
         );
         ALTER TABLE public.{DETAIL_TABLE}
             ADD COLUMN IF NOT EXISTS acceptance_act_found boolean NOT NULL DEFAULT FALSE;
@@ -815,11 +971,34 @@ class SystemPenaltiesAnalyzer:
         ALTER TABLE public.{DETAIL_TABLE}
             ADD COLUMN IF NOT EXISTS acceptance_row_count integer;
         ALTER TABLE public.{DETAIL_TABLE}
+            ADD COLUMN IF NOT EXISTS fbs_real_status_at timestamptz;
+        ALTER TABLE public.{DETAIL_TABLE}
+            ADD COLUMN IF NOT EXISTS supply_id text;
+        ALTER TABLE public.{DETAIL_TABLE}
+            ADD COLUMN IF NOT EXISTS stock_reference_date date;
+        ALTER TABLE public.{DETAIL_TABLE}
+            ADD COLUMN IF NOT EXISTS stock_reference_source text;
+        ALTER TABLE public.{DETAIL_TABLE}
+            DROP COLUMN IF EXISTS canceled_at;
+        ALTER TABLE public.{DETAIL_TABLE}
+            DROP CONSTRAINT IF EXISTS uq_{DETAIL_TABLE}_grain;
+        ALTER TABLE public.{DETAIL_TABLE}
+            ADD CONSTRAINT uq_{DETAIL_TABLE}_grain
+            UNIQUE (
+                analysis_month_msk,
+                realizationreport_id,
+                assembly_id,
+                bonus_type_name,
+                nm_id
+            );
+        ALTER TABLE public.{DETAIL_TABLE}
             ADD COLUMN IF NOT EXISTS order_processing_hours numeric(18, 3);
         UPDATE public.{DETAIL_TABLE}
-        SET order_processing_hours = hours_created_to_shipped
-        WHERE order_processing_hours IS NULL
-          AND hours_created_to_shipped IS NOT NULL;
+        SET order_processing_hours = CASE
+            WHEN fbs_real_status_at IS NOT NULL AND wb_created_at IS NOT NULL
+                THEN EXTRACT(EPOCH FROM (fbs_real_status_at - wb_created_at)) / 3600
+            ELSE NULL
+        END;
         CREATE INDEX IF NOT EXISTS ix_{DETAIL_TABLE}_month
             ON public.{DETAIL_TABLE} (analysis_month_msk);
         CREATE INDEX IF NOT EXISTS ix_{DETAIL_TABLE}_assembly
@@ -915,7 +1094,13 @@ class SystemPenaltiesAnalyzer:
         table.reflect(bind=self.database_cls.get_engine(), only=[DETAIL_TABLE], schema="public")
         target = table.tables[f"public.{DETAIL_TABLE}"]
         records = self._records(dataframe)
-        unique_columns = ["analysis_month_msk", "assembly_id", "bonus_type_name", "nm_id"]
+        unique_columns = [
+            "analysis_month_msk",
+            "realizationreport_id",
+            "assembly_id",
+            "bonus_type_name",
+            "nm_id",
+        ]
         with self.database_cls.get_engine().begin() as connection:
             for start in range(0, len(records), 1000):
                 batch = records[start:start + 1000]

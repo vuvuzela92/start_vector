@@ -35,6 +35,50 @@ def test_calculate_intervals_marks_inconsistent_sequence() -> None:
     assert result.loc[0, "hours_created_to_shipped"] == -1
 
 
+def test_order_processing_hours_uses_final_status_date() -> None:
+    """Время обработки заказа считается до финального статуса, включая отмену."""
+
+    source = pd.DataFrame(
+        {
+            "service_task_found": [True],
+            "wb_created_at": ["2026-08-01T10:00:00+03:00"],
+            "fbs_real_status_at": ["2026-08-02T10:00:00+03:00"],
+            "shipped_at": ["2026-08-01T11:00:00+03:00"],
+            "wb_status_sorted": [None],
+            "has_shipped": [True],
+            "has_wb_sorted": [False],
+            "status_row_count": [2],
+        }
+    )
+
+    result = SystemPenaltiesAnalyzer._calculate_intervals(source)
+
+    assert result.loc[0, "hours_created_to_shipped"] == 1
+    assert result.loc[0, "order_processing_hours"] == 24
+
+
+def test_calculate_intervals_marks_shipped_then_canceled_order() -> None:
+    """История должна отличать отмену после отгрузки от неотгруженного заказа."""
+
+    source = pd.DataFrame(
+        {
+            "service_task_found": [True],
+            "wb_created_at": ["2026-08-01T10:00:00+03:00"],
+            "fbs_real_status": ["canceled"],
+            "fbs_real_status_at": ["2026-08-02T10:00:00+03:00"],
+            "shipped_at": ["2026-08-01T11:00:00+03:00"],
+            "wb_status_sorted": [None],
+            "has_shipped": [True],
+            "has_wb_sorted": [False],
+            "status_row_count": [3],
+        }
+    )
+
+    result = SystemPenaltiesAnalyzer._calculate_intervals(source)
+
+    assert result.loc[0, "event_state"] == "отгружен, затем отменен"
+
+
 def test_classify_zero_stock_unshipped_order_as_inventory() -> None:
     """Невыполненный заказ без отгрузки и с нулевым остатком относится к остаткам."""
 

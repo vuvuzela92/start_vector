@@ -70,7 +70,7 @@ WITH week_rep AS (
         w.account
     FROM weekly_implementation_report w
     LEFT JOIN vat_guide v
-        ON v.account = UPPER(w.account)
+        ON UPPER(TRIM(v.account)) = UPPER(TRIM(w.account))
     GROUP BY w.doc_num, w."date", w.account
 ),
 fin_rep AS (
@@ -100,7 +100,7 @@ redeem_not AS (
         DATE(SUBSTRING(r.doc_name FROM ' от (\\d{4}-\\d{2}-\\d{2})')) AS redeem_notif_date
     FROM redeem_notification r
     LEFT JOIN vat_guide v
-        ON v.account = UPPER(r.account)
+        ON UPPER(TRIM(v.account)) = UPPER(TRIM(r.account))
     GROUP BY r.account, r.doc_name, v.vat
 )
 SELECT
@@ -139,7 +139,7 @@ LEFT JOIN redeem_not r
     ON f.realizationreport_id = r.redeem_notif::INT
    AND UPPER(w.account) = UPPER(r.account)
 LEFT JOIN vat_guide v
-    ON v.account = UPPER(w.account)
+    ON UPPER(TRIM(v.account)) = UPPER(TRIM(w.account))
 WHERE w.report_date > DATE '2025-01-31'
 ORDER BY w.week_start DESC, w.account;
 """
