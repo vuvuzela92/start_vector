@@ -16,6 +16,7 @@ from src_oop.jobs.annual_procurement_plan.run import (
     transport_unit_data_to_annual_procurement_plan,
     update_quarterly_prices_to_annual_procurement_plan,
 )
+from src_oop.jobs.assembly_info.run import assembly_status_model_run
 from src_oop.jobs.autopilot.run import (
     autopilot_hourly_run,
     autopilot_remove_duplicates,
@@ -109,6 +110,10 @@ def smart_run(func: Callable):
 
 TASKS: Dict[str, Dict[str, Any]] = {
     # Маркетплейс WB: реклама и ежедневные оперативные отчеты.
+    "assembly_status_model_run": {
+        "func": smart_run(assembly_status_model_run),
+        "desc": "Сбор и сохранение сборочных заданий и статусов WB",
+    },
     "advert_info": {
         "func": smart_run(advert_info),
         "desc": "Запуск обновления данных о рекламных кампаниях",
