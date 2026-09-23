@@ -345,6 +345,9 @@ class WBStockControlService:
         ]
         zero = [message for message in messages if "не обнаружен" in message]
         incomplete = [message for message in messages if "не удалось проверить" in message]
+        zeroing_errors = [
+            message for message in messages if "не удалось обнулить" in message
+        ]
         sections = []
         if positive:
             sections.append("Склад ФБС: остатки по wild вне юнитки:\n" + "\n".join(positive))
@@ -352,7 +355,14 @@ class WBStockControlService:
             sections.append("Склад ФБС: нулевые остатки по SKU вне юнитки:\n" + "\n".join(zero))
         if incomplete:
             sections.append("Склад ФБС: остаток по wild не удалось проверить:\n" + "\n".join(incomplete))
+        if zeroing_errors:
+            sections.append("Склад ФБС: остаток не удалось обнулить:\n" + "\n".join(zeroing_errors))
         notification_text = "\n\n".join(sections)[:4000]
+        if not notification_text:
+            logger.warning(
+                "Уведомление контроля остатков не отправлено: после классификации не осталось текста."
+            )
+            return
         print(notification_text)
         if not self.settings.bitrix_enabled:
             logger.info(
