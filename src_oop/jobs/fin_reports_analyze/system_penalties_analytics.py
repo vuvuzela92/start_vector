@@ -315,8 +315,10 @@ class SystemPenaltiesAnalyzer:
         одна строка. История операционных событий читается из
         `wb_assembly_task_live`: отгрузкой считается самое раннее событие
         `shipped`, финальным статусом и его датой — последнее событие истории.
-        Поля сортировки WB берутся из текущей статусной таблицы, потому что в
-        `wb_assembly_task_live` их нет.
+        История операционных событий нашей системы читается из
+        `wb_assembly_task_live`. Данные о сортировке WB загружаются отдельно
+        из основной БД, потому что таблица `assembly_task_status_model`
+        находится не в FBS-БД.
         """
 
         columns = [
@@ -332,7 +334,6 @@ class SystemPenaltiesAnalyzer:
             "fbs_real_status_at",
             "status_row_count",
             "shipped_at",
-            "wb_status_sorted",
             "has_shipped",
             "has_wb_sorted",
         ]
@@ -370,10 +371,8 @@ class SystemPenaltiesAnalyzer:
                 le.fbs_real_status,
                 le.fbs_real_status_at,
                 COALESCE(le.status_row_count, 0)::integer AS status_row_count,
-                le.shipped_at,
-                MAX(s.wb_status_sorted) AS wb_status_sorted
+                le.shipped_at
             FROM public.wb_assembly_task t
-            LEFT JOIN public.wb_assembly_task_status s ON s.id = t.id
             LEFT JOIN live_events le ON le.task_id = t.id
             WHERE t.id = ANY(:assembly_ids)
             GROUP BY
@@ -405,11 +404,53 @@ class SystemPenaltiesAnalyzer:
             "wb_created_at",
             "shipped_at",
             "fbs_real_status_at",
-            "wb_status_sorted",
         ):
             dataframe[column] = pd.to_datetime(dataframe[column], utc=True, errors="coerce")
         dataframe["has_shipped"] = dataframe["shipped_at"].notna()
-        dataframe["has_wb_sorted"] = dataframe["wb_status_sorted"].notna()
+        dataframe["has_wb_sorted"] = False
+        return dataframe.drop_duplicates("assembly_id", keep="first")
+
+    def _load_wb_sorted_events(self, assembly_ids: list[int]) -> pd.DataFrame:
+        """Загружает первое обнаружение сортировки WB из основной БД.
+
+        Бизнес-правило: `created_at_db` фиксирует момент, когда система
+        обнаружила строку со статусом `sorted`. Таблица находится на основном
+        хосте 149, поэтому читается через основное подключение и агрегируется
+        до одной строки на сборочное задание без fan-out.
+        """
+
+        columns = ["assembly_id", "wb_status_sorted"]
+        if not assembly_ids:
+            return pd.DataFrame(columns=columns)
+        query = text(
+            """
+            SELECT
+                id AS assembly_id,
+                MIN(created_at_db) FILTER (
+                    WHERE LOWER(wb_status) = 'sorted'
+                ) AS wb_status_sorted
+            FROM public.assembly_task_status_model
+            WHERE id = ANY(:assembly_ids)
+            GROUP BY id
+            """
+        )
+        frames: list[pd.DataFrame] = []
+        for batch in self._chunks(assembly_ids):
+            frames.append(
+                self.database_cls.read_sql_to_dataframe(
+                    query,
+                    params={"assembly_ids": batch},
+                )
+            )
+        if not frames:
+            return pd.DataFrame(columns=columns)
+        dataframe = pd.concat(frames, ignore_index=True)
+        dataframe["assembly_id"] = pd.to_numeric(
+            dataframe["assembly_id"], errors="coerce"
+        ).astype("Int64")
+        dataframe["wb_status_sorted"] = pd.to_datetime(
+            dataframe["wb_status_sorted"], utc=True, errors="coerce"
+        )
         return dataframe.drop_duplicates("assembly_id", keep="first")
 
     def _load_supply_ids(self, assembly_ids: list[int]) -> pd.DataFrame:
@@ -820,9 +861,16 @@ class SystemPenaltiesAnalyzer:
 
         assembly_ids = financial["assembly_id"].dropna().astype(int).unique().tolist()
         fbs = self._load_fbs_orders(assembly_ids)
+        wb_sorted = self._load_wb_sorted_events(assembly_ids)
         supplies = self._load_supply_ids(assembly_ids)
         acceptance = self._load_acceptance_acts(assembly_ids)
         dataframe = financial.merge(fbs, how="left", on="assembly_id", validate="many_to_one")
+        dataframe = dataframe.merge(
+            wb_sorted,
+            how="left",
+            on="assembly_id",
+            validate="many_to_one",
+        )
         dataframe = dataframe.merge(
             supplies,
             how="left",
