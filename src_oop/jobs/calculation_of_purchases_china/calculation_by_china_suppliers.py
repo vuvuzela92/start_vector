@@ -1,3 +1,9 @@
+"""Перенос квартального плана в рабочую таблицу закупок Китая.
+
+Сценарий публикует значения исходного плана в фиксированной структуре колонок.
+Группировка по поставщикам и расчет сумм закупки здесь не выполняются.
+"""
+
 import logging
 
 import pandas as pd
@@ -13,9 +19,18 @@ logger = logging.getLogger(__name__)
 
 
 class CalculationByChinaSuppliers:
-    """Переносит поквартальный годовой план в сводную таблицу по поставщикам."""
+    """Готовит строки годового плана для листа «БД_Поквартально».
+
+    Сохраняет строки источника и отбирает колонки ANNUAL_PLAN_COLUMNS.
+    Отсутствующие поля добавляет пустыми, без расчета или переименования.
+    """
 
     def __init__(self) -> None:
+        """Задает источник плана и приемник из конфигураций двух модулей.
+
+        Подключения создаются при первом чтении или записи, чтобы пустой
+        исходный план не требовал открытия целевого листа.
+        """
         self._source_table_name = annual_procurement_plan.get("title")
         self._source_sheet_name = annual_procurement_plan.get("quarter_sheet")
         self._target_table_name = delivery_calculation_china.get("title")
@@ -26,6 +41,7 @@ class CalculationByChinaSuppliers:
 
     @property
     def source_connect(self) -> GoogleTabs:
+        """Открывает и кеширует лист квартального плана для чтения по имени."""
         if self._source_conn is None:
             self._source_conn = GoogleTabs(
                 self._source_table_name,
@@ -35,6 +51,7 @@ class CalculationByChinaSuppliers:
 
     @property
     def target_connect(self) -> GoogleTabs:
+        """Открывает и кеширует целевой лист для публикации квартального плана."""
         if self._target_conn is None:
             self._target_conn = GoogleTabs(
                 self._target_table_name,
@@ -43,7 +60,13 @@ class CalculationByChinaSuppliers:
         return self._target_conn
 
     def get_quarterly_plan_data(self) -> pd.DataFrame:
-        """Читает поквартальный план: заголовки в 4-й строке, данные с 5-й."""
+        """Читает значения квартального плана и выбирает колонки для переноса.
+
+        Заголовки ожидаются в строке 4, данные начинаются со строки 5.
+        При отсутствии заголовков или строк возвращает пустой DataFrame:
+        функция запуска использует это как условие пропуска записи.
+        Строки не фильтруются, имена колонок сопоставляются точно.
+        """
         data = self.source_connect.sheet_title.get_all_values()
 
         if len(data) < 4:
@@ -63,7 +86,12 @@ class CalculationByChinaSuppliers:
 
     @staticmethod
     def _apply_annual_plan_columns(df: pd.DataFrame) -> pd.DataFrame:
-        """Приводит данные к фиксированному набору и порядку колонок."""
+        """Сохраняет структуру выгрузки плана при пропусках колонок источника.
+
+        Добавляет отсутствующие поля пустыми в переданный DataFrame и
+        возвращает выборку ANNUAL_PLAN_COLUMNS в заданном порядке.
+        Остальные колонки не переносятся; строки и суммы не пересчитываются.
+        """
         for column in ANNUAL_PLAN_COLUMNS:
             if column not in df.columns:
                 df[column] = ""
@@ -72,5 +100,10 @@ class CalculationByChinaSuppliers:
 
     @staticmethod
     def set_data(connector: GoogleTabs, df: pd.DataFrame) -> None:
-        # Используем общий метод проекта: он добавляет колонку updated_at.
+        """Публикует подготовленный план через общий клиент Google Sheets.
+
+        Клиент добавляет updated_at и полностью заменяет значения рабочей
+        области, включая очистку старых лишних строк и колонок. Проверка
+        пустого результата выполняется функцией запуска до вызова метода.
+        """
         connector.set_df_to_google(df)
