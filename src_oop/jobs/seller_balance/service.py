@@ -9,30 +9,42 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 import aiohttp
+import pandas as pd
+from sqlalchemy import text
 
+from src_oop.core.database import Database
 from src_oop.core.utils_general import load_api_tokens
 from src_oop.jobs.seller_balance.client import (
     SellerBalanceFetchResult,
     WBSellerBalanceClient,
 )
-from src_oop.jobs.seller_balance.config import MAX_CONCURRENT_ACCOUNTS
-from src_oop.jobs.seller_balance.repository import SellerBalanceRepository, SellerBalanceSaveResult
+from src_oop.jobs.seller_balance.config import (
+    FINANCIAL_REPORTS_COLUMNS,
+    FINANCIAL_REPORTS_START_DATE,
+    MAX_CONCURRENT_ACCOUNTS,
+)
+from src_oop.jobs.seller_balance.queries import FINANCIAL_REPORTS_QUERY
+from src_oop.jobs.seller_balance.repository import (
+    SellerBalanceRepository,
+    SellerBalanceSaveResult,
+)
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
 class SellerBalanceRunSummary:
-    """Сводка полного запуска выгрузки баланса продавцов.
+    """Сводка полного запуска выгрузки баланса и начислений продавцов.
 
     Бизнес-сценарий:
     сводка нужна логам и планировщику, чтобы было видно количество успешно
-    обработанных кабинетов, ошибок и опубликованных строк в витрине ДДС.
+    обработанных кабинетов, ошибок и опубликованных строк в двух витринах ДДС.
     """
 
     accounts_total: int = 0
     accounts_processed: int = 0
     written_rows: int = 0
+    financial_rows: int = 0
     total_retry_count: int = 0
     succeeded_accounts: list[str] = field(default_factory=list)
     failed_accounts: list[str] = field(default_factory=list)
@@ -42,11 +54,11 @@ class SellerBalanceRunSummary:
 
 
 class SellerBalanceService:
-    """Собирает баланс продавцов по кабинетам и публикует его в Google Sheets.
+    """Собирает баланс и начисления продавцов и публикует их в Google Sheets.
 
     Бизнес-сценарий:
-    job обновляет общую финансовую витрину ДДС. Для каждого кабинета берётся
-    один актуальный срез баланса, после чего данные собираются в общий лист.
+    job обновляет общую финансовую витрину ДДС: получает агрегированные
+    начисления из PostgreSQL и один актуальный срез баланса по каждому кабинету.
     """
 
     def __init__(
@@ -54,20 +66,28 @@ class SellerBalanceService:
         client: WBSellerBalanceClient | None = None,
         repository: SellerBalanceRepository | None = None,
         tokens_loader: Callable[[], Mapping[str, str]] | None = None,
+        database_cls: type[Database] = Database,
     ) -> None:
-        """Собирает зависимости job для сопровождения и тестирования."""
+        """Собирает зависимости job для сопровождения и тестирования.
+
+        Бизнес-сценарий:
+        кроме клиента WB и Google Sheets job получает общий класс доступа к
+        PostgreSQL, чтобы перед публикацией проверить актуальность начислений.
+        """
         self.client = client or WBSellerBalanceClient()
         self.repository = repository or SellerBalanceRepository()
         self.tokens_loader = tokens_loader or load_api_tokens
+        self.database_cls = database_cls
 
     async def run(self, account: str | None = None) -> SellerBalanceRunSummary:
-        """Запускает полный сценарий обновления баланса продавцов в ДДС.
+        """Запускает полный сценарий обновления баланса и начислений в ДДС.
 
         Бизнес-сценарий:
-        entrypoint обслуживает регулярное обновление вкладки `Переменные.` и
-        умеет работать как по всем кабинетам, так и по одному кабинету для
-        точечного ручного запуска.
+        сначала читаются начисления из PostgreSQL, затем баланс по всем или
+        выбранному кабинету WB, после чего оба результата передаются в одну
+        запись вкладки `Переменные.`. Ошибка PostgreSQL блокирует публикацию.
         """
+        financial_dataframe = self._load_financial_reports()
         tokens_by_account = self._resolve_tokens(account=account)
         summary = SellerBalanceRunSummary(accounts_total=len(tokens_by_account))
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_ACCOUNTS)
@@ -94,11 +114,12 @@ class SellerBalanceService:
         for account_name, result in zip(tokens_by_account, results, strict=True):
             if isinstance(result, Exception):
                 summary.failed_accounts.append(account_name)
-                summary.warnings.append(str(result))
+                error_type = type(result).__name__
+                summary.warnings.append(error_type)
                 logger.error(
-                    "Не удалось выгрузить баланс продавца по кабинету, но job продолжает обработку остальных | account=%s | error=%s",
+                    "Не удалось выгрузить баланс продавца по кабинету, но job продолжает обработку остальных | account=%s | error_type=%s",
                     account_name,
-                    result,
+                    error_type,
                 )
                 continue
 
@@ -107,20 +128,64 @@ class SellerBalanceService:
             summary.total_retry_count += result.retries_used
             rows.append(self._build_row(result))
 
-        save_result = self.repository.save(rows)
+        save_result = self.repository.save(
+            rows=rows,
+            financial_dataframe=financial_dataframe,
+        )
         if not isinstance(save_result, SellerBalanceSaveResult):
             raise TypeError("save_result должен быть экземпляром SellerBalanceSaveResult.")
 
         summary.written_rows = save_result.written_rows
+        summary.financial_rows = save_result.financial_rows
         summary.finished_at = datetime.now()
         logger.info(
-            "Завершена выгрузка баланса продавцов WB | accounts_processed=%s | failed_accounts=%s | written_rows=%s | retries=%s",
+            "Завершена выгрузка баланса и начислений продавцов WB | accounts_processed=%s | failed_accounts=%s | balance_rows=%s | financial_rows=%s | retries=%s",
             summary.accounts_processed,
             summary.failed_accounts,
             summary.written_rows,
+            summary.financial_rows,
             summary.total_retry_count,
         )
         return summary
+
+    def _load_financial_reports(self) -> pd.DataFrame:
+        """Читает агрегированные начисления из PostgreSQL для текущей выгрузки.
+
+        Бизнес-сценарий:
+        до обращения к WB и Google Sheets job получает данные из
+        `public.daily_fin_reports_full` за период с 14.09.2026 по вчерашнюю
+        дату БД. Ошибка чтения или нарушение схемы результата останавливает
+        запуск, чтобы не публиковать частично актуальную вкладку.
+        """
+        try:
+            dataframe = self.database_cls.read_sql_to_dataframe(
+                text(FINANCIAL_REPORTS_QUERY),
+                params={"date_from": FINANCIAL_REPORTS_START_DATE},
+            )
+        except Exception as error:
+            logger.error(
+                "Не удалось получить агрегированные начисления из PostgreSQL, выгрузка Google Sheets прервана | error_type=%s",
+                type(error).__name__,
+            )
+            raise
+
+        if not isinstance(dataframe, pd.DataFrame):
+            raise TypeError("Результат PostgreSQL должен быть pandas.DataFrame.")
+
+        missing_columns = set(FINANCIAL_REPORTS_COLUMNS) - set(dataframe.columns)
+        if missing_columns:
+            missing_columns_text = ", ".join(sorted(missing_columns))
+            raise ValueError(
+                "В результате PostgreSQL отсутствуют колонки: "
+                f"{missing_columns_text}",
+            )
+
+        logger.info(
+            "Агрегированные начисления получены из PostgreSQL | date_from=%s | rows=%s",
+            FINANCIAL_REPORTS_START_DATE,
+            len(dataframe.index),
+        )
+        return dataframe
 
     async def _fetch_account_balance(
         self,

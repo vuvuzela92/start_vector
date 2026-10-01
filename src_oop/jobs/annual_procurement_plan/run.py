@@ -244,7 +244,7 @@ def transport_data_to_annual_procurement_plan():
     cancel_statuses = plan.cancel_statuses
     # Фильтрация
     df_merge = df_merge.loc[~df_merge['Статус'].isin(cancel_statuses)]
-    # Дополняем итоговую выгрузку средней ценой WB за последние 7 дней.
+    # Используем последнюю доступную цену WB по артикулу без ограничения по дате.
     df_seller_price = plan.get_seller_price_data()
     df_merge = _append_seller_price(df_merge, df_seller_price)
     # Дополняем итоговую выгрузку актуальной закупочной стоимостью.

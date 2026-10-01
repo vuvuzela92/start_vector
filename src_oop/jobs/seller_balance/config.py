@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 BALANCE_URL = "https://finance-api.wildberries.ru/api/v1/account/balance"
@@ -25,7 +26,7 @@ class SheetConfig:
 
     Бизнес-сценарий:
     финансовая команда читает витрину в таблице ДДС, поэтому job хранит
-    стабильный `spreadsheet_id` и точную стартовую ячейку выгрузки, чтобы не
+    стабильный `spreadsheet_id` и точные стартовые колонки выгрузки, чтобы не
     зависеть от неуникальных названий таблиц и не затирать соседние блоки.
     """
 
@@ -33,6 +34,7 @@ class SheetConfig:
     sheet_title: str
     table_title: str
     start_column_index: int
+    financial_reports_start_column_index: int = 12
 
 
 SHEET_CONFIG = SheetConfig(
@@ -40,7 +42,13 @@ SHEET_CONFIG = SheetConfig(
     sheet_title="Переменные",
     table_title="ДДС",
     start_column_index=6,
+    financial_reports_start_column_index=12,
 )
+
+# Начальная дата финансового среза задана бизнес-сценарием отчёта.
+FINANCIAL_REPORTS_START_DATE = date(2026, 9, 14)
+FINANCIAL_REPORTS_COLUMN_COUNT = 3
+FINANCIAL_REPORTS_COLUMNS: tuple[str, ...] = ("date", "account", "total_to_pay")
 
 COLUMN_RENAME_MAP: dict[str, str] = {
     "account": "Аккаунт",
@@ -57,3 +65,9 @@ PRIORITY_COLUMNS: tuple[str, ...] = (
     "Доступно к выводу",
     "Дата обновления выгрузки",
 )
+
+FINANCIAL_REPORTS_COLUMN_RENAME_MAP: dict[str, str] = {
+    "date": "Дата",
+    "account": "Аккаунт",
+    "total_to_pay": "Сумма к перечислению",
+}
