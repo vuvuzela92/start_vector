@@ -113,19 +113,19 @@ TASKS: Dict[str, Dict[str, Any]] = {
     # Маркетплейс WB: реклама и ежедневные оперативные отчеты.
     "assembly_status_model_run": {
         "func": smart_run(assembly_status_model_run),
-        "desc": "Сбор и сохранение сборочных заданий и статусов WB",
+        "desc": "WB API → PostgreSQL `assembly_task_status_model`: сохранение сборочных заданий и их статусов для контроля обработки и штрафов",
     },
     "advert_info": {
         "func": smart_run(advert_info),
-        "desc": "Запуск обновления данных о рекламных кампаниях",
+        "desc": "WB Advertising API → PostgreSQL `advert_campaigns_info`: обновление справочной информации о рекламных кампаниях",
     },
     "advert_spend": {
         "func": smart_run(advert_spend),
-        "desc": "Запуск получения данных о рекламных затратах",
+        "desc": "WB Advertising API → PostgreSQL `advert_spend`: загрузка расходов по рекламным кампаниям с разбивкой по датам и кабинетам",
     },
     "advert_stat": {
         "func": smart_run(advert_stat),
-        "desc": "Запуск OOP-job статистики рекламных кампаний WB",
+        "desc": "WB Advertising API → PostgreSQL `advert_stat`: загрузка статистики показов, кликов и результатов рекламных кампаний",
     },
     "orders_report_today": {
         "func": smart_run(orders_report_today),
@@ -133,12 +133,12 @@ TASKS: Dict[str, Dict[str, Any]] = {
     },
     "orders_run": {
         "func": smart_run(orders),
-        "desc": "OOP-загрузка заказов WB в PostgreSQL по ключу date и srid",
+        "desc": "WB API → PostgreSQL `orders`: загрузка заказов WB с уникальностью по `date` и `srid`",
     },
     # Yandex Disk и ежедневная выработка дизайнеров.
     "yandex_designer_output": {
         "func": smart_run(yandex_designer_output_run),
-        "desc": "Создание папок дизайнеров и выгрузка ежедневной выработки в Google Sheets",
+        "desc": "Яндекс.Диск → Google Sheets «Дизайнеры выработка», лист «Дизайнеры»: создание папок дизайнеров и публикация ежедневной выработки",
     },
     "order_feed": {
         "func": smart_run(order_feed),
@@ -146,20 +146,20 @@ TASKS: Dict[str, Dict[str, Any]] = {
     },
     "funnel_sales": {
         "func": smart_run(funnel_sales),
-        "desc": "Выгрузка ежедневной воронки продаж WB в PostgreSQL",
+        "desc": "WB API → PostgreSQL `funnel_daily`: ежедневная загрузка показателей воронки продаж по артикулам",
     },
     "fbs2_test_movements_run": {
         "func": smart_run(fbs2_test_movements_run),
-        "desc": "Выгрузка ежедневной витрины отгрузок в карту БД закупщиков",
+        "desc": "PostgreSQL/WMS → Google Sheets «Карта БД Закупщиков», лист «БД Отгрузки»: дневные количества FBS-отгрузок, поставок, движения ФБО, брака, пересорта и FBS-остаток",
     },
     "fbs2_test_stocks_run": {
         "func": smart_run(fbs2_test_stocks_run),
-        "desc": "Выгрузка ежедневной витрины остатков в карту БД закупщиков",
+        "desc": "PostgreSQL/WMS → Google Sheets «Карта БД Закупщиков», лист «БД Остатки»: дневные остатки по состояниям WMS — общий остаток, FBS, приёмка, упаковка, недостача, ФБО, брак и хранение",
     },
     # Старый контур Google Sheets и управленческих витрин.
     "update_penalties_in_gs_purchase_russia": {
         "func": smart_run(update_penalties_in_gs_purchase_russia),
-        "desc": "Обновление данных о штрафах и остатках в Google Sheets",
+        "desc": "PostgreSQL/WB → Google Sheets «Расчет закупки Россия»: обновление показателей штрафов и остатков для расчёта закупки по России",
     },
     "get_bukh_docs": {
         "func": smart_run(get_bukh_docs_async),
@@ -210,112 +210,112 @@ TASKS: Dict[str, Dict[str, Any]] = {
     # План продаж
     "sync_sales_plan_manager_reference_to_db": {
         "func": smart_run(sync_sales_plan_manager_reference_to_db),
-        "desc": "Сохранение ежедневного снимка справочника Категория-Менеджер в PostgreSQL",
+        "desc": "Google Sheets «Панель управления продажами Вектор», лист «Справочник Категория-Менеджер» → PostgreSQL `sales_plan_category_manager_reference`: сохранение ежедневного снимка справочника менеджеров",
     },
     "sync_sales_plan_accounting_category_reference_to_db": {
         "func": smart_run(sync_sales_plan_accounting_category_reference_to_db),
-        "desc": "Синхронизация текущего справочника учетной категории по wild в PostgreSQL",
+        "desc": "Google Sheets «Годовой план закупа 2026», лист «Поквартально» → PostgreSQL `sales_plan_accounting_category_reference`: обновление соответствия wild, предмета и учётной категории",
     },
     "sync_sales_wild_status_daily_to_db": {
         "func": smart_run(sync_sales_wild_status_daily_to_db),
-        "desc": "Сохранение ежедневного snapshot статусов wild из Поквартально в PostgreSQL",
+        "desc": "Google Sheets «Годовой план закупа 2026», лист «Поквартально» → PostgreSQL `sales_wild_status_daily`: сохранение ежедневного snapshot статусов wild",
     },
     "sales_plan_run": {
         "func": smart_run(sales_plan_run),
-        "desc": "Расчет и выгрузка плана продаж по wild в Google Sheets План продаж v2.0",
+        "desc": "Расчёт плана продаж по wild → Google Sheets «План продаж», лист «План продаж v2.0»",
     },
     # Бухгалтерские и регламентные выгрузки.
     "seller_balance_run": {
         "func": smart_run(seller_balance_run),
-        "desc": "Выгрузка баланса продавцов WB в Google Sheets ДДС во вкладку Переменные.",
+        "desc": "PostgreSQL финансового отчёта/WB → Google Sheets «ДДС», лист «Переменные»: обновление баланса продавцов по кабинетам",
     },
     "add_new_items_run": {
         "func": smart_run(add_new_items_run),
-        "desc": "OOP transfer of new items to UNIT, autopilot, competitors and products",
+        "desc": "Google Sheets «Новый товар», лист «Для юнит» → Google Sheets «UNIT 2.0 (tested)», листы «Сопост», «MAIN (tested)» и «Конкуренты», а также «Панель управления продажами Вектор», лист «Автопилот»; новые карточки записываются в PostgreSQL `products`",
     },
     "update_week_n_redeem": {
         "func": smart_run(update_week_n_redeem),
-        "desc": "Обновление данных в ОТЧЕТ за 2026 пров v.2.0",
+        "desc": "Обновление показателей недельной реализации и выкупов в Google Sheets «ОТЧЕТ за 2026 пров v.2.0»",
     },
     # Планирование закупок: годовой и квартальный контур.
     "transport_data_to_annual_procurement_plan": {
         "func": smart_run(transport_data_to_annual_procurement_plan),
-        "desc": "Обновление годового плана закупа 2026 во вкладке БД_ЗАКАЗЫ",
+        "desc": "Перенос данных заказов в Google Sheets «Годовой план закупа 2026», лист «БД_ЗАКАЗЫ»",
     },
     "transport_parfume_data_to_annual_procurement_plan": {
         "func": smart_run(transport_parfume_data_to_annual_procurement_plan),
-        "desc": "Обновление данных парфюма в годовом плане закупа 2026",
+        "desc": "Перенос данных по парфюмерии в Google Sheets «Годовой план закупа 2026», лист «Данные_Парфюм»",
     },
     "transport_unit_data_to_annual_procurement_plan": {
         "func": smart_run(transport_unit_data_to_annual_procurement_plan),
-        "desc": "Обновление данных юнитки в годовом плане закупа 2026",
+        "desc": "Перенос данных из Google Sheets «UNIT 2.0 (tested)» в таблицу «Годовой план закупа 2026», лист «Данные_Юнитки»",
     },
     "transport_supplies_data_to_annual_procurement_plan": {
         "func": smart_run(transport_supplies_data_to_annual_procurement_plan),
-        "desc": "Обновление данных поставок в годовом плане закупа 2026",
+        "desc": "Перенос данных о поставках в Google Sheets «Годовой план закупа 2026», лист «Данные_Поставки»",
     },
     "update_quarterly_prices_to_annual_procurement_plan": {
         "func": smart_run(update_quarterly_prices_to_annual_procurement_plan),
-        "desc": "Обновление ценовых колонок на листе Поквартально годового плана закупа 2026",
+        "desc": "Пересчёт и обновление ценовых колонок в Google Sheets «Годовой план закупа 2026», лист «Поквартально»",
     },
     "transport_quarterly_plan_to_pivot": {
         "func": smart_run(transport_quarterly_plan_to_pivot),
-        "desc": "Перенос поквартального плана в свод по поставщикам",
+        "desc": "Google Sheets «Годовой план закупа 2026», лист «Поквартально» → Google Sheets «Расчет поставки Китай_по обороту»: перенос поквартальных объёмов в свод по поставщикам",
     },
     "update_payments_analyze_with_ved": {
         "func": smart_run(update_payments_analyze_with_ved),
-        "desc": "Обновление платежного календаря по объединенной аналитике белых заказов и ВЭД во вкладке Аналитика_платежей",
+        "desc": "Google Sheets «Расчет поставки Китай_по обороту», лист «Заказы белые ТЕСТ» → Google Sheets «Платежный календарь» и «Форма Платеж календарь», лист «Аналитика_платежей»: объединение аналитики белых заказов и ВЭД",
     },
     # Аналитика артикулов и закупочной цены.
     "orders_article_analyze_run": {
         "func": smart_run(orders_article_analyze_run),
-        "desc": "Запуск артикульного анализа заказов",
+        "desc": "PostgreSQL `orders` и данные по артикулам → PostgreSQL: расчёт артикульной аналитики и запись результата в таблицу витрины артикульного анализа",
     },
     "purchase_price_update_run": {
         "func": smart_run(purchase_price_update_run),
-        "desc": "Запуск обновления закупочных цен в UNIT по актуальным данным БД",
+        "desc": "PostgreSQL → Google Sheets «Новый товар», лист «UNIT: Изменение закупочной цены»: обновление закупочных цен с учётом Google Sheets «UNIT 2.0 (tested)», лист «Сопост»",
     },
     # Условные расчеты и их выгрузки.
     "conditional_calculation_to_db_run": {
         "func": smart_run(conditional_calculation_to_db_run),
-        "desc": "Запуск условного расчета и загрузки в БД",
+        "desc": "Расчёт условных показателей и сохранение результата в PostgreSQL `conditions_calculation` для последующей выгрузки",
     },
     "update_conditional_calculations_to_gs": {
         "func": smart_run(update_conditional_calculations_to_gs),
-        "desc": "Выгрузка условного расчета в Google Sheets",
+        "desc": "PostgreSQL `conditions_calculation` → Google Sheets «Условный расчет», лист «Справочная информация»: публикация рассчитанных условных показателей",
     },
     # Финансовая аналитика и управленческая отчетность.
     "update_monthly_report": {
         "func": smart_run(update_monthly_report),
-        "desc": "Выгрузка сводных данных фин отчета за месяц",
+        "desc": "PostgreSQL → Google Sheets «Анализ_фин_отчетов_Вектор», лист «отчет_по_месяцам»: выгрузка сводных данных финансового отчёта за месяц",
     },
     "update_weekly_profit_report": {
         "func": smart_run(update_weekly_profit_report),
-        "desc": "Выгрузка сводных данных фин отчета за неделю",
+        "desc": "PostgreSQL → Google Sheets «Анализ_фин_отчетов_Вектор», лист «отчет_по_неделям»: выгрузка сводных данных финансового отчёта за неделю",
     },
     "update_outcomes_detalize": {
         "func": smart_run(update_outcomes_detalize),
-        "desc": "Выгрузка детализации расходов фин отчета",
+        "desc": "PostgreSQL → Google Sheets «Анализ_фин_отчетов_Вектор», лист «детализация_расходов»: выгрузка детализации расходов",
     },
     "update_fin_deductions_mv": {
         "func": smart_run(update_fin_deductions_mv),
-        "desc": "Выгрузка детализации удержаний фин отчета",
+        "desc": "PostgreSQL → Google Sheets «Анализ_фин_отчетов_Вектор», лист «удержания_детализация»: выгрузка детализации удержаний",
     },
     "update_daily_fin_reports_deductions_agg": {
         "func": smart_run(update_daily_fin_reports_deductions_agg),
-        "desc": "Выгрузка помесячной детализации удержаний фин отчета",
+        "desc": "PostgreSQL → Google Sheets «Анализ_фин_отчетов_Вектор», лист «удержания_детализация_месяц»: выгрузка помесячной детализации удержаний",
     },
     "update_deductions_by_month": {
         "func": smart_run(update_deductions_by_month),
-        "desc": "Выгрузка удержаний по месяцам",
+        "desc": "PostgreSQL `deductions_by_month` → Google Sheets «Анализ_фин_отчетов_Вектор», лист «удержания_детализация_месяц»: выгрузка удержаний по месяцам",
     },
     "update_cash_flow_writeoffs": {
         "func": smart_run(update_cash_flow_writeoffs),
-        "desc": "Выгрузка данных по затратам из 1С",
+        "desc": "Данные затрат из 1С/PostgreSQL → Google Sheets «Анализ_фин_отчетов_Вектор», лист «расходы_по_банку»",
     },
     "update_stock_analyze": {
         "func": smart_run(update_stock_analyze),
-        "desc": "Выгрузка данных об остатках из арт анализа",
+        "desc": "Данные артикульного анализа/PostgreSQL → Google Sheets «Анализ_фин_отчетов_Вектор», лист «анализ_остатков»",
     },
     "run_system_penalties_analysis": {
         "func": smart_run(run_system_penalties_analysis),
@@ -324,23 +324,23 @@ TASKS: Dict[str, Dict[str, Any]] = {
     # Логистика, склады и операционные остатки.
     "fbo_supplies_run": {
         "func": smart_run(fbo_supplies_run),
-        "desc": "Выгрузка заказов по округам из PostgreSQL в Google Sheets Отгрузка ФБО",
+        "desc": "PostgreSQL `orders` и `article` → Google Sheets «Отгрузка ФБО», лист «Заказы по округам»: количество заказов за последние 7 дней по округам и артикулам",
     },
     "historical_stocks_run": {
         "func": smart_run(historical_stocks_run),
-        "desc": "Загрузка исторических FBS-остатков из WMS в PostgreSQL",
+        "desc": "WMS → PostgreSQL `historical_stocks_fbs_service`: первичная историческая загрузка FBS-остатков",
     },
     "wms_stock_run": {
         "func": smart_run(wms_stock_run),
-        "desc": "Обновление агрегированных дневных WMS-остатков в public.wms_stock за последние 7 дней",
+        "desc": "WMS → PostgreSQL `public.wms_stock`: повторное обновление агрегированных дневных остатков за последние 7 дней",
     },
     "wms_stock_backfill_run": {
         "func": smart_run(wms_stock_backfill_run),
-        "desc": "Историческая загрузка агрегированных дневных WMS-остатков в public.wms_stock с 2026-07-29",
+        "desc": "WMS → PostgreSQL `public.wms_stock`: backfill агрегированных дневных остатков начиная с 2026-07-29",
     },
     "update_sales_warehouse_analytics": {
         "func": smart_run(update_sales_warehouse_analytics),
-        "desc": "Выгрузка аналитики продаж по нашим складам в Google Sheets",
+        "desc": "PostgreSQL → Google Sheets «Новый товар», лист «Аналитика складов»: продажи по собственным складам",
     },
     "list_wb_offices": {
         "func": smart_run(list_wb_offices),
@@ -372,15 +372,15 @@ TASKS: Dict[str, Dict[str, Any]] = {
     },
     "update_fbs_stocks_in_unit": {
         "func": smart_run(update_fbs_stocks_in_unit),
-        "desc": "Обновление текущих FBS-остатков WB в UNIT 2.0 (tested)",
+        "desc": "WB API → Google Sheets «UNIT 2.0 (tested)», лист «MAIN (tested)»: запись фактического общего FBS-остатка в колонку «ФБС общий остаток»",
     },
     "apply_new_fbs_stocks_from_unit": {
         "func": smart_run(apply_new_fbs_stocks_from_unit),
-        "desc": "Отправка новых FBS-остатков из UNIT в WB",
+        "desc": "Google Sheets «UNIT 2.0 (tested)», лист «MAIN (tested)», колонки «Новый остаток для всех складов» и «Новый остаток Вешки» → WB API: ручное применение новых FBS-остатков",
     },
     "auto_refill_fbs_stocks_from_unit": {
         "func": smart_run(auto_refill_fbs_stocks_from_unit),
-        "desc": "Cron-автопополнение FBS-остатков по минимальному остатку UNIT",
+        "desc": "Google Sheets «UNIT 2.0 (tested)», листы «MAIN (tested)» и «Сопост», колонки «Минимальный остаток» и «Добавляем» → WB API: cron-автопополнение складов при снижении остатка ниже порога",
     },
     "wb_stock_control_run": {
         "func": smart_run(wb_stock_control_run),
@@ -389,58 +389,58 @@ TASKS: Dict[str, Dict[str, Any]] = {
     # UNIT: сервисные обновления справочников, статусов и ценовых витрин.
     "update_adv_participants_to_gs": {
         "func": smart_run(update_adv_participants_to_gs),
-        "desc": "Выгрузка участия артикулов в рекламных кампаниях",
+        "desc": "WB Advertising API → Google Sheets «UNIT 2.0 (tested)», лист «MAIN (tested)»: обновление признака участия артикула в рекламной кампании",
     },
     "update_wild_statuses": {
         "func": smart_run(update_wild_statuses),
-        "desc": "Обновление статусов вилдов в юнитке",
+        "desc": "Google Sheets «Годовой план закупа 2026», лист «Поквартально» → Google Sheets «UNIT 2.0 (tested)», лист «MAIN (tested)»: обновление статусов wild",
     },
     # WB API: замеры и производные выгрузки.
     "collect_and_store_measurements": {
         "func": smart_run(collect_and_store_measurements),
-        "desc": "Сбор и сохранение данных о замерах в БД",
+        "desc": "WB API → PostgreSQL `wb_measurements`: сбор и сохранение результатов замеров товаров",
     },
     "set_measurements_to_google": {
         "func": smart_run(set_measurements_to_google),
-        "desc": "Запись данных о замерах в гугл-таблицу Отгрузка ФБО",
+        "desc": "PostgreSQL `wb_measurements` → Google Sheets «Отгрузка ФБО», лист «БД_Замеры_ВБ»: публикация результатов замеров",
     },
     # Закупки Россия: расчетные и транспортные задачи.
     "set_orders_quantity": {
         "func": smart_run(set_orders_quantity),
-        "desc": "Запись данных о количестве заказов в гугл-таблицу Расчет Закупки Россия",
+        "desc": "Запись количества заказов в Google Sheets «Расчет закупки Россия»",
     },
     "transport_orders_and_supply": {
         "func": smart_run(transport_orders_and_supply),
-        "desc": "Запись данных о заказах и поступлениях товаров",
+        "desc": "Google Sheets «Расчет закупки Россия» и «Расчет поставки Китай_по обороту»: перенос данных о заказах и поступлениях товаров между расчётными листами",
     },
     "update_supplies_1c_in_purchase_russia": {
         "func": smart_run(update_supplies_1c_in_purchase_russia),
-        "desc": "Обновление листа Приходы_1С в таблице Расчет закупки Россия",
+        "desc": "Обновление Google Sheets «Расчет закупки Россия», лист «Приходы_1С», данными о поставках из 1С",
     },
     # Автопилот и индивидуальные настройки.
     "update_individual_info": {
         "func": smart_run(update_individual_info),
-        "desc": "Обновление данных об индивидуальных условиях",
+        "desc": "Обновление индивидуальных условий в Google Sheets «Панель управления продажами Вектор», лист «Автопилот»",
     },
     "autopilot_hourly_run": {
         "func": smart_run(autopilot_hourly_run),
-        "desc": "Почасовое обновление метрик панели управления автопилотом",
+        "desc": "Почасовое обновление метрик Google Sheets «Панель управления продажами Вектор», лист «Автопилот»",
     },
     "autopilot_remove_duplicates": {
         "func": smart_run(autopilot_remove_duplicates),
-        "desc": "Удаление повторных строк артикулов из листа Автопилот",
+        "desc": "Удаление повторных строк артикулов в Google Sheets «Панель управления продажами Вектор», лист «Автопилот»",
     },
     "autopilot_daily_run": {
         "func": smart_run(autopilot_daily_run),
-        "desc": "Дневное обновление завершенных дней панели управления автопилотом и связанных UNIT-блоков",
+        "desc": "Дневное обновление завершённых дней в Google Sheets «Панель управления продажами Вектор», лист «Автопилот», и связанных блоков Google Sheets «UNIT 2.0 (tested)», лист «MAIN (tested)»",
     },
     # Логистика ВЭД
     "logistic_ved_full_run": {
         "func": smart_run(logistic_ved_full_run),
-        "desc": "Полный цикл Логистика ВЭД: сначала обратная отправка данных в Заказы белые ТЕСТ, затем актуализация ОТЧЁТ_2.0",
+        "desc": "Синхронизация Google Sheets «Логистика ВЭД 2026», лист «ОТЧЁТ_2.0», с Google Sheets «Расчет поставки Китай_по обороту», лист «Заказы белые ТЕСТ»",
     },
     "returns_to_customers": {
         "func": smart_run(returns_to_customers),
-        "desc": "Выгрузка заявок по возвратам покупателей WB в Google Sheets",
+        "desc": "WB Returns API → PostgreSQL `claims` → Google Sheets «Start-Потенциал матрицы», лист «Возвраты»: выгрузка заявок на возврат покупателей",
     },
 }
