@@ -66,8 +66,8 @@ class AutopilotHourlyService:
         сначала читает артикула из ПУ и собирает Воронку продаж WB для оперативных
         метрик. Сумма заказов текущего дня заменяется суммой созданных заказов по
         каждому артикулу из `wb_order_feed`, после чего метрики записываются в
-        Google Sheets и A2 обновляется только после успешной записи суммы заказов.
-        После этого сценарий
+        Google Sheets. Сумма заказов записывается первой, и сразу после её
+        успешной записи A2 получает время актуализации. После этого сценарий
         дописывает расходы Cometa, рекламную активность, прибыль по ИУ по
         формуле daily-витрины, остатки UNIT и расчетные показатели порциями по
         каждой метрике. Онлайн-парсинг цен/СПП/рейтинга WB временно защищен
@@ -101,13 +101,13 @@ class AutopilotHourlyService:
         )
         funnel_metrics["orders_sum_rub"] = orders_sum_values
         expected_articles_count = len(set(articles))
-        funnel_write_results = self._write_metrics(
+        orders_sum_write_results = self._write_metrics(
             writer=writer,
-            metrics=funnel_metrics,
+            metrics={"orders_sum_rub": orders_sum_values},
             articles=articles,
             summary=summary,
         )
-        orders_sum_result = funnel_write_results.get("orders_sum_rub")
+        orders_sum_result = orders_sum_write_results.get("orders_sum_rub")
         if (
             articles
             and len(orders_sum_values) == expected_articles_count
@@ -126,6 +126,18 @@ class AutopilotHourlyService:
                 orders_sum_result.written if orders_sum_result else False,
                 orders_sum_result.rows if orders_sum_result else 0,
             )
+
+        funnel_metrics_without_orders_sum = {
+            metric_name: values_by_article
+            for metric_name, values_by_article in funnel_metrics.items()
+            if metric_name != "orders_sum_rub"
+        }
+        self._write_metrics(
+            writer=writer,
+            metrics=funnel_metrics_without_orders_sum,
+            articles=articles,
+            summary=summary,
+        )
 
         adv_spend = await self.cometa_client.fetch_today_spend(articles=articles)
         summary.cometa_rows = len(adv_spend)
