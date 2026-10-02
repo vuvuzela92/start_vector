@@ -16,6 +16,9 @@ src/WB - модуль для работы с API WB.
 отдельных модулей хранится в файлах с названием модуля, например
 `src_oop/jobs/bukh_docs/BUKH_DOCS.md`.
 
+- [Годовой план закупа: бизнес-логика, источники данных и команды запуска](src_oop/jobs/annual_procurement_plan/ANNUAL_PROCUREMENT_PLAN.md).
+- [Перенос годового плана в закупки Китая: правила и проверка результата](src_oop/jobs/calculation_of_purchases_china/QUARTERLY_PLAN_TRANSFER.md).
+
 ## Server deployment
 
 Для server-ready контура `Bitrix Chat Control` с `systemd`, автозапуском и таймерами

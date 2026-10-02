@@ -22,6 +22,24 @@
 - `public.penalties_root_cause_summary` — агрегированное представление по
   основаниям, месяцам и зонам ответственности.
 
+В детализации есть очередь проверки потенциально спорных штрафов:
+
+- `dispute_review_status` — результат предварительного отбора;
+- `dispute_review_priority` — приоритет ручной проверки;
+- `dispute_review_reason` — наблюдаемые факты и следующий шаг проверки.
+
+Статус `кандидат на проверку для оспаривания` присваивается штрафам по
+невыполненным заказам, если наша история содержит `shipped`, а WB зафиксировал
+`sorted` или акт приемки, при этом нет аномальной последовательности дат. Он
+не подтверждает своевременную отгрузку: перед обращением в WB нужно сверить
+нормативный срок, основание штрафа и финансовый документ. Отгруженные заказы
+без события WB попадают в очередь `ручная проверка передачи в WB`. Статус WB
+при наличии, но без `shipped` направляет запись на сверку полноты событий.
+Штрафы за отправку отличного товара не включаются в кандидаты: сейчас нет
+источника с фактически собранным и отправленным товаром, которым можно было бы
+опровергнуть основание WB. Они получают статус
+`не кандидат: нет доказательств для опровержения` до появления таких данных.
+
 ## 2. Период и часовой пояс
 
 Обычный запуск обрабатывает последние 28 календарных дней включительно с
@@ -339,10 +357,31 @@ SELECT
     acceptance_act_date,
     event_state,
     event_data_quality,
+    dispute_review_status,
+    dispute_review_priority,
+    dispute_review_reason,
     probable_responsible_department,
     classification_confidence
 FROM public.penalties_root_cause_orders
 WHERE assembly_id = 5626123710;
+```
+
+Список первоочередных кандидатов можно получить так:
+
+```sql
+SELECT
+    assembly_id,
+    bonus_type_name,
+    penalty,
+    wb_created_at,
+    shipped_at,
+    wb_status_sorted,
+    acceptance_act_date,
+    dispute_review_priority,
+    dispute_review_reason
+FROM public.penalties_root_cause_orders
+WHERE dispute_review_status = 'кандидат на проверку для оспаривания'
+ORDER BY penalty DESC, wb_created_at DESC;
 ```
 
 Затем отдельно проверить историю FBS:

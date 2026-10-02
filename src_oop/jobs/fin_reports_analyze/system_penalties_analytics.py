@@ -13,7 +13,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from sqlalchemy import MetaData, create_engine, text
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.engine import Engine, URL
+from sqlalchemy.engine import Connection, Engine, URL
 
 from src_oop.core.database import Database
 
@@ -66,6 +66,9 @@ DETAIL_COLUMNS = [
     "probable_responsible_department",
     "classification_confidence",
     "classification_reason",
+    "dispute_review_status",
+    "dispute_review_priority",
+    "dispute_review_reason",
     "is_focus_penalty",
     "loaded_at",
 ]
@@ -747,11 +750,12 @@ class SystemPenaltiesAnalyzer:
 
     @staticmethod
     def _classify(dataframe: pd.DataFrame) -> pd.DataFrame:
-        """Назначает этап и вероятное подразделение по наблюдаемым признакам.
+        """Классифицирует этап ответственности и приоритет проверки штрафа.
 
-        Бизнес-правило: автоматическая классификация не называет причину
-        доказанной. Для нецелевых оснований сохраняется финансовая строка без
-        ложного назначения подразделения.
+        Бизнес-правило: штраф получает высокий приоритет проверки, если WB
+        зафиксировал сортировку или акт приемки и последовательность событий
+        не аномальна. Без нормативного срока это только отбор на проверку, а
+        не подтверждение обоснованности оспаривания.
         """
 
         result = dataframe.copy()
@@ -764,6 +768,28 @@ class SystemPenaltiesAnalyzer:
         has_task = result["service_task_found"].fillna(False)
         shipped = result["has_shipped"].fillna(False)
         sorted_wb = result["has_wb_sorted"].fillna(False)
+        has_acceptance = result.get(
+            "acceptance_act_found",
+            pd.Series(False, index=result.index),
+        ).fillna(False)
+        event_quality = result.get(
+            "event_data_quality",
+            pd.Series("ok", index=result.index),
+        ).fillna("нет данных")
+        final_status = result.get(
+            "fbs_real_status",
+            pd.Series("", index=result.index),
+        ).fillna("").str.lower()
+        final_status_at = pd.to_datetime(
+            result.get("fbs_real_status_at", pd.Series(pd.NaT, index=result.index)),
+            utc=True,
+            errors="coerce",
+        )
+        shipped_at = pd.to_datetime(
+            result.get("shipped_at", pd.Series(pd.NaT, index=result.index)),
+            utc=True,
+            errors="coerce",
+        )
 
         result["is_focus_penalty"] = focus
         result["responsibility_stage"] = "не в фокусе root-cause"
@@ -823,10 +849,6 @@ class SystemPenaltiesAnalyzer:
             "Заказ отгружен и отсортирован WB, требуется проверка основания штрафа."
         )
 
-        has_acceptance = result.get(
-            "acceptance_act_found",
-            pd.Series(False, index=result.index),
-        ).fillna(False)
         after_acceptance = target & ~wrong_item & has_acceptance
         result.loc[after_acceptance, "responsibility_stage"] = (
             "после формирования акта приемки WB"
@@ -844,6 +866,104 @@ class SystemPenaltiesAnalyzer:
         result.loc[target & ~has_task, "classification_confidence"] = "low"
         result.loc[target & ~has_task, "classification_reason"] = (
             "Сборочное задание не найдено в FBS-сервисе."
+        )
+
+        # Очередь на оспаривание опирается на признаки WB и не заменяет
+        # проверку срока исполнения и первичного основания начисления.
+        result["dispute_review_status"] = "вне текущего фокуса"
+        result["dispute_review_priority"] = "не применяется"
+        result["dispute_review_reason"] = (
+            "Автоматический отбор настроен для штрафов по невыполненным заказам."
+        )
+
+        result.loc[target, "dispute_review_status"] = "проверить операционную причину"
+        result.loc[target, "dispute_review_priority"] = "низкий"
+        result.loc[target, "dispute_review_reason"] = (
+            "По доступным событиям пока нет подтверждения отгрузки или получения заказа WB."
+        )
+
+        missing_task = target & ~has_task
+        result.loc[missing_task, "dispute_review_status"] = "недостаточно данных"
+        result.loc[missing_task, "dispute_review_priority"] = "не определен"
+        result.loc[missing_task, "dispute_review_reason"] = (
+            "СЗ не найдено в FBS-сервисе; проверьте связь по assembly_id и источники событий."
+        )
+
+        shipped_without_wb = target & ~wrong_item & shipped & ~sorted_wb & ~has_acceptance
+        result.loc[shipped_without_wb, "dispute_review_status"] = (
+            "ручная проверка передачи в WB"
+        )
+        result.loc[shipped_without_wb, "dispute_review_priority"] = "средний"
+        result.loc[shipped_without_wb, "dispute_review_reason"] = (
+            "Наша система зафиксировала shipped, но сортировка и акт WB не найдены; "
+            "нужно проверить поставку и полноту статусных данных."
+        )
+
+        wb_evidence = target & (sorted_wb | has_acceptance)
+        bad_event_data = event_quality.eq("аномальная последовательность дат")
+        wb_evidence_with_bad_dates = wb_evidence & bad_event_data
+        wb_evidence_without_shipment = wb_evidence & ~shipped & ~bad_event_data
+        needs_event_reconciliation = (
+            wb_evidence_with_bad_dates | wb_evidence_without_shipment
+        )
+        result.loc[needs_event_reconciliation, "dispute_review_status"] = (
+            "проверить качество данных"
+        )
+        result.loc[needs_event_reconciliation, "dispute_review_priority"] = "средний"
+        result.loc[wb_evidence_with_bad_dates, "dispute_review_reason"] = (
+            "Есть статус сортировки или акт WB, но даты событий противоречат друг другу."
+        )
+        result.loc[wb_evidence_without_shipment, "dispute_review_reason"] = (
+            "WB зафиксировал сортировку или акт приемки, но наша история не содержит "
+            "shipped; сначала проверьте полноту и связь событий."
+        )
+
+        candidate = wb_evidence & shipped & ~bad_event_data
+        result.loc[candidate, "dispute_review_status"] = (
+            "кандидат на проверку для оспаривания"
+        )
+        result.loc[candidate, "dispute_review_priority"] = "высокий"
+        result.loc[candidate, "dispute_review_reason"] = (
+            "Есть событие WB (sorted или акт приемки); сверьте основание штрафа, "
+            "срок отгрузки и финансовый документ перед решением об оспаривании."
+        )
+
+        wrong_item_candidate = candidate & wrong_item
+        result.loc[wrong_item_candidate, "dispute_review_priority"] = "средний"
+        result.loc[wrong_item_candidate, "dispute_review_reason"] = (
+            "Есть shipped и подтверждение WB, но основание ссылается на другой товар; "
+            "сверьте nm_id, маркировку и данные комплектации до решения об оспаривании."
+        )
+
+        canceled_after_shipment = (
+            candidate
+            & final_status.eq("canceled")
+            & final_status_at.gt(shipped_at)
+        )
+        result.loc[canceled_after_shipment, "dispute_review_reason"] = (
+            "После shipped зафиксирована отмена, а также есть событие WB; "
+            "сверьте инициатора и основание отмены, срок отгрузки и финансовый документ."
+        )
+
+        wrong_item_target = target & wrong_item
+        result.loc[wrong_item_target, "dispute_review_status"] = (
+            "не кандидат: нет доказательств для опровержения"
+        )
+        result.loc[wrong_item_target, "dispute_review_priority"] = "не применяется"
+        result.loc[wrong_item_target, "dispute_review_reason"] = (
+            "Основание штрафа — отправка отличного товара, а источник фактически "
+            "собранного и отправленного товара отсутствует; доступными данными "
+            "опровергнуть это основание нельзя."
+        )
+
+        anomaly_without_wb_evidence = target & ~wrong_item & bad_event_data & ~wb_evidence
+        result.loc[anomaly_without_wb_evidence, "dispute_review_status"] = (
+            "проверить качество данных"
+        )
+        result.loc[anomaly_without_wb_evidence, "dispute_review_priority"] = "средний"
+        result.loc[anomaly_without_wb_evidence, "dispute_review_reason"] = (
+            "В операционных датах обнаружено противоречие; до исправления данных "
+            "кандидат на оспаривание не определяется."
         )
         return result
 
@@ -895,7 +1015,7 @@ class SystemPenaltiesAnalyzer:
         )
         dataframe["service_task_found"] = dataframe["service_task_found"].fillna(False).astype(bool)
         dataframe["has_shipped"] = dataframe["has_shipped"].fillna(False).astype(bool)
-        dataframe["has_wb_sorted"] = dataframe["has_wb_sorted"].fillna(False).astype(bool)
+        dataframe["has_wb_sorted"] = dataframe["wb_status_sorted"].notna()
         dataframe["stock_state"] = "unknown_stock"
         dataframe.loc[dataframe["stock_on_order_date"].gt(0), "stock_state"] = "positive_stock"
         dataframe.loc[dataframe["stock_on_order_date"].le(0), "stock_state"] = (
@@ -999,6 +1119,9 @@ class SystemPenaltiesAnalyzer:
             probable_responsible_department text,
             classification_confidence text,
             classification_reason text,
+            dispute_review_status text,
+            dispute_review_priority text,
+            dispute_review_reason text,
             is_focus_penalty boolean NOT NULL,
             loaded_at timestamptz NOT NULL,
             CONSTRAINT uq_{DETAIL_TABLE}_grain
@@ -1041,6 +1164,12 @@ class SystemPenaltiesAnalyzer:
             );
         ALTER TABLE public.{DETAIL_TABLE}
             ADD COLUMN IF NOT EXISTS order_processing_hours numeric(18, 3);
+        ALTER TABLE public.{DETAIL_TABLE}
+            ADD COLUMN IF NOT EXISTS dispute_review_status text;
+        ALTER TABLE public.{DETAIL_TABLE}
+            ADD COLUMN IF NOT EXISTS dispute_review_priority text;
+        ALTER TABLE public.{DETAIL_TABLE}
+            ADD COLUMN IF NOT EXISTS dispute_review_reason text;
         UPDATE public.{DETAIL_TABLE}
         SET order_processing_hours = CASE
             WHEN fbs_real_status_at IS NOT NULL AND wb_created_at IS NOT NULL
@@ -1077,7 +1206,9 @@ class SystemPenaltiesAnalyzer:
             COUNT(*) FILTER (WHERE service_task_found) AS matched_fbs_rows,
             COUNT(*) FILTER (WHERE has_shipped) AS shipped_rows,
             COUNT(*) FILTER (WHERE has_wb_sorted) AS wb_sorted_rows,
-            COUNT(*) FILTER (WHERE acceptance_act_found) AS acceptance_act_rows
+            COUNT(*) FILTER (WHERE acceptance_act_found) AS acceptance_act_rows,
+            dispute_review_status,
+            dispute_review_priority
         FROM public.{DETAIL_TABLE}
         GROUP BY
             analysis_month_msk,
@@ -1085,7 +1216,9 @@ class SystemPenaltiesAnalyzer:
             is_focus_penalty,
             responsibility_stage,
             probable_responsible_department,
-            classification_confidence;
+            classification_confidence,
+            dispute_review_status,
+            dispute_review_priority;
         """
 
     def _ensure_objects(self) -> None:
@@ -1128,11 +1261,12 @@ class SystemPenaltiesAnalyzer:
             records.append(clean)
         return records
 
-    def _upsert(self, dataframe: pd.DataFrame) -> None:
-        """Идемпотентно записывает детали в основную PostgreSQL-витрину.
+    def _upsert(self, dataframe: pd.DataFrame, connection: Connection) -> None:
+        """Вставляет рассчитанные детали в транзакцию пересборки периода.
 
-        Бизнес-правило: повторный запуск одного месяца обновляет результат по
-        тому же зерну, но не создает дубли и не удаляет строки других месяцев.
+        Бизнес-правило: удаление выбранного периода и его повторная загрузка
+        выполняются в одной транзакции, поэтому ошибка записи откатывает обе
+        операции и сохраняет предыдущую версию витрины.
         """
 
         if dataframe.empty:
@@ -1149,30 +1283,29 @@ class SystemPenaltiesAnalyzer:
             "bonus_type_name",
             "nm_id",
         ]
-        with self.database_cls.get_engine().begin() as connection:
-            for start in range(0, len(records), 1000):
-                batch = records[start:start + 1000]
-                statement = insert(target).values(batch)
-                updates = {
-                    column.name: getattr(statement.excluded, column.name)
-                    for column in target.columns
-                    if column.name not in unique_columns
-                }
-                connection.execute(
-                    statement.on_conflict_do_update(
-                        index_elements=unique_columns,
-                        set_=updates,
-                    )
+        for start in range(0, len(records), 1000):
+            batch = records[start:start + 1000]
+            statement = insert(target).values(batch)
+            updates = {
+                column.name: getattr(statement.excluded, column.name)
+                for column in target.columns
+                if column.name not in unique_columns
+            }
+            connection.execute(
+                statement.on_conflict_do_update(
+                    index_elements=unique_columns,
+                    set_=updates,
                 )
+            )
         logger.info("Витрина штрафов записана в PostgreSQL | rows=%s", len(records))
 
-    def _clear_period(self) -> None:
-        """Удаляет текущий период перед полной пересборкой витрины.
+    def _clear_period(self, connection: Connection) -> None:
+        """Удаляет строки выбранного периода внутри транзакции пересборки.
 
         Бизнес-правило: скользящее обновление должно отражать не только новые
         и измененные строки, но и исчезнувшие или обнуленные штрафы. Удаление
-        ограничено московским интервалом текущего запуска и не затрагивает
-        исходные таблицы или записи за пределами периода.
+        ограничено московским интервалом текущего запуска и фиксируется только
+        вместе с успешной вставкой пересчитанного набора.
         """
 
         query = text(
@@ -1182,11 +1315,10 @@ class SystemPenaltiesAnalyzer:
               AND (order_dt AT TIME ZONE 'Europe/Moscow')::date < :date_to
             """
         )
-        with self.database_cls.get_engine().begin() as connection:
-            result = connection.execute(
-                query,
-                {"date_from": self.date_from, "date_to": self.date_to},
-            )
+        result = connection.execute(
+            query,
+            {"date_from": self.date_from, "date_to": self.date_to},
+        )
         logger.info(
             "Очищены строки витрины перед пересборкой | date_from=%s | date_to=%s | rows=%s",
             self.date_from,
@@ -1206,8 +1338,9 @@ class SystemPenaltiesAnalyzer:
         dataframe, checks = self.build_dataframe()
         if ensure_objects:
             self._ensure_objects()
-        self._clear_period()
-        self._upsert(dataframe)
+        with self.database_cls.get_engine().begin() as connection:
+            self._clear_period(connection)
+            self._upsert(dataframe, connection)
         return PenaltiesAnalysisResult(
             month_start=self.month_start,
             date_from=self.date_from,
