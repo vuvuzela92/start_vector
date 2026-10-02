@@ -36,49 +36,64 @@ class AutopilotDailyRepository:
         дневной ПУ показывает завершенные дни, поэтому запрос исключает текущую
         дату и берет период от `CURRENT_DATE - 6 days` до вчера. Процентные
         метрики сохраняются как доли, потому что форматирование процентов
-        выполняется средствами Google Sheets.
+        выполняется средствами Google Sheets. Историческая скидка WB (`spp`)
+        берется напрямую из `orders`: значения агрегируются по дате и артикулу,
+        чтобы несколько заказов одного артикула не дублировали дневную метрику.
         """
         query = text(
             """
+            WITH daily_spp AS (
+                SELECT
+                    date,
+                    article_id,
+                    ROUND(AVG(spp)) AS spp
+                FROM orders
+                WHERE date BETWEEN CURRENT_DATE - INTERVAL '6 days'
+                    AND CURRENT_DATE - INTERVAL '1 days'
+                GROUP BY date, article_id
+            )
             SELECT
-                date,
-                article_id,
-                subject_name,
-                account,
-                local_vendor_code,
-                orders_sum_rub,
-                orders_count,
-                adv_spend,
-                price_with_disc,
-                ROUND(spp / 100, 5) AS spp,
-                total_quantity,
-                profit_by_cond_orders,
-                views,
-                clicks,
-                ROUND(ctr / 100, 5) AS ctr,
-                ROUND(to_cart_convers / 100, 5) AS to_cart_convers,
-                ROUND(to_orders_convers / 100, 5) AS to_orders_convers,
-                add_to_cart_count,
-                open_card_count,
-                cpc,
-                rating,
+                metrics.date,
+                metrics.article_id,
+                metrics.subject_name,
+                metrics.account,
+                metrics.local_vendor_code,
+                metrics.orders_sum_rub,
+                metrics.orders_count,
+                metrics.adv_spend,
+                metrics.price_with_disc,
+                ROUND(daily_spp.spp / 100, 5) AS spp,
+                metrics.total_quantity,
+                metrics.profit_by_cond_orders,
+                metrics.views,
+                metrics.clicks,
+                ROUND(metrics.ctr / 100, 5) AS ctr,
+                ROUND(metrics.to_cart_convers / 100, 5) AS to_cart_convers,
+                ROUND(metrics.to_orders_convers / 100, 5) AS to_orders_convers,
+                metrics.add_to_cart_count,
+                metrics.open_card_count,
+                metrics.cpc,
+                metrics.rating,
                 CASE
-                    WHEN orders_count = 0 THEN adv_spend
-                    ELSE ROUND(adv_spend / orders_count, 2)
+                    WHEN metrics.orders_count = 0 THEN metrics.adv_spend
+                    ELSE ROUND(metrics.adv_spend / metrics.orders_count, 2)
                 END AS cpo,
-                CASE WHEN promo_title != '' THEN 1 ELSE 0 END AS promo_status,
-                profit_by_cond_orders - adv_spend AS net_profit_after_ad,
+                CASE WHEN metrics.promo_title != '' THEN 1 ELSE 0 END AS promo_status,
+                metrics.profit_by_cond_orders - metrics.adv_spend AS net_profit_after_ad,
                 CASE
-                    WHEN orders_sum_rub = 0 THEN 1
-                    ELSE ROUND(adv_spend / orders_sum_rub, 2)
+                    WHEN metrics.orders_sum_rub = 0 THEN 1
+                    ELSE ROUND(metrics.adv_spend / metrics.orders_sum_rub, 2)
                 END AS advertising_cost_share,
                 CASE
-                    WHEN views = 0 THEN 0
-                    ELSE ROUND(adv_spend / views * 1000, 2)
+                    WHEN metrics.views = 0 THEN 0
+                    ELSE ROUND(metrics.adv_spend / metrics.views * 1000, 2)
                 END AS cpm,
-                open_card_count - clicks AS organic
-            FROM orders_articles_analyze
-            WHERE date BETWEEN CURRENT_DATE - INTERVAL '6 days'
+                metrics.open_card_count - metrics.clicks AS organic
+            FROM orders_articles_analyze AS metrics
+            LEFT JOIN daily_spp
+                ON daily_spp.date = metrics.date
+                AND daily_spp.article_id = metrics.article_id
+            WHERE metrics.date BETWEEN CURRENT_DATE - INTERVAL '6 days'
                 AND CURRENT_DATE - INTERVAL '1 days'
             """
         )
