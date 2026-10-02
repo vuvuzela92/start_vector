@@ -17,6 +17,7 @@ from src_oop.jobs.autopilot.config import (
     MAX_CONCURRENT_ACCOUNTS,
     UNIT_ARTICLE_COLUMN_NAME,
     UNIT_EXPECTED_REMAINS_HEADER,
+    UNIT_WB_DISCOUNT_HEADER,
     UNIT_MARGIN_COLUMN_NAME,
     autopilot_gs,
     unit_gs,
@@ -134,6 +135,7 @@ class AutopilotHourlyService:
             sheet_title=unit_gs["unit_sheet"],
         )
         unit_remains = self._load_unit_remains(unit_connector)
+        unit_wb_discount = self._load_unit_wb_discount(unit_connector)
         profit_inputs = self.repository.fetch_profit_calculation_inputs(
             report_date=report_date,
             articles=articles,
@@ -152,7 +154,9 @@ class AutopilotHourlyService:
         remaining_metrics: dict[str, MetricValues] = {}
         remaining_metrics["adv_spend"] = adv_spend
         remaining_metrics["unit_free_stock"] = unit_remains
+        remaining_metrics["spp"] = unit_wb_discount
         logger.info("Свободные остатки UNIT подготовлены для почасовой записи в ПУ: rows=%s", len(unit_remains))
+        logger.info("Фактическая скидка WB из UNIT подготовлена для почасовой записи в ПУ: rows=%s", len(unit_wb_discount))
         remaining_metrics.update(calculation_metrics)
         remaining_metrics.update(advert_metrics)
         remaining_metrics["organic"] = organic
@@ -169,7 +173,10 @@ class AutopilotHourlyService:
             )
             summary.wb_card_rows = len(card_snapshots)
             summary.spp_history_rows = self.repository.insert_spp_history_changes(card_snapshots)
-            remaining_metrics.update(self.calculator.card_snapshots_to_metrics(card_snapshots))
+            card_metrics = self.calculator.card_snapshots_to_metrics(card_snapshots)
+            card_metrics.pop("spp", None)
+            remaining_metrics.update(card_metrics)
+            remaining_metrics["spp"] = unit_wb_discount
         else:
             logger.info("Онлайн-парсинг цен и карточек WB отключен для почасового сценария ПУ.")
 
@@ -353,6 +360,60 @@ class AutopilotHourlyService:
                 continue
             try:
                 result[int(sku_text)] = int(float(value.replace(",", ".")))
+            except ValueError:
+                continue
+        return result
+
+    @staticmethod
+    def _load_unit_wb_discount(connector: GoogleTabs) -> MetricValues:
+        """
+        Читает фактическую скидку WB по артикулам из UNIT.
+
+        Бизнес-логика:
+        текущий дневной показатель `spp` в ПУ должен отражать поле
+        `Скидка ВБ факт` из вкладки `MAIN (tested)`, а не результат отключенного
+        онлайн-парсинга публичной карточки WB. Значение сохраняется в процентах,
+        как в существующей метрике `spp`; отсутствующие или некорректные данные
+        остаются пропусками.
+        """
+        worksheet = connector.sheet_title
+        headers = worksheet.row_values(1)
+        article_column_index = AutopilotHourlyService._find_unit_column_index(
+            headers,
+            UNIT_ARTICLE_COLUMN_NAME,
+        )
+        discount_column_index = AutopilotHourlyService._find_unit_column_index(
+            headers,
+            UNIT_WB_DISCOUNT_HEADER,
+        )
+        if article_column_index is None or discount_column_index is None:
+            logger.warning(
+                "В UNIT не найдены колонки для фактической скидки WB, метрика spp будет пропущена: "
+                "article_header=%s discount_header=%s",
+                UNIT_ARTICLE_COLUMN_NAME,
+                UNIT_WB_DISCOUNT_HEADER,
+            )
+            return {}
+
+        skus = worksheet.col_values(article_column_index)
+        discounts = worksheet.col_values(discount_column_index)
+
+        result: MetricValues = {}
+        for index, sku in enumerate(skus[1:], start=1):
+            sku_text = str(sku).strip()
+            if not sku_text.isdigit() or index >= len(discounts):
+                continue
+            discount_text = (
+                str(discounts[index])
+                .strip()
+                .replace("%", "")
+                .replace(" ", "")
+                .replace(",", ".")
+            )
+            if discount_text == "":
+                continue
+            try:
+                result[int(sku_text)] = float(discount_text)
             except ValueError:
                 continue
         return result

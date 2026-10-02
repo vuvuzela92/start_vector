@@ -44,6 +44,7 @@ AUTOPILOT_DAILY_PERCENT_COLUMNS_RANGES = ("BE:BF", "BX:BX")
 
 UNIT_ARTICLE_COLUMN_NAME = "Артикул"
 UNIT_EXPECTED_REMAINS_HEADER = "Свободный остаток\n(сервис)1"
+UNIT_WB_DISCOUNT_HEADER = "Скидка ВБ факт"
 UNIT_MARGIN_COLUMN_NAME = "Мар"
 
 # Часть метрик является текущим снимком, а не дневным рядом, поэтому пишется в базовую колонку без смещения.
