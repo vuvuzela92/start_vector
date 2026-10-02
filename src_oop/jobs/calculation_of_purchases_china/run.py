@@ -3,7 +3,7 @@ import logging
 import pandas as pd
 
 from src_oop.jobs.calculation_of_purchases_china.config import (
-    payments_calendar,
+    payments_calendar, payments_calendar_form,
 )
 from src_oop.jobs.calculation_of_purchases_china.orders_white_balance_analytics import (
     OrdersWhiteBalanceAnalyticsService,
@@ -125,4 +125,10 @@ def update_payments_analyze_with_ved() -> None:
         df_upload=df_upload,
         target_table_name=payments_calendar["title"],
         target_sheet_name=payments_calendar["analytic_sheet"],
+    )
+    # Добавляем данные в таблицу Форма Платеж календарь финансового директора
+    ved_service.upload_to_sheet(
+        df_upload=df_upload,
+        target_table_name=payments_calendar_form["title"],
+        target_sheet_name=payments_calendar_form["analytic_sheet"],
     )

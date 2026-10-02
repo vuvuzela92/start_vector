@@ -15,6 +15,11 @@ payments_calendar = {
     "analytic_sheet": "Аналитика_платежей",
     }
 
+# Форма Платеж календарь
+payments_calendar_form = {
+    "title": "Форма Платеж календарь",
+    "analytic_sheet": "Аналитика_платежей",
+    }
 
 # Колонки для таблицы Годового закупа
 ANNUAL_PLAN_COLUMNS = [
