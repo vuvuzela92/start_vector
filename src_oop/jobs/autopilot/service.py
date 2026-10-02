@@ -63,8 +63,10 @@ class AutopilotHourlyService:
         Выполняет полный почасовой цикл обновления ПУ.
 
         Бизнес-логика:
-        сначала читает артикула из ПУ, собирает Воронку продаж WB, записывает ее метрики
-        в Google Sheets и обновляет A2 только после успешной записи суммы заказов.
+        сначала читает артикула из ПУ и собирает Воронку продаж WB для оперативных
+        метрик. Сумма заказов текущего дня заменяется суммой созданных заказов по
+        каждому артикулу из `wb_order_feed`, после чего метрики записываются в
+        Google Sheets и A2 обновляется только после успешной записи суммы заказов.
         После этого сценарий
         дописывает расходы Cometa, рекламную активность, прибыль по ИУ по
         формуле daily-витрины, остатки UNIT и расчетные показатели порциями по
@@ -93,7 +95,11 @@ class AutopilotHourlyService:
         )
         summary.funnel_rows = len(funnel_df.index)
         funnel_metrics = self.calculator.dataframe_to_metric_dicts(funnel_df)
-        orders_sum_values = funnel_metrics.get("orders_sum_rub", {})
+        orders_sum_values = self.repository.fetch_today_orders_sum(
+            report_date=report_date,
+            articles=articles,
+        )
+        funnel_metrics["orders_sum_rub"] = orders_sum_values
         expected_articles_count = len(set(articles))
         funnel_write_results = self._write_metrics(
             writer=writer,

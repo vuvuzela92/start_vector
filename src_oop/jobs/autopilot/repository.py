@@ -60,6 +60,64 @@ class AutopilotRepository:
         logger.info("Соответствие артикулов и кабинетов WB загружено из БД: rows=%s", len(result))
         return result
 
+    def fetch_today_orders_sum(
+        self,
+        report_date: date,
+        articles: list[int],
+    ) -> MetricValues:
+        """
+        Читает сумму созданных заказов по артикулам из `wb_order_feed`.
+
+        Бизнес-логика:
+        в текущую выручку попадают только заказы со статусом `created` за дату
+        отчета. Поле `seller_price` уже хранится в рублях и суммируется по
+        `nm_id`. Артикулы без созданных заказов пропускаются, чтобы не
+        подменять отсутствующие данные суммой из другого источника.
+        """
+        if not articles:
+            return {}
+
+        article_params = {
+            f"article_{index}": article_id
+            for index, article_id in enumerate(sorted(set(articles)))
+        }
+        placeholders = ", ".join(f":{name}" for name in article_params)
+        params: dict[str, int | date] = {
+            "report_date": report_date,
+            **article_params,
+        }
+        dataframe = self.database_cls.read_sql_to_dataframe(
+            text(
+                f"""
+                SELECT
+                    nm_id AS article_id,
+                    SUM(seller_price) AS orders_sum_rub
+                FROM wb_order_feed
+                WHERE created_at::date = :report_date
+                    AND status = 'created'
+                    AND nm_id IN ({placeholders})
+                GROUP BY nm_id
+                """
+            ),
+            params=params,
+        )
+
+        result: MetricValues = {}
+        for row in dataframe.to_dict(orient="records"):
+            try:
+                article_id = int(row["article_id"])
+                result[article_id] = float(row["orders_sum_rub"])
+            except (KeyError, TypeError, ValueError):
+                continue
+
+        logger.info(
+            "Последняя выручка по артикулам загружена из почасовой витрины WB: "
+            "report_date=%s rows=%s",
+            report_date.strftime("%Y-%m-%d"),
+            len(result),
+        )
+        return result
+
     def fetch_today_advert_activity(self, report_date: date) -> dict[int, dict[str, float]]:
         """
         Читает клики и показы из текущей таблицы `advert_stat` за дату отчета.
