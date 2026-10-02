@@ -246,6 +246,7 @@ class AutopilotSheetsWriter:
                 values=[[value]],
                 value_input_option="USER_ENTERED",
             )
+            logger.info("Служебная ячейка статуса ПУ обновлена: cell=%s", AUTOPILOT_STATUS_CELL)
         except Exception:
             logger.exception("Не удалось обновить служебную ячейку статуса ПУ.")
 

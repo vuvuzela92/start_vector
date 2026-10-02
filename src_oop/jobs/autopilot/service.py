@@ -110,7 +110,6 @@ class AutopilotHourlyService:
         orders_sum_result = orders_sum_write_results.get("orders_sum_rub")
         if (
             articles
-            and len(orders_sum_values) == expected_articles_count
             and orders_sum_result is not None
             and orders_sum_result.written
             and orders_sum_result.rows == len(articles)
@@ -118,7 +117,7 @@ class AutopilotHourlyService:
             writer.update_status(datetime.now())
         else:
             logger.warning(
-                "Статус A2 не обновлён: сумма заказов не записана для всех строк ПУ | "
+                "Статус A2 не обновлён: диапазон суммы заказов не записан полностью | "
                 "articles=%s | expected_articles=%s | funnel_values=%s | written=%s | written_rows=%s",
                 len(articles),
                 expected_articles_count,
