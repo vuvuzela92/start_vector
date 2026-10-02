@@ -389,9 +389,10 @@ class AutopilotHourlyService:
         Бизнес-логика:
         текущий дневной показатель `spp` в ПУ должен отражать поле
         `Скидка ВБ факт` из вкладки `MAIN (tested)`, а не результат отключенного
-        онлайн-парсинга публичной карточки WB. Значение сохраняется в процентах,
-        как в существующей метрике `spp`; отсутствующие или некорректные данные
-        остаются пропусками.
+        онлайн-парсинга публичной карточки WB. Значение из UNIT в процентах
+        переводится в долю, например `4,6` превращается в `0,046`, потому что
+        процентное отображение выполняется форматированием Google Sheets.
+        Отсутствующие или некорректные данные остаются пропусками.
         """
         worksheet = connector.sheet_title
         headers = worksheet.row_values(1)
@@ -430,7 +431,7 @@ class AutopilotHourlyService:
             if discount_text == "":
                 continue
             try:
-                result[int(sku_text)] = float(discount_text)
+                result[int(sku_text)] = float(discount_text) / 100
             except ValueError:
                 continue
         return result
