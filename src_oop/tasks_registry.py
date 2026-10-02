@@ -80,6 +80,7 @@ from src_oop.jobs.health_check.run import health_check_run
 from src_oop.jobs.logistic_ved.run import logistic_ved_full_run
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 from src_oop.jobs.orders_feed.run import order_feed
+from src_oop.jobs.orders.run import orders
 from src_oop.jobs.purchase_price_update.run import purchase_price_update_run
 from src_oop.jobs.returns_to_customers.run import returns_to_customers
 from src_oop.jobs.sales_analyze.run import update_sales_warehouse_analytics
@@ -129,6 +130,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "orders_report_today": {
         "func": smart_run(orders_report_today),
         "desc": "Запуск обновления отчета о заказах за сегодня",
+    },
+    "orders_run": {
+        "func": smart_run(orders),
+        "desc": "OOP-загрузка заказов WB в PostgreSQL по ключу date и srid",
     },
     # Yandex Disk и ежедневная выработка дизайнеров.
     "yandex_designer_output": {
