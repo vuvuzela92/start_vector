@@ -27,6 +27,13 @@ UPSERT_UPDATE_COLUMNS: tuple[str, ...] = (
     "loaded_at",
 )
 
+# Поля, изменение которых означает новый бизнес-статус заказа и требует UPDATE.
+UPSERT_COMPARE_COLUMNS: tuple[str, ...] = tuple(
+    column_name
+    for column_name in UPSERT_UPDATE_COLUMNS
+    if column_name not in {"snapshot_time", "loaded_at"}
+)
+
 MAX_PERIOD_DAYS = 31
 # Запас защищает границу 31 суток от сетевой задержки и повторов одного запроса.
 HISTORY_BOUNDARY_SAFETY_MINUTES = 5

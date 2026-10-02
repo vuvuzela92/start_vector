@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -127,10 +128,23 @@ class OrderFeedService:
         summary: OrderFeedRunSummary,
     ) -> None:
         """Проходит offset-пагинацию кабинета и сохраняет каждую страницу отдельным батчем."""
-        async with semaphore:
-            offset = 0
-            snapshot_time: str | None = None
-            while True:
+        offset = 0
+        snapshot_time: str | None = None
+        next_request_at = 0.0
+        while True:
+            wait_seconds = max(0.0, next_request_at - time.monotonic())
+            if wait_seconds:
+                logger.info(
+                    "Ожидание лимита WB перед следующей страницей | account=%s | "
+                    "next_offset=%s | seconds=%.1f",
+                    account,
+                    offset,
+                    wait_seconds,
+                )
+                await asyncio.sleep(wait_seconds)
+
+            async with semaphore:
+                request_started_at = time.monotonic()
                 page = await self.client.fetch_page(
                     session=session,
                     account=account,
@@ -139,31 +153,26 @@ class OrderFeedService:
                     offset=offset,
                     snapshot_time=snapshot_time,
                 )
-                summary.pages_received += 1
-                summary.total_retry_count += page.retries_used
-                summary.raw_rows += len(page.orders)
-                snapshot_time = page.snapshot_time
-                normalized = self.normalizer.normalize(page)
-                summary.normalized_rows += len(normalized)
-                saved = await asyncio.to_thread(
-                    self.repository.save,
-                    normalized,
-                    account=account,
-                    offset=offset,
-                )
-                summary.written_rows += saved.written_rows
-                summary.dropped_missing_key_rows += saved.dropped_missing_key_rows
-                summary.collapsed_duplicate_rows += saved.collapsed_duplicate_rows
-                if not page.has_next_page:
-                    break
-                offset += page.limit
-                logger.info(
-                    "Ожидание лимита WB перед следующей страницей | account=%s | next_offset=%s | seconds=%s",
-                    account,
-                    offset,
-                    self.request_interval_seconds,
-                )
-                await asyncio.sleep(self.request_interval_seconds)
+                next_request_at = request_started_at + self.request_interval_seconds
+
+            summary.pages_received += 1
+            summary.total_retry_count += page.retries_used
+            summary.raw_rows += len(page.orders)
+            snapshot_time = page.snapshot_time
+            normalized = self.normalizer.normalize(page)
+            summary.normalized_rows += len(normalized)
+            saved = await asyncio.to_thread(
+                self.repository.save,
+                normalized,
+                account=account,
+                offset=offset,
+            )
+            summary.written_rows += saved.written_rows
+            summary.dropped_missing_key_rows += saved.dropped_missing_key_rows
+            summary.collapsed_duplicate_rows += saved.collapsed_duplicate_rows
+            if not page.has_next_page:
+                break
+            offset += page.limit
 
     def _resolve_period(
         self,

@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import Sequence
 
+from sqlalchemy import or_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import (
     DBAPIError,
@@ -21,6 +22,7 @@ from src_oop.jobs.orders_feed.config import (
     DB_WRITE_RETRY_MAX_SECONDS,
     KEY_COLUMNS,
     TABLE_NAME,
+    UPSERT_COMPARE_COLUMNS,
     UPSERT_UPDATE_COLUMNS,
 )
 from src_oop.jobs.orders_feed.exceptions import OrderFeedRepositoryError
@@ -164,6 +166,14 @@ class OrderFeedRepository:
             index_elements=list(KEY_COLUMNS),
             index_where=WBOrderFeedRecord.account.is_not(None),
             set_=update_columns,
+            where=or_(
+                *(
+                    getattr(WBOrderFeedRecord, column_name).is_distinct_from(
+                        getattr(statement.excluded, column_name)
+                    )
+                    for column_name in UPSERT_COMPARE_COLUMNS
+                )
+            ),
         )
         with Database.get_engine().begin() as connection:
             connection.execute(upsert_statement)

@@ -259,19 +259,21 @@ class WBOrderFeedClient:
         attempt: int,
         headers: Mapping[str, str] | None,
     ) -> float:
-        """Вычисляет безопасную паузу повтора с приоритетом серверного Retry-After."""
+        """Вычисляет паузу повтора по Retry-After или локальному backoff.
+
+        Серверный Retry-After считается обязательным ограничением WB и поэтому
+        не обрезается локальным максимумом; максимум применяется только к
+        резервной задержке, когда сервер не сообщил срок ожидания.
+        """
         retry_after = headers.get("Retry-After") if headers else None
         if retry_after:
             try:
-                return min(max(float(retry_after), 0.0), self.retry_max_sleep_seconds)
+                return max(float(retry_after), 0.0)
             except (TypeError, ValueError):
                 try:
                     retry_at = parsedate_to_datetime(str(retry_after))
                     now = datetime.now(tz=retry_at.tzinfo)
-                    return min(
-                        max((retry_at - now).total_seconds(), 0.0),
-                        self.retry_max_sleep_seconds,
-                    )
+                    return max((retry_at - now).total_seconds(), 0.0)
                 except (TypeError, ValueError, OverflowError):
                     pass
         delay = self.retry_base_sleep_seconds * (2 ** max(attempt - 1, 0))

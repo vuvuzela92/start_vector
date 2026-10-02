@@ -6,11 +6,12 @@ import math
 import unittest
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 from sqlalchemy import String
+from sqlalchemy.dialects.postgresql import dialect
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src_oop.jobs.orders_feed.backfill import BackfillSource, OrderFeedBackfill
@@ -353,6 +354,12 @@ class OrderFeedClientTest(unittest.TestCase):
         self.assertFalse(page.has_next_page)
         self.assertIsNone(page.snapshot_time)
 
+    def test_retry_after_is_not_clipped_by_local_backoff_limit(self) -> None:
+        """Соблюдает длительное ограничение WB, чтобы повтор не продлил penalty."""
+        client = WBOrderFeedClient(retry_max_sleep_seconds=180)
+
+        self.assertEqual(client._retry_delay(1, {"Retry-After": "600"}), 600)
+
 
 class OrderFeedRepositoryTest(unittest.TestCase):
     """Проверяет подготовку типизированного батча без подключения к PostgreSQL."""
@@ -395,6 +402,35 @@ class OrderFeedRepositoryTest(unittest.TestCase):
         self.assertTrue(immutable_columns.isdisjoint(UPSERT_UPDATE_COLUMNS))
         self.assertIn("status", UPSERT_UPDATE_COLUMNS)
         self.assertIn("updated_at", UPSERT_UPDATE_COLUMNS)
+
+    def test_upsert_skips_update_when_business_fields_are_unchanged(self) -> None:
+        """Добавляет PostgreSQL-условие, сохраняющее БД от пустого UPDATE."""
+        rows = OrderFeedNormalizer().normalize(
+            OrderFeedPage(
+                account="vector",
+                snapshot_time=None,
+                currency="RUB",
+                orders=[_validated_order("order-1")],
+                offset=0,
+                limit=10,
+            )
+        )
+        repository = OrderFeedRepository(chunk_size=1, max_retries=1)
+        captured: list[object] = []
+        engine = MagicMock()
+        connection = engine.begin.return_value.__enter__.return_value
+
+        with (
+            patch.object(connection, "execute", side_effect=lambda statement: captured.append(statement)),
+            patch(
+                "src_oop.jobs.orders_feed.repository.Database.get_engine",
+                return_value=engine,
+            ),
+        ):
+            repository._upsert_chunk(rows)
+
+        compiled = str(captured[0].compile(dialect=dialect()))
+        self.assertIn("IS DISTINCT FROM", compiled)
 
     def test_legacy_identity_columns_are_nullable_and_use_partial_indexes(self) -> None:
         """Позволяет legacy-строкам жить без account/chrt_id и сохраняет идемпотентность."""
