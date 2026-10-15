@@ -240,6 +240,9 @@ class VedBalanceAnalyticsService:
         поставщик в итоговой аналитике всегда фиксируется как
         `Кредо Инвест`, чтобы этот блок не распадался на разные значения
         в сводных таблицах и фильтрах.
+        Для этапа «Агентское вознаграждение КРЕДО» используются только
+        строки с декларантом «Кредо Инвест». Поставщик этого этапа
+        фиксируется как «Кредо Инвест».
         """
         payment_columns = payment_config["columns"]
         self.validate_required_columns(df_source, list(payment_columns.values()))
@@ -276,6 +279,13 @@ class VedBalanceAnalyticsService:
             df_payment["Поставщик"] = "Кредо Инвест"
 
         if stage_name == "Таможенные платежи КРЕДО":
+            df_payment["Поставщик"] = "Кредо Инвест"
+
+        # Агентское вознаграждение КРЕДО формируется только для его деклараций.
+        if stage_name == "Агентское вознаграждение КРЕДО":
+            df_payment = df_payment.loc[
+                declarant_normalized.eq("кредо инвест")
+            ].copy()
             df_payment["Поставщик"] = "Кредо Инвест"
 
         if stage_name == "Страхование груза":
