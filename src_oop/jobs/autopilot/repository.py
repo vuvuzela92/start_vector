@@ -74,8 +74,26 @@ class AutopilotRepository:
         `nm_id`. Артикулы без созданных заказов пропускаются, чтобы не
         подменять отсутствующие данные суммой из другого источника.
         """
+        return self.fetch_today_orders_metrics(
+            report_date=report_date,
+            articles=articles,
+        )["orders_sum_rub"]
+
+    def fetch_today_orders_metrics(
+        self,
+        report_date: date,
+        articles: list[int],
+    ) -> dict[str, MetricValues]:
+        """Читает сумму и количество созданных заказов из одного источника.
+
+        Бизнес-правило: текущие `orders_sum_rub` и `orders_count` должны быть
+        согласованы по одному набору заказов. Поэтому обе метрики считаются
+        по `wb_order_feed` с одинаковыми датой, статусом и артикулом. Это
+        исключает ситуацию, когда сумма относится к четырём заказам, а
+        количество приходит из другого источника и равно пяти.
+        """
         if not articles:
-            return {}
+            return {"orders_count": {}, "orders_sum_rub": {}}
 
         article_params = {
             f"article_{index}": article_id
@@ -91,6 +109,7 @@ class AutopilotRepository:
                 f"""
                 SELECT
                     nm_id AS article_id,
+                    COUNT(*) AS orders_count,
                     SUM(seller_price) AS orders_sum_rub
                 FROM wb_order_feed
                 WHERE created_at::date = :report_date
@@ -103,20 +122,22 @@ class AutopilotRepository:
         )
 
         result: MetricValues = {}
+        orders_count: MetricValues = {}
         for row in dataframe.to_dict(orient="records"):
             try:
                 article_id = int(row["article_id"])
+                orders_count[article_id] = int(row["orders_count"] or 0)
                 result[article_id] = float(row["orders_sum_rub"])
             except (KeyError, TypeError, ValueError):
                 continue
 
         logger.info(
-            "Последняя выручка по артикулам загружена из почасовой витрины WB: "
+            "Сумма и количество созданных заказов загружены из wb_order_feed: "
             "report_date=%s rows=%s",
             report_date.strftime("%Y-%m-%d"),
             len(result),
         )
-        return result
+        return {"orders_count": orders_count, "orders_sum_rub": result}
 
     def fetch_today_advert_activity(self, report_date: date) -> dict[int, dict[str, float]]:
         """

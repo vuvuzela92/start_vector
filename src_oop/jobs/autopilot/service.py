@@ -98,10 +98,15 @@ class AutopilotHourlyService:
         )
         summary.funnel_rows = len(funnel_df.index)
         funnel_metrics = self.calculator.dataframe_to_metric_dicts(funnel_df)
-        orders_sum_values = self.repository.fetch_today_orders_sum(
+        today_orders_metrics = self.repository.fetch_today_orders_metrics(
             report_date=report_date,
             articles=articles,
         )
+        orders_sum_values = today_orders_metrics["orders_sum_rub"]
+        # Сумма и количество должны относиться к одному набору заказов из
+        # wb_order_feed; иначе средняя цена и прибыль по ИУ рассчитываются
+        # на несовместимых числителе и знаменателе.
+        funnel_metrics["orders_count"] = today_orders_metrics["orders_count"]
         funnel_metrics["orders_sum_rub"] = orders_sum_values
         expected_articles_count = len(set(articles))
         orders_sum_write_results = self._write_metrics(
