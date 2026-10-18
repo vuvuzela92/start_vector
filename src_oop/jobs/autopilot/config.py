@@ -4,6 +4,12 @@ autopilot_gs = {
     "hourly_sheet": "Автопилот",
 }
 
+MONITORING_TABLE_ID = "1rBbd3NKoLNwVJ3yP3pchd-s5mW_LV5IFs0PitJjcNzE"
+MONITORING_TABLE_TITLE = "Мониторинг показателей"
+MONITORING_SHEET_TITLE = "Технический лист"
+# Снэпшот пишет только запуск из первой половины часа; второй запуск часа пропускается.
+MONITORING_SNAPSHOT_FIRST_HALF_END_MINUTE = 30
+
 unit_gs = {
     "title": "UNIT 2.0 (tested)",
     "unit_sheet": "MAIN (tested)",

@@ -4,6 +4,7 @@ import asyncio
 import logging
 from collections import defaultdict
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import aiohttp
 import pandas as pd
@@ -19,11 +20,13 @@ from src_oop.jobs.autopilot.config import (
     UNIT_EXPECTED_REMAINS_HEADER,
     UNIT_WB_DISCOUNT_HEADER,
     UNIT_MARGIN_COLUMN_NAME,
+    MONITORING_SNAPSHOT_FIRST_HALF_END_MINUTE,
     autopilot_gs,
     unit_gs,
 )
 from src_oop.jobs.autopilot.funnel_client import WBFunnelClient
 from src_oop.jobs.autopilot.models import AutopilotHourlySummary, MetricValues
+from src_oop.jobs.autopilot.monitoring_snapshot import MonitoringSnapshotWriter
 from src_oop.jobs.autopilot.product_clients import WBPriceClient, WBPublicCardClient
 from src_oop.jobs.autopilot.repository import AutopilotRepository
 from src_oop.jobs.autopilot.sheets_writer import (
@@ -197,14 +200,107 @@ class AutopilotHourlyService:
         else:
             logger.info("Онлайн-парсинг цен и карточек WB отключен для почасового сценария ПУ.")
 
-        self._write_metrics(
+        remaining_write_results = self._write_metrics(
             writer=writer,
             metrics=remaining_metrics,
             articles=articles,
             summary=summary,
         )
+        monitoring_results = {
+            "orders_sum_rub": orders_sum_write_results.get("orders_sum_rub"),
+            "adv_spend": remaining_write_results.get("adv_spend"),
+            "profit_by_cond_orders": remaining_write_results.get(
+                "profit_by_cond_orders"
+            ),
+        }
+        if all(
+            self._is_complete_metric_write(result, len(articles))
+            for result in monitoring_results.values()
+        ):
+            if self._is_first_hourly_run():
+                self._write_monitoring_snapshot(
+                    orders_sum=orders_sum_values,
+                    adv_spend=adv_spend,
+                    profit_by_cond_orders=calculation_metrics.get(
+                        "profit_by_cond_orders",
+                        {},
+                    ),
+                )
+            else:
+                logger.info(
+                    "Почасовой снэпшот мониторинга пропущен: это второй запуск часа | minute=%s",
+                    datetime.now(ZoneInfo("Europe/Moscow")).minute,
+                )
+        else:
+            logger.warning(
+                "Почасовой снэпшот мониторинга пропущен: не все три метрики "
+                "подтверждены записью в ПУ | expected_rows=%s | results=%s",
+                len(articles),
+                {
+                    metric_name: {
+                        "written": result.written if result else False,
+                        "rows": result.rows if result else 0,
+                    }
+                    for metric_name, result in monitoring_results.items()
+                },
+            )
         summary.finished_at = datetime.now()
         return summary
+
+    @staticmethod
+    def _is_first_hourly_run() -> bool:
+        """Определяет, относится ли запуск к первой половине текущего часа."""
+        return (
+            datetime.now(ZoneInfo("Europe/Moscow")).minute
+            < MONITORING_SNAPSHOT_FIRST_HALF_END_MINUTE
+        )
+
+    @staticmethod
+    def _is_complete_metric_write(
+        result: MetricWriteResult | None,
+        expected_rows: int,
+    ) -> bool:
+        """Проверяет, что метрика полностью записана в текущий блок ПУ."""
+        return (
+            result is not None
+            and result.written
+            and result.rows == expected_rows
+        )
+
+    @staticmethod
+    def _write_monitoring_snapshot(
+        orders_sum: MetricValues,
+        adv_spend: MetricValues,
+        profit_by_cond_orders: MetricValues,
+    ) -> None:
+        """Сохраняет агрегаты hourly-метрик в технический лист мониторинга.
+
+        Бизнес-правило: мониторинг должен видеть тот же почасовой срез, который
+        рассчитан для текущего дня ПУ; сбой дополнительной витрины не должен
+        отменять основной hourly-запуск автопилота.
+        """
+        try:
+            MonitoringSnapshotWriter().upsert_snapshot(
+                orders_sum=AutopilotHourlyService._sum_metric(orders_sum),
+                adv_spend=AutopilotHourlyService._sum_metric(adv_spend),
+                profit_by_cond_orders=AutopilotHourlyService._sum_metric(
+                    profit_by_cond_orders,
+                ),
+            )
+        except Exception:
+            logger.exception(
+                "Не удалось записать почасовой снэпшот в технический лист мониторинга; "
+                "основной hourly-сценарий уже завершил запись метрик."
+            )
+
+    @staticmethod
+    def _sum_metric(values_by_article: MetricValues) -> float:
+        """Суммирует числовую метрику по артикулам для мониторинга."""
+        return sum(
+            float(value)
+            for value in values_by_article.values()
+            if value not in (None, "")
+        )
 
     async def _collect_funnel_data(
         self,
