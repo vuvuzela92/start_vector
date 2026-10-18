@@ -10,6 +10,10 @@ MONITORING_SHEET_TITLE = "Технический лист"
 # Снэпшот пишет только запуск из первой половины часа; второй запуск часа пропускается.
 MONITORING_SNAPSHOT_FIRST_HALF_END_MINUTE = 30
 
+# Фиксированная часть удержаний в формуле прибыли с заказов по ИУ.
+BASE_ORDER_COMMISSION_PERCENT = 8
+ACQUIRING_PERCENT = 3
+
 unit_gs = {
     "title": "UNIT 2.0 (tested)",
     "unit_sheet": "MAIN (tested)",
