@@ -170,6 +170,14 @@ class ArticleAnalyzeRepository:
                 SELECT article_id, "date"
                 FROM sales
                 WHERE "date" BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days' AND CURRENT_DATE - INTERVAL '{days_to} days'
+
+                UNION ALL
+
+                SELECT nm_id AS article_id, created_at::date AS "date"
+                FROM wb_order_feed
+                WHERE status = 'created'
+                    AND created_at::date BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days'
+                    AND CURRENT_DATE - INTERVAL '{days_to} days'
             ),
             base AS (
                 SELECT article_id, "date"
@@ -184,15 +192,15 @@ class ArticleAnalyzeRepository:
                 a.local_vendor_code,
                 b.article_id,
                 cd.subject_name,
-                COALESCE(o.avg_price, ord.price_with_disc, 0) AS price_with_disc,
+                COALESCE(wbf.avg_price, o.avg_price, pd.avg_price, 0) AS price_with_disc,
                 ord.spp,
-                COALESCE(o.orders_sum, 0) AS orders_sum_rub,
-                COALESCE(o.order_count, 0) AS orders_count,
+                COALESCE(wbf.orders_sum_rub, o.orders_sum, 0) AS orders_sum_rub,
+                COALESCE(wbf.orders_count, o.order_count, 0) AS orders_count,
                 COALESCE(anpd.profit_by_orders, 0) AS profit_by_orders,
 
-                COALESCE(o.order_count, 0) * (
-                    COALESCE(o.avg_price, ord.price_with_disc, 0) - (
-                        (COALESCE(o.avg_price, ord.price_with_disc, 0) / 100.0 * (8 + 3 +
+                COALESCE(wbf.orders_count, o.order_count, 0) * (
+                    COALESCE(wbf.avg_price, o.avg_price, pd.avg_price, 0) - (
+                        (COALESCE(wbf.avg_price, o.avg_price, pd.avg_price, 0) / 100.0 * (8 + 3 +
                             CASE
                                 WHEN b.date >= '2026-01-01' THEN ic_2026.fbo_individual_conditions
                                 WHEN b.date BETWEEN '2025-01-01' AND '2025-12-31' THEN ic_2025.fbo_individual_conditions
@@ -219,7 +227,7 @@ class ArticleAnalyzeRepository:
                 COALESCE(o.open_count, 0) AS open_card_count,
                 COALESCE(o.cart_count, 0) AS add_to_cart_count,
                 ROUND(COALESCE(o.cart_count, 0) / NULLIF(o.open_count::NUMERIC, 0), 2) * 100 AS to_cart_convers,
-                ROUND(COALESCE(o.order_count, 0) / NULLIF(o.cart_count::NUMERIC, 0), 2) * 100 AS to_orders_convers,
+                ROUND(COALESCE(wbf.orders_count, o.order_count, 0) / NULLIF(o.cart_count::NUMERIC, 0), 2) * 100 AS to_orders_convers,
                 pami.manager, pami.promo_title, pami.promo_status,
                 itr.central, itr.south, itr.privolzhskiy, itr.north_caucase,
                 COALESCE(itr.total_quantity, ws.quantity) AS total_quantity,
@@ -237,6 +245,19 @@ class ArticleAnalyzeRepository:
             LEFT JOIN article a ON a.nm_id = b.article_id
             LEFT JOIN card_data cd ON b.article_id = cd.article_id
             LEFT JOIN funnel_daily o ON o.nm_id = b.article_id AND o."date" = b."date"
+            LEFT JOIN (
+                SELECT
+                    nm_id AS article_id,
+                    created_at::date AS "date",
+                    SUM(seller_price) AS orders_sum_rub,
+                    COUNT(*) AS orders_count,
+                    AVG(seller_price) AS avg_price
+                FROM wb_order_feed
+                WHERE status = 'created'
+                    AND created_at::date BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days'
+                    AND CURRENT_DATE - INTERVAL '{days_to} days'
+                GROUP BY nm_id, created_at::date
+            ) AS wbf ON wbf.article_id = b.article_id AND wbf."date" = b."date"
             LEFT JOIN (
                 SELECT ord."date", ord.article_id, ROUND(AVG(ord.spp)) AS spp, ROUND(AVG(ord.price_with_disc)) AS price_with_disc,
                     SUM(CASE WHEN ord.oblast_okrug_name = 'Центральный федеральный округ' AND is_realization IS TRUE THEN 1 ELSE 0 END) AS central_fo_orders,
@@ -306,9 +327,14 @@ class ArticleAnalyzeRepository:
                 GROUP BY ic_2025.subject_name, ic_2025.date_from, ic_2025.date_to
             ) ic_2025 ON ic_2025.subject_name = cd.subject_name AND b.date BETWEEN ic_2025.date_from AND ic_2025.date_to
             LEFT JOIN (
-                SELECT date, pd.article_id, pd.discounted_price, pd.logistic_from_wb_wh_to_opp
+                SELECT
+                    date,
+                    pd.article_id,
+                    AVG(pd.discounted_price) AS avg_price,
+                    AVG(pd.logistic_from_wb_wh_to_opp) AS logistic_from_wb_wh_to_opp
                 FROM prices_data pd
                 WHERE date BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days' AND CURRENT_DATE - INTERVAL '{days_to} days'
+                GROUP BY date, pd.article_id
             ) pd ON pd.article_id = b.article_id AND pd."date" = b."date"
             LEFT JOIN (
                 SELECT DATE(ws.created_at) AS date, ws.nm_id, SUM(ws.in_way_to_client) AS in_way_to_client, SUM(ws.in_way_from_client) AS in_way_from_client, SUM(quantity) AS quantity

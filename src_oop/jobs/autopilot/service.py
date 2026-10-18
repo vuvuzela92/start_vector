@@ -108,6 +108,7 @@ class AutopilotHourlyService:
         # на несовместимых числителе и знаменателе.
         funnel_metrics["orders_count"] = today_orders_metrics["orders_count"]
         funnel_metrics["orders_sum_rub"] = orders_sum_values
+        order_prices = today_orders_metrics["orders_avg_price"]
         expected_articles_count = len(set(articles))
         orders_sum_write_results = self._write_metrics(
             writer=writer,
@@ -186,6 +187,23 @@ class AutopilotHourlyService:
         remaining_metrics.update(advert_metrics)
         remaining_metrics["organic"] = organic
 
+        # Цена заказа из wb_order_feed приоритетна: она согласована с суммой
+        # заказов и количеством заказов, по которым считается прибыль.
+        fallback_articles = set(articles).difference(order_prices)
+        if fallback_articles:
+            fallback_prices = await self._collect_full_prices(
+                articles=sorted(fallback_articles),
+                article_accounts=article_accounts,
+                tokens_by_account=tokens_by_account,
+            )
+            order_prices = {**fallback_prices, **order_prices}
+            logger.info(
+                "Для артикула без заказов использована резервная цена WB API: rows=%s",
+                len(fallback_prices),
+            )
+        if order_prices:
+            remaining_metrics["full_price"] = order_prices
+
         if ENABLE_WB_ONLINE_PRICE_PARSING:
             full_prices = await self._collect_full_prices(
                 articles=articles,
@@ -200,6 +218,8 @@ class AutopilotHourlyService:
             summary.spp_history_rows = self.repository.insert_spp_history_changes(card_snapshots)
             card_metrics = self.calculator.card_snapshots_to_metrics(card_snapshots)
             card_metrics.pop("spp", None)
+            # Цена из заказов имеет приоритет над независимым снэпшотом WB API.
+            card_metrics.pop("full_price", None)
             remaining_metrics.update(card_metrics)
             remaining_metrics["spp"] = unit_wb_discount
         else:

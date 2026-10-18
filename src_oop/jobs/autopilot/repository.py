@@ -84,7 +84,7 @@ class AutopilotRepository:
         report_date: date,
         articles: list[int],
     ) -> dict[str, MetricValues]:
-        """Читает сумму и количество созданных заказов из одного источника.
+        """Читает сумму, количество и среднюю цену созданных заказов.
 
         Бизнес-правило: текущие `orders_sum_rub` и `orders_count` должны быть
         согласованы по одному набору заказов. Поэтому обе метрики считаются
@@ -93,7 +93,7 @@ class AutopilotRepository:
         количество приходит из другого источника и равно пяти.
         """
         if not articles:
-            return {"orders_count": {}, "orders_sum_rub": {}}
+            return {"orders_count": {}, "orders_sum_rub": {}, "orders_avg_price": {}}
 
         article_params = {
             f"article_{index}": article_id
@@ -110,7 +110,8 @@ class AutopilotRepository:
                 SELECT
                     nm_id AS article_id,
                     COUNT(*) AS orders_count,
-                    SUM(seller_price) AS orders_sum_rub
+                    SUM(seller_price) AS orders_sum_rub,
+                    AVG(seller_price) AS orders_avg_price
                 FROM wb_order_feed
                 WHERE created_at::date = :report_date
                     AND status = 'created'
@@ -122,12 +123,14 @@ class AutopilotRepository:
         )
 
         result: MetricValues = {}
+        orders_avg_price: MetricValues = {}
         orders_count: MetricValues = {}
         for row in dataframe.to_dict(orient="records"):
             try:
                 article_id = int(row["article_id"])
                 orders_count[article_id] = int(row["orders_count"] or 0)
                 result[article_id] = float(row["orders_sum_rub"])
+                orders_avg_price[article_id] = float(row["orders_avg_price"])
             except (KeyError, TypeError, ValueError):
                 continue
 
@@ -137,7 +140,11 @@ class AutopilotRepository:
             report_date.strftime("%Y-%m-%d"),
             len(result),
         )
-        return {"orders_count": orders_count, "orders_sum_rub": result}
+        return {
+            "orders_count": orders_count,
+            "orders_sum_rub": result,
+            "orders_avg_price": orders_avg_price,
+        }
 
     def fetch_today_advert_activity(self, report_date: date) -> dict[int, dict[str, float]]:
         """
