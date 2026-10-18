@@ -48,7 +48,7 @@ class AutopilotCalculator:
         `orders_articles_analyze`, но для текущего дня берет количество и сумму
         заказов из свежей Воронки WB. Закупка и индивидуальные условия приходят
         из БД, при отсутствии справочников используются SQL fallback daily:
-        закупка `0`, индивидуальные условия `19`. Если Воронка не вернула
+        закупка `0`, индивидуальные условия `26`. Если Воронка не вернула
         заказы по артикулу, прибыль и ЧП-РК остаются пропусками. ДРР и CPO
         используют расходы Cometa, потому что для автопилота согласован именно
         этот источник рекламных затрат.
@@ -71,7 +71,7 @@ class AutopilotCalculator:
 
             inputs = profit_inputs.get(article_id, {})
             purchase_price = float(inputs.get("purchase_price") or 0)
-            fbo_conditions = float(inputs.get("fbo_individual_conditions") or 19)
+            fbo_conditions = float(inputs.get("fbo_individual_conditions") or 26)
             avg_price = float(order_sum or 0) / order_count
             commission = avg_price / 100 * (8 + fbo_conditions)
             profit[article_id] = round(

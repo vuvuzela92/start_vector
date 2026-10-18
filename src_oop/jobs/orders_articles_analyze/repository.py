@@ -196,7 +196,7 @@ class ArticleAnalyzeRepository:
                             CASE
                                 WHEN b.date >= '2026-01-01' THEN ic_2026.fbo_individual_conditions
                                 WHEN b.date BETWEEN '2025-01-01' AND '2025-12-31' THEN ic_2025.fbo_individual_conditions
-                                ELSE 19
+                                ELSE 26
                             END)) + COALESCE(cp.purchase_price, 0)
                     )
                 ) AS profit_by_cond_orders,
@@ -211,7 +211,7 @@ class ArticleAnalyzeRepository:
                                 CASE
                                     WHEN b.date >= '2026-01-01' THEN ic_2026.fbo_individual_conditions
                                     WHEN b.date BETWEEN '2025-01-01' AND '2025-12-31' THEN ic_2025.fbo_individual_conditions
-                                    ELSE 19
+                                    ELSE 26
                                 END)) + COALESCE(cp.purchase_price, 0)
                         )
                     ), 2
@@ -229,7 +229,7 @@ class ArticleAnalyzeRepository:
                 CASE
                     WHEN b.date >= '2026-01-01' THEN ic_2026.fbo_individual_conditions
                     WHEN b.date BETWEEN '2025-01-01' AND '2025-12-31' THEN ic_2025.fbo_individual_conditions
-                    ELSE 19
+                    ELSE 26
                 END AS ind_comission_fbo,
                 pd.logistic_from_wb_wh_to_opp, ord.fbo_orders, ord.fbs_orders, cd.rating, hs.end_of_day_balance,
                 ws.in_way_to_client, ws.in_way_from_client

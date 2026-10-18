@@ -190,7 +190,7 @@ class AutopilotRepository:
         последняя доступная дата не позже даты отчета, потому что справочник
         может обновляться позже текущего дня. Если справочник не нашелся,
         calculator применит SQL fallback daily-формулы: закупка `0`,
-        индивидуальные условия `19`.
+        индивидуальные условия `26`.
         """
         if not articles:
             return {}
@@ -216,9 +216,9 @@ class AutopilotRepository:
                                 THEN ic_2026.fbo_individual_conditions
                             WHEN :report_date BETWEEN DATE '2025-01-01' AND DATE '2025-12-31'
                                 THEN ic_2025.fbo_individual_conditions
-                            ELSE 19
+                            ELSE 26
                         END,
-                        19
+                        26
                     ) AS fbo_individual_conditions
                 FROM (
                     SELECT
@@ -287,7 +287,7 @@ class AutopilotRepository:
                 result[int(article_id)] = {
                     "purchase_price": float(row.get("purchase_price") or 0),
                     "fbo_individual_conditions": float(
-                        row.get("fbo_individual_conditions") or 19
+                        row.get("fbo_individual_conditions") or 26
                     ),
                 }
             except (TypeError, ValueError):
