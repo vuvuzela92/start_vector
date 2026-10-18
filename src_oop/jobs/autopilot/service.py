@@ -245,6 +245,7 @@ class AutopilotHourlyService:
             if self._is_first_hourly_run():
                 self._write_monitoring_snapshot(
                     orders_sum=orders_sum_values,
+                    orders_count=funnel_metrics.get("orders_count", {}),
                     adv_spend=adv_spend,
                     profit_by_cond_orders=calculation_metrics.get(
                         "profit_by_cond_orders",
@@ -295,6 +296,7 @@ class AutopilotHourlyService:
     @staticmethod
     def _write_monitoring_snapshot(
         orders_sum: MetricValues,
+        orders_count: MetricValues,
         adv_spend: MetricValues,
         profit_by_cond_orders: MetricValues,
     ) -> None:
@@ -307,6 +309,9 @@ class AutopilotHourlyService:
         try:
             MonitoringSnapshotWriter().upsert_snapshot(
                 orders_sum=AutopilotHourlyService._sum_metric(orders_sum),
+                orders_count=int(
+                    AutopilotHourlyService._sum_metric(orders_count)
+                ),
                 adv_spend=AutopilotHourlyService._sum_metric(adv_spend),
                 profit_by_cond_orders=AutopilotHourlyService._sum_metric(
                     profit_by_cond_orders,

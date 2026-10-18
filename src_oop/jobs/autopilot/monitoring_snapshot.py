@@ -4,6 +4,9 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import text
+
+from src_oop.core.database import Database
 from src_oop.core.my_gspread import GoogleTabs
 from src_oop.jobs.autopilot.config import (
     MONITORING_SHEET_TITLE,
@@ -23,6 +26,7 @@ class MonitoringSnapshotWriter:
     """
 
     _MOSCOW_TIMEZONE = ZoneInfo("Europe/Moscow")
+    _DATABASE_TABLE = "autopilot_hourly_snapshots"
 
     def __init__(self) -> None:
         """Открывает технический лист, обслуживающий почасовой мониторинг.
@@ -42,6 +46,7 @@ class MonitoringSnapshotWriter:
     def upsert_snapshot(
         self,
         orders_sum: float,
+        orders_count: int,
         adv_spend: float,
         profit_by_cond_orders: float,
         snapshot_at: datetime | None = None,
@@ -73,6 +78,17 @@ class MonitoringSnapshotWriter:
             adv_spend,
             profit_by_cond_orders,
         ]
+
+        self._mark_missing_hours(snapshot_at=snapshot_at)
+        # Сначала сохраняем срез в PostgreSQL: ошибка квоты Google Sheets
+        # не должна приводить к потере подтверждённых hourly-данных.
+        self._upsert_database_snapshot(
+            snapshot_at=snapshot_at,
+            orders_sum=orders_sum,
+            orders_count=orders_count,
+            adv_spend=adv_spend,
+            profit_by_cond_orders=profit_by_cond_orders,
+        )
 
         # Читаем только целевую таблицу мониторинга. Лист «Автопилот» повторно
         # не запрашивается: это снижает нагрузку и сохраняет единый payload.
@@ -121,6 +137,231 @@ class MonitoringSnapshotWriter:
             snapshot_time,
             target_row,
         )
+
+    def _upsert_database_snapshot(
+        self,
+        snapshot_at: datetime,
+        orders_sum: float,
+        orders_count: int,
+        adv_spend: float,
+        profit_by_cond_orders: float,
+    ) -> None:
+        """Сохраняет почасовой срез в PostgreSQL с защитой от дублей.
+
+        Бизнес-правило: PostgreSQL является резервным архивом снэпшотов, а
+        Google Sheets — пользовательской витриной. Ключ «дата + час» позволяет
+        повторному запуску обновить срез после временной ошибки Sheets.
+        """
+        snapshot_local = snapshot_at.astimezone(self._MOSCOW_TIMEZONE)
+        with Database.get_engine().begin() as connection:
+            connection.execute(
+                text(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self._DATABASE_TABLE} (
+                        snapshot_date DATE NOT NULL,
+                        snapshot_hour SMALLINT NOT NULL,
+                        snapshot_at TIMESTAMPTZ NOT NULL,
+                        orders_sum NUMERIC(18, 2) NOT NULL,
+                        orders_count BIGINT NOT NULL DEFAULT 0,
+                        adv_spend NUMERIC(18, 2),
+                        profit_by_cond_orders NUMERIC(18, 2),
+                        snapshot_status VARCHAR(16) NOT NULL DEFAULT 'captured',
+                        recovery_note TEXT,
+                        saved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        CONSTRAINT uq_{self._DATABASE_TABLE}_date_hour
+                            UNIQUE (snapshot_date, snapshot_hour),
+                        CONSTRAINT ck_{self._DATABASE_TABLE}_hour
+                            CHECK (snapshot_hour BETWEEN 0 AND 23)
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    f"""
+                    ALTER TABLE {self._DATABASE_TABLE}
+                        ADD COLUMN IF NOT EXISTS snapshot_status VARCHAR(16)
+                            NOT NULL DEFAULT 'captured';
+                    ALTER TABLE {self._DATABASE_TABLE}
+                        ADD COLUMN IF NOT EXISTS recovery_note TEXT;
+                    ALTER TABLE {self._DATABASE_TABLE}
+                        ADD COLUMN IF NOT EXISTS orders_count BIGINT NOT NULL DEFAULT 0;
+                    ALTER TABLE {self._DATABASE_TABLE}
+                        ALTER COLUMN orders_sum DROP NOT NULL;
+                    ALTER TABLE {self._DATABASE_TABLE}
+                        ALTER COLUMN adv_spend DROP NOT NULL;
+                    ALTER TABLE {self._DATABASE_TABLE}
+                        ALTER COLUMN profit_by_cond_orders DROP NOT NULL;
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    f"""
+                    INSERT INTO {self._DATABASE_TABLE} (
+                        snapshot_date, snapshot_hour, snapshot_at,
+                        orders_sum, orders_count, adv_spend, profit_by_cond_orders,
+                        snapshot_status, recovery_note
+                    )
+                    VALUES (
+                        :snapshot_date, :snapshot_hour, :snapshot_at,
+                        :orders_sum, :orders_count, :adv_spend, :profit_by_cond_orders,
+                        'captured', NULL
+                    )
+                    ON CONFLICT (snapshot_date, snapshot_hour)
+                    DO UPDATE SET
+                        snapshot_at = EXCLUDED.snapshot_at,
+                        orders_sum = EXCLUDED.orders_sum,
+                        orders_count = EXCLUDED.orders_count,
+                        adv_spend = EXCLUDED.adv_spend,
+                        profit_by_cond_orders = EXCLUDED.profit_by_cond_orders,
+                        snapshot_status = 'captured',
+                        recovery_note = NULL,
+                        saved_at = NOW()
+                    """
+                ),
+                {
+                    "snapshot_date": snapshot_local.date(),
+                    "snapshot_hour": snapshot_local.hour,
+                    "snapshot_at": snapshot_at,
+                    "orders_sum": orders_sum,
+                    "orders_count": orders_count,
+                    "adv_spend": adv_spend,
+                    "profit_by_cond_orders": profit_by_cond_orders,
+                },
+            )
+        logger.info(
+            "Почасовой снэпшот сохранен в PostgreSQL: date=%s hour=%s",
+            snapshot_local.date().isoformat(),
+            snapshot_local.hour,
+        )
+
+    def _mark_missing_hours(self, snapshot_at: datetime) -> None:
+        """Фиксирует пропущенные часы до текущего снэпшота.
+
+        Бизнес-правило: пропуск не заполняется текущими накопительными
+        расходами Cometa. Если исторические затраты недоступны, час получает
+        статус unavailable и пояснение для последующего восстановления.
+        """
+        snapshot_local = snapshot_at.astimezone(self._MOSCOW_TIMEZONE)
+        with Database.get_engine().begin() as connection:
+            connection.execute(
+                text(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self._DATABASE_TABLE} (
+                        snapshot_date DATE NOT NULL,
+                        snapshot_hour SMALLINT NOT NULL,
+                        snapshot_at TIMESTAMPTZ NOT NULL,
+                        orders_sum NUMERIC(18, 2) NOT NULL,
+                        orders_count BIGINT NOT NULL DEFAULT 0,
+                        adv_spend NUMERIC(18, 2),
+                        profit_by_cond_orders NUMERIC(18, 2),
+                        snapshot_status VARCHAR(16) NOT NULL DEFAULT 'captured',
+                        recovery_note TEXT,
+                        saved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        CONSTRAINT uq_{self._DATABASE_TABLE}_date_hour
+                            UNIQUE (snapshot_date, snapshot_hour)
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    f"""
+                    ALTER TABLE {self._DATABASE_TABLE}
+                        ADD COLUMN IF NOT EXISTS orders_count BIGINT NOT NULL DEFAULT 0;
+                    ALTER TABLE {self._DATABASE_TABLE}
+                        ADD COLUMN IF NOT EXISTS snapshot_status VARCHAR(16)
+                            NOT NULL DEFAULT 'captured';
+                    ALTER TABLE {self._DATABASE_TABLE}
+                        ADD COLUMN IF NOT EXISTS recovery_note TEXT;
+                    ALTER TABLE {self._DATABASE_TABLE}
+                        ALTER COLUMN orders_sum DROP NOT NULL;
+                    ALTER TABLE {self._DATABASE_TABLE}
+                        ALTER COLUMN adv_spend DROP NOT NULL;
+                    ALTER TABLE {self._DATABASE_TABLE}
+                        ALTER COLUMN profit_by_cond_orders DROP NOT NULL;
+                    """
+                )
+            )
+            rows = connection.execute(
+                text(
+                    f"""
+                    SELECT snapshot_hour
+                    FROM {self._DATABASE_TABLE}
+                    WHERE snapshot_date = :snapshot_date
+                    """
+                ),
+                {"snapshot_date": snapshot_local.date()},
+            ).scalars()
+            existing_hours = {int(hour) for hour in rows}
+            if not existing_hours:
+                return
+
+            missing_hours = [
+                hour
+                for hour in range(min(existing_hours), snapshot_local.hour)
+                if hour not in existing_hours
+            ]
+            for missing_hour in missing_hours:
+                order_totals = connection.execute(
+                    text(
+                        """
+                        SELECT
+                            COALESCE(SUM(seller_price), 0) AS orders_sum,
+                            COUNT(*) AS orders_count
+                        FROM wb_order_feed
+                        WHERE status = 'created'
+                            AND created_at >= :day_start
+                            AND created_at < :hour_end
+                        """
+                    ),
+                    {
+                        "day_start": snapshot_local.replace(
+                            hour=0,
+                            minute=0,
+                            second=0,
+                            microsecond=0,
+                        ),
+                        "hour_end": snapshot_local.replace(
+                            hour=missing_hour + 1,
+                            minute=0,
+                            second=0,
+                            microsecond=0,
+                        ),
+                    },
+                ).mappings().one()
+                connection.execute(
+                    text(
+                        f"""
+                        INSERT INTO {self._DATABASE_TABLE} (
+                            snapshot_date, snapshot_hour, snapshot_at,
+                            orders_sum, orders_count, adv_spend, profit_by_cond_orders,
+                            snapshot_status, recovery_note
+                        )
+                        VALUES (
+                            :snapshot_date, :snapshot_hour, :snapshot_at,
+                            :orders_sum, :orders_count, NULL, NULL, 'unavailable',
+                            'Точные затраты за пропущенный час отсутствуют в историческом источнике'
+                        )
+                        ON CONFLICT (snapshot_date, snapshot_hour) DO NOTHING
+                        """
+                    ),
+                    {
+                        "snapshot_date": snapshot_local.date(),
+                        "snapshot_hour": missing_hour,
+                        "snapshot_at": snapshot_local,
+                        "orders_sum": float(order_totals["orders_sum"] or 0),
+                        "orders_count": int(order_totals["orders_count"] or 0),
+                    },
+                )
+        if missing_hours:
+            logger.warning(
+                "Найдены пропущенные часы почасового мониторинга: date=%s hours=%s; "
+                "срезы отмечены как unavailable без подстановки текущих затрат",
+                snapshot_local.date().isoformat(),
+                missing_hours,
+            )
 
     @staticmethod
     def _normalize_date(value: str) -> str:
