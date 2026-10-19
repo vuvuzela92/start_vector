@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 from dataclasses import dataclass
 
@@ -37,6 +38,9 @@ class CometaAdvSpendClient:
         остановленным автопилотам, потому что деньги могли быть потрачены до остановки.
         Отсутствующие в Cometa артикулы пропускаются, а не заполняются нулем.
         Коэффициент `spend_multiplier` сохраняет legacy-правило умножения расхода на 1.1.
+        Некорректный ответ или строка нужного артикула прерывают сбор расходов:
+        частичная сумма не должна закрепляться как первый успешный срез часа.
+        Корректный пустой список и нулевые расходы допустимы.
         """
         api_key = os.getenv("COMETA_API_KEY")
         if not api_key:
@@ -48,22 +52,23 @@ class CometaAdvSpendClient:
             payload = await self._request_json(session=session, headers=headers)
 
         if not isinstance(payload, list):
-            logger.error("Cometa вернула неожиданный тип ответа: payload_type=%s", type(payload).__name__)
-            return {}
+            raise ValueError("Cometa вернула неожиданный тип ответа вместо списка расходов.")
 
         article_filter = set(articles) if articles is not None else None
         spend_by_article: dict[int, float] = {}
         for row in payload:
             if not isinstance(row, dict):
-                continue
+                raise ValueError("Cometa вернула некорректную строку расходов.")
             try:
                 article_id = int(row["product_id"])
+                if article_filter is not None and article_id not in article_filter:
+                    continue
                 spent_today = float(row["budget_spent_today"])
-            except (KeyError, TypeError, ValueError):
-                continue
+            except (KeyError, TypeError, ValueError, OverflowError):
+                raise ValueError("Cometa вернула некорректный артикул или расход.") from None
+            if not math.isfinite(spent_today) or spent_today < 0:
+                raise ValueError("Cometa вернула недопустимое значение расхода.")
             if spent_today == 0:
-                continue
-            if article_filter is not None and article_id not in article_filter:
                 continue
             spend_by_article[article_id] = spend_by_article.get(article_id, 0.0) + spent_today
 
@@ -98,7 +103,6 @@ class CometaAdvSpendClient:
                     response.raise_for_status()
                     return payload
             except (
-                asyncio.TimeoutError,
                 TimeoutError,
                 aiohttp.ClientConnectionError,
                 aiohttp.ClientError,
@@ -106,8 +110,8 @@ class CometaAdvSpendClient:
             ) as error:
                 if attempt >= self.max_retries:
                     raise RuntimeError(
-                        f"Запрос Cometa завершился ошибкой после всех повторов: error={error}"
-                    ) from error
+                        f"Запрос Cometa завершился ошибкой после всех повторов: error_type={type(error).__name__}"
+                    ) from None
                 await self._sleep_for_retry(attempt=attempt, error=error)
         raise RuntimeError("Запрос Cometa исчерпал все попытки повтора.")
 
@@ -130,11 +134,11 @@ class CometaAdvSpendClient:
         )
         logger.warning(
             "Повторяем запрос Cometa после временной ошибки: attempt=%s/%s status=%s "
-            "error=%s sleep_seconds=%s",
+            "error_type=%s sleep_seconds=%s",
             attempt,
             self.max_retries,
             status,
-            repr(error) if error else None,
+            type(error).__name__ if error else None,
             sleep_seconds,
         )
         await asyncio.sleep(sleep_seconds)

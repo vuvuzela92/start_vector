@@ -7,8 +7,6 @@ autopilot_gs = {
 MONITORING_TABLE_ID = "1rBbd3NKoLNwVJ3yP3pchd-s5mW_LV5IFs0PitJjcNzE"
 MONITORING_TABLE_TITLE = "Мониторинг показателей"
 MONITORING_SHEET_TITLE = "Технический лист"
-# Снэпшот пишет только запуск из первой половины часа; второй запуск часа пропускается.
-MONITORING_SNAPSHOT_FIRST_HALF_END_MINUTE = 30
 
 # Фиксированная часть удержаний в формуле прибыли с заказов по ИУ.
 BASE_ORDER_COMMISSION_PERCENT = 8

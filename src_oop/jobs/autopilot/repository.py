@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+import math
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 
@@ -91,6 +93,10 @@ class AutopilotRepository:
         по `wb_order_feed` с одинаковыми датой, статусом и артикулом. Это
         исключает ситуацию, когда сумма относится к четырём заказам, а
         количество приходит из другого источника и равно пяти.
+        Повреждённые суммы не пропускаются молча: такой ответ не может стать
+        первым успешным срезом мониторинга. Корректный пустой результат допустим.
+        Границы суток заданы по Москве независимо от TimeZone сессии БД;
+        диапазон по created_at сохраняет возможность использования индекса.
         """
         if not articles:
             return {"orders_count": {}, "orders_sum_rub": {}, "orders_avg_price": {}}
@@ -100,8 +106,10 @@ class AutopilotRepository:
             for index, article_id in enumerate(sorted(set(articles)))
         }
         placeholders = ", ".join(f":{name}" for name in article_params)
-        params: dict[str, int | date] = {
-            "report_date": report_date,
+        day_start = datetime.combine(report_date, time.min, tzinfo=ZoneInfo("Europe/Moscow"))
+        params: dict[str, int | datetime] = {
+            "day_start": day_start,
+            "day_end": day_start + timedelta(days=1),
             **article_params,
         }
         dataframe = self.database_cls.read_sql_to_dataframe(
@@ -110,10 +118,11 @@ class AutopilotRepository:
                 SELECT
                     nm_id AS article_id,
                     COUNT(*) AS orders_count,
+                    COUNT(seller_price) AS priced_orders_count,
                     SUM(seller_price) AS orders_sum_rub,
                     AVG(seller_price) AS orders_avg_price
                 FROM wb_order_feed
-                WHERE created_at::date = :report_date
+                WHERE created_at >= :day_start AND created_at < :day_end
                     AND status = 'created'
                     AND nm_id IN ({placeholders})
                 GROUP BY nm_id
@@ -128,11 +137,18 @@ class AutopilotRepository:
         for row in dataframe.to_dict(orient="records"):
             try:
                 article_id = int(row["article_id"])
-                orders_count[article_id] = int(row["orders_count"] or 0)
-                result[article_id] = float(row["orders_sum_rub"])
-                orders_avg_price[article_id] = float(row["orders_avg_price"])
-            except (KeyError, TypeError, ValueError):
-                continue
+                count = int(row["orders_count"])
+                if int(row["priced_orders_count"]) != count:
+                    raise ValueError("Не у всех заказов есть цена.")
+                order_sum = float(row["orders_sum_rub"])
+                avg_price = float(row["orders_avg_price"])
+                if count <= 0 or not math.isfinite(order_sum) or not math.isfinite(avg_price):
+                    raise ValueError("Недопустимые значения заказов.")
+                orders_count[article_id] = count
+                result[article_id] = order_sum
+                orders_avg_price[article_id] = avg_price
+            except (KeyError, TypeError, ValueError, OverflowError):
+                raise ValueError("Данные wb_order_feed неполны, финансовый срез не сформирован.") from None
 
         logger.info(
             "Сумма и количество созданных заказов загружены из wb_order_feed: "

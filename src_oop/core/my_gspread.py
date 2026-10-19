@@ -1,8 +1,12 @@
 import logging
 import math
+import random
 import time
-from datetime import date, datetime
+from collections.abc import Callable
+from datetime import UTC, date, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
+from typing import Any, TypeVar
 
 import gspread
 import numpy as np
@@ -18,7 +22,10 @@ logger = logging.getLogger(__name__)
 GOOGLE_WRITE_RETRY_ATTEMPTS = 4
 GOOGLE_READ_RETRY_ATTEMPTS = 4
 GOOGLE_WRITE_RETRY_STATUS_CODES = (429, 500, 502, 503, 504)
-GOOGLE_CONNECT_RETRY_ATTEMPTS = 5
+GOOGLE_CONNECT_RETRY_ATTEMPTS = 4
+# Ограничиваем отдельный запрос, чтобы зависшее чтение не блокировало cron.
+GOOGLE_HTTP_TIMEOUT = (10, 30)
+GoogleResult = TypeVar("GoogleResult")
 
 
 def _json_safe_cell(value):
@@ -115,6 +122,7 @@ class GoogleTabs:
         """
 
         self.gc = gspread.service_account(filename=self.creds_file)
+        self.gc.set_timeout(GOOGLE_HTTP_TIMEOUT)
 
         for attempt in range(1, retries + 1):
             try:
@@ -134,7 +142,7 @@ class GoogleTabs:
                 if not self._is_retryable_google_error(error):
                     raise
                 if attempt == retries:
-                    logger.exception(
+                    logger.error(
                         "Подключение к Google Sheets исчерпало все попытки после API-ошибки | table=%s | sheet=%s | attempts=%s",
                         self.table_title,
                         self.sheet_title,
@@ -157,10 +165,10 @@ class GoogleTabs:
             except gspread.exceptions.WorksheetNotFound:
                 raise RuntimeError(
                     f"Ошибка: Лист '{self.sheet_title}' не найден в таблице '{self.table_title}'"
-                )
+                ) from None
             except requests.exceptions.RequestException as error:
                 if attempt == retries:
-                    logger.exception(
+                    logger.error(
                         "Подключение к Google Sheets исчерпало все попытки после сетевой ошибки | table=%s | sheet=%s | attempts=%s | error_type=%s",
                         self.table_title,
                         self.sheet_title,
@@ -182,7 +190,7 @@ class GoogleTabs:
                 time.sleep(max(wait_seconds, delay))
             except google_auth_exceptions.TransportError as error:
                 if attempt == retries:
-                    logger.exception(
+                    logger.error(
                         "Подключение к Google Sheets исчерпало все попытки после ошибки транспортного слоя Google Auth | table=%s | sheet=%s | attempts=%s | error_type=%s",
                         self.table_title,
                         self.sheet_title,
@@ -405,7 +413,7 @@ class GoogleTabs:
         raise RuntimeError("Не удалось прочитать данные из Google Sheets после повторных попыток.")
 
     @staticmethod
-    def _get_google_error_status_code(error: gspread.exceptions.APIError) -> int | None:
+    def _get_google_error_status_code(error: Exception) -> int | None:
         """Извлекает HTTP-статус ошибки Google Sheets для логов и backoff.
 
         Бизнес-сценарий:
@@ -433,24 +441,77 @@ class GoogleTabs:
         error_text = str(error)
         return any(f"[{code}]" in error_text for code in GOOGLE_WRITE_RETRY_STATUS_CODES)
 
+    def execute_with_retry(
+        self,
+        operation_name: str,
+        operation: Callable[..., GoogleResult],
+        *args: Any,
+        **kwargs: Any,
+    ) -> GoogleResult:
+        """Повторяет чтение или идемпотентную операцию для восстановления выгрузки.
+
+        Четыре попытки защищают UNIT и мониторинг от квот и сетевых сбоев.
+        Для составной записи вызывающая функция должна заново сверять ключи
+        перед каждой попыткой. Секреты из исключений в журнал не попадают.
+        """
+        for attempt in range(1, GOOGLE_READ_RETRY_ATTEMPTS + 1):
+            try:
+                return operation(*args, **kwargs)
+            except (
+                gspread.exceptions.APIError,
+                requests.exceptions.RequestException,
+                google_auth_exceptions.TransportError,
+            ) as error:
+                status = self._get_google_error_status_code(error)
+                retryable = not isinstance(error, gspread.exceptions.APIError) or (
+                    self._is_retryable_google_error(error)
+                )
+                if not retryable or attempt == GOOGLE_READ_RETRY_ATTEMPTS:
+                    logger.error(
+                        "Операция Google Sheets не выполнена, ошибка передана вызывающему сценарию: "
+                        "operation=%s attempts=%s status=%s error_type=%s",
+                        operation_name, attempt, status, type(error).__name__,
+                    )
+                    raise
+                delay = self._get_google_retry_delay_seconds(error, attempt)
+                logger.warning(
+                    "Повторяем операцию Google Sheets: operation=%s attempt=%s "
+                    "status=%s error_type=%s wait_seconds=%.1f",
+                    operation_name, attempt, status, type(error).__name__, delay,
+                )
+                time.sleep(delay)
+        raise RuntimeError("Операция Google Sheets исчерпала попытки.")
+
     def _get_google_retry_delay_seconds(
         self,
-        error: gspread.exceptions.APIError,
+        error: Exception,
         attempt: int,
-    ) -> int:
+    ) -> float:
         """Считает паузу перед повторной записью после API-ошибки Google Sheets.
 
         Бизнес-сценарий:
-        на `429` нужен более длинный нарастающий backoff, иначе следующая
-        попытка почти сразу снова попадёт в лимит. Для временных `5xx` хватит
-        более короткой паузы, чтобы не тормозить стандартные выгрузки.
+        При `429` ждём 60/120/180 секунд с разбросом, чтобы параллельные задачи
+        не повторяли запросы одновременно. Retry-After задаёт нижнюю границу
+        ожидания. Для `5xx` и сетевых сбоев сохраняется короткая пауза.
         """
 
         status_code = self._get_google_error_status_code(error)
         if status_code == 429:
-            retry_delays = (15, 30, 45, 60)
-            return retry_delays[min(attempt - 1, len(retry_delays) - 1)]
-        return self._get_google_network_retry_delay_seconds(attempt=attempt)
+            delay = 60 * min(attempt, 3) + random.uniform(0, 5)
+        else:
+            delay = self._get_google_network_retry_delay_seconds(attempt=attempt)
+        response = getattr(error, "response", None)
+        retry_after = getattr(response, "headers", {}).get("Retry-After")
+        if retry_after:
+            try:
+                delay = max(delay, float(retry_after))
+            except ValueError:
+                try:
+                    retry_date = parsedate_to_datetime(retry_after)
+                    delay = max(delay, (retry_date - datetime.now(UTC)).total_seconds())
+                except (TypeError, ValueError, OverflowError):
+                    pass
+        return delay
 
     @staticmethod
     def _get_google_network_retry_delay_seconds(attempt: int) -> int:

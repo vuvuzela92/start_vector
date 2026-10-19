@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import argparse
+import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
+from sqlalchemy.engine import Connection, Engine
 
 from src_oop.core.database import Database
 from src_oop.core.my_gspread import GoogleTabs
@@ -17,31 +24,39 @@ from src_oop.jobs.autopilot.config import (
 logger = logging.getLogger(__name__)
 
 
-class MonitoringSnapshotWriter:
-    """Записывает почасовые итоги текущего дня в технический лист мониторинга.
+@dataclass(slots=True)
+class MonitoringPublishResult:
+    """Отделяет доставку архива от успеха основного обновления ПУ."""
 
-    Класс получает уже рассчитанные суммы из hourly-сценария автопилота и не
-    перечитывает лист «Автопилот». Поэтому технический лист использует тот же
-    числовой payload, который был отправлен в текущий дневной блок ПУ.
-    """
+    synced: int = 0
+    conflicts: int = 0
+    failed: bool = False
+    locked: bool = False
+
+
+class MonitoringSnapshotWriter:
+    """Архивирует первый успешный срез часа и доставляет архив в Google Sheets."""
 
     _MOSCOW_TIMEZONE = ZoneInfo("Europe/Moscow")
     _DATABASE_TABLE = "autopilot_hourly_snapshots"
+    # Одна блокировка для всех экземпляров публикации в технический лист.
+    _PUBLISH_LOCK = 71190426001
+    _BATCH_SIZE = 100
 
-    def __init__(self) -> None:
-        """Открывает технический лист, обслуживающий почасовой мониторинг.
+    def __init__(self, engine: Engine | None = None) -> None:
+        """Готовит архив без обращения к Sheets, чтобы квота не мешала сохранению."""
+        self.engine = engine if engine is not None else Database.get_engine()
+        self.connector: GoogleTabs | None = None
 
-        Подключение выполняется по постоянному spreadsheet ID, а не только по
-        названию. Это защищает hourly-запуск от ручного переименования таблицы.
-        В `self.worksheet` сохраняется объект конкретной вкладки, чтобы дальше
-        читать и изменять только «Технический лист».
-        """
-        self.connector = GoogleTabs(
-            table_title=MONITORING_TABLE_TITLE,
-            sheet_title=MONITORING_SHEET_TITLE,
-            spreadsheet_id=MONITORING_TABLE_ID,
-        )
-        self.worksheet = self.connector.sheet_title
+    def _connect_sheet(self) -> GoogleTabs:
+        """Открывает пользовательскую витрину только при публикации или сверке."""
+        if self.connector is None:
+            self.connector = GoogleTabs(
+                table_title=MONITORING_TABLE_TITLE,
+                sheet_title=MONITORING_SHEET_TITLE,
+                spreadsheet_id=MONITORING_TABLE_ID,
+            )
+        return self.connector
 
     def upsert_snapshot(
         self,
@@ -50,344 +65,424 @@ class MonitoringSnapshotWriter:
         adv_spend: float,
         profit_by_cond_orders: float,
         snapshot_at: datetime | None = None,
-    ) -> None:
-        """Создаёт или обновляет снэпшот трёх итогов за текущий час.
+    ) -> bool:
+        """Сохраняет первый достоверный срез часа независимо от доступности Sheets.
 
-        Бизнес-правило: повторный запуск hourly-задачи в одном часе не должен
-        добавлять дубли, поэтому ключом строки служит пара «дата + час».
-        Значения берутся из тех же агрегатов, которые hourly-сценарий пишет
-        в текущий дневной блок листа «Автопилот».
-
-        Сначала читаются только строки технического листа и ищется существующая
-        пара «дата + час». Если такая строка найдена, она обновляется. Если нет,
-        новая строка добавляется в конец таблицы. Запись выполняется через общий
-        retry-механизм Google Sheets, поэтому временный 429 или 5xx не создаёт
-        сразу ложный пропуск снэпшота.
+        Конфликт по дате и часу разрешает замену только unavailable. Повторный
+        успешный запуск не меняет значения, время и статус доставки. Нули
+        допустимы, нечисловые значения и бесконечности запрещены.
         """
         snapshot_at = snapshot_at or datetime.now(self._MOSCOW_TIMEZONE)
-        # В таблицу передаются отдельные дата и час, чтобы по ним можно было
-        # безопасно найти строку при повторном запуске того же часа.
-        snapshot_date = snapshot_at.strftime("%Y-%m-%d")
-        snapshot_time = snapshot_at.strftime("%H:00")
-        # Порядок значений соответствует заголовкам A:E технического листа:
-        # дата, время, сумма заказов, сумма затрат, прибыль с заказов по ИУ.
-        row_values = [
-            snapshot_date,
-            snapshot_time,
-            orders_sum,
-            adv_spend,
-            profit_by_cond_orders,
-        ]
-
-        self._mark_missing_hours(snapshot_at=snapshot_at)
-        # Сначала сохраняем срез в PostgreSQL: ошибка квоты Google Sheets
-        # не должна приводить к потере подтверждённых hourly-данных.
-        self._upsert_database_snapshot(
-            snapshot_at=snapshot_at,
-            orders_sum=orders_sum,
-            orders_count=orders_count,
-            adv_spend=adv_spend,
-            profit_by_cond_orders=profit_by_cond_orders,
-        )
-
-        # Читаем только целевую таблицу мониторинга. Лист «Автопилот» повторно
-        # не запрашивается: это снижает нагрузку и сохраняет единый payload.
-        existing_rows = self.connector.get_all_values_with_retry()
-        target_row: int | None = None
-        # Первая строка содержит заголовки, поэтому поиск начинается со строки 2.
-        for row_number, row in enumerate(existing_rows[1:], start=2):
-            if len(row) < 2:
-                continue
-            if (
-                self._normalize_date(row[0]) == snapshot_date
-                and self._normalize_time(row[1]) == snapshot_time
-            ):
-                target_row = row_number
-                break
-
-        if target_row is None:
-            # Так как ключ «дата + час» ещё не найден, добавляем новый снэпшот
-            # после существующих строк, сохраняя историю предыдущих запусков.
-            self.connector._execute_google_write_with_retry(
-                "добавление почасового снэпшота мониторинга",
-                self.worksheet.append_row,
-                row_values,
-                value_input_option="USER_ENTERED",
-                insert_data_option="INSERT_ROWS",
-            )
-            logger.info(
-                "Почасовой снэпшот добавлен в технический лист мониторинга: date=%s time=%s",
-                snapshot_date,
-                snapshot_time,
-            )
-            return
-
-        # Повторный запуск в том же часу не должен создавать вторую строку:
-        # обновляем найденную запись актуальными суммами.
-        self.connector._execute_google_write_with_retry(
-            "обновление почасового снэпшота мониторинга",
-            self.worksheet.update,
-            f"A{target_row}:E{target_row}",
-            [row_values],
-            value_input_option="USER_ENTERED",
-        )
-        logger.info(
-            "Почасовой снэпшот обновлён в техническом листе мониторинга: date=%s time=%s row=%s",
-            snapshot_date,
-            snapshot_time,
-            target_row,
-        )
-
-    def _upsert_database_snapshot(
-        self,
-        snapshot_at: datetime,
-        orders_sum: float,
-        orders_count: int,
-        adv_spend: float,
-        profit_by_cond_orders: float,
-    ) -> None:
-        """Сохраняет почасовой срез в PostgreSQL с защитой от дублей.
-
-        Бизнес-правило: PostgreSQL является резервным архивом снэпшотов, а
-        Google Sheets — пользовательской витриной. Ключ «дата + час» позволяет
-        повторному запуску обновить срез после временной ошибки Sheets.
-        """
-        snapshot_local = snapshot_at.astimezone(self._MOSCOW_TIMEZONE)
-        with Database.get_engine().begin() as connection:
-            connection.execute(
-                text(
-                    f"""
-                    CREATE TABLE IF NOT EXISTS {self._DATABASE_TABLE} (
-                        snapshot_date DATE NOT NULL,
-                        snapshot_hour SMALLINT NOT NULL,
-                        snapshot_at TIMESTAMPTZ NOT NULL,
-                        orders_sum NUMERIC(18, 2) NOT NULL,
-                        orders_count BIGINT NOT NULL DEFAULT 0,
-                        adv_spend NUMERIC(18, 2),
-                        profit_by_cond_orders NUMERIC(18, 2),
-                        snapshot_status VARCHAR(16) NOT NULL DEFAULT 'captured',
-                        recovery_note TEXT,
-                        saved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        CONSTRAINT uq_{self._DATABASE_TABLE}_date_hour
-                            UNIQUE (snapshot_date, snapshot_hour),
-                        CONSTRAINT ck_{self._DATABASE_TABLE}_hour
-                            CHECK (snapshot_hour BETWEEN 0 AND 23)
-                    )
-                    """
+        if snapshot_at.tzinfo is None:
+            raise ValueError("Для среза мониторинга требуется время с часовым поясом.")
+        snapshot_at = snapshot_at.astimezone(self._MOSCOW_TIMEZONE)
+        if orders_count < 0 or int(orders_count) != orders_count:
+            raise ValueError("Количество заказов должно быть целым неотрицательным.")
+        params = {
+            "snapshot_date": snapshot_at.date(),
+            "snapshot_hour": snapshot_at.hour,
+            "snapshot_at": snapshot_at,
+            "orders_sum": self._money(orders_sum),
+            "orders_count": orders_count,
+            "adv_spend": self._money(adv_spend),
+            "profit_by_cond_orders": self._money(profit_by_cond_orders),
+        }
+        with self.engine.begin() as connection:
+            saved = (
+                connection.execute(
+                    text(f"""
+                INSERT INTO {self._DATABASE_TABLE} (
+                    snapshot_date, snapshot_hour, snapshot_at, orders_sum,
+                    orders_count, adv_spend, profit_by_cond_orders,
+                    snapshot_status, recovery_note, delivery_status
+                ) VALUES (
+                    :snapshot_date, :snapshot_hour, :snapshot_at, :orders_sum,
+                    :orders_count, :adv_spend, :profit_by_cond_orders,
+                    'captured', NULL, 'pending'
                 )
-            )
-            connection.execute(
-                text(
-                    f"""
-                    ALTER TABLE {self._DATABASE_TABLE}
-                        ADD COLUMN IF NOT EXISTS snapshot_status VARCHAR(16)
-                            NOT NULL DEFAULT 'captured';
-                    ALTER TABLE {self._DATABASE_TABLE}
-                        ADD COLUMN IF NOT EXISTS recovery_note TEXT;
-                    ALTER TABLE {self._DATABASE_TABLE}
-                        ADD COLUMN IF NOT EXISTS orders_count BIGINT NOT NULL DEFAULT 0;
-                    ALTER TABLE {self._DATABASE_TABLE}
-                        ALTER COLUMN orders_sum DROP NOT NULL;
-                    ALTER TABLE {self._DATABASE_TABLE}
-                        ALTER COLUMN adv_spend DROP NOT NULL;
-                    ALTER TABLE {self._DATABASE_TABLE}
-                        ALTER COLUMN profit_by_cond_orders DROP NOT NULL;
-                    """
-                )
-            )
-            connection.execute(
-                text(
-                    f"""
-                    INSERT INTO {self._DATABASE_TABLE} (
-                        snapshot_date, snapshot_hour, snapshot_at,
-                        orders_sum, orders_count, adv_spend, profit_by_cond_orders,
-                        snapshot_status, recovery_note
-                    )
-                    VALUES (
-                        :snapshot_date, :snapshot_hour, :snapshot_at,
-                        :orders_sum, :orders_count, :adv_spend, :profit_by_cond_orders,
-                        'captured', NULL
-                    )
-                    ON CONFLICT (snapshot_date, snapshot_hour)
-                    DO UPDATE SET
-                        snapshot_at = EXCLUDED.snapshot_at,
-                        orders_sum = EXCLUDED.orders_sum,
-                        orders_count = EXCLUDED.orders_count,
-                        adv_spend = EXCLUDED.adv_spend,
-                        profit_by_cond_orders = EXCLUDED.profit_by_cond_orders,
-                        snapshot_status = 'captured',
-                        recovery_note = NULL,
-                        saved_at = NOW()
-                    """
-                ),
-                {
-                    "snapshot_date": snapshot_local.date(),
-                    "snapshot_hour": snapshot_local.hour,
-                    "snapshot_at": snapshot_at,
-                    "orders_sum": orders_sum,
-                    "orders_count": orders_count,
-                    "adv_spend": adv_spend,
-                    "profit_by_cond_orders": profit_by_cond_orders,
-                },
+                ON CONFLICT (snapshot_date, snapshot_hour) DO UPDATE SET
+                    snapshot_at = EXCLUDED.snapshot_at,
+                    orders_sum = EXCLUDED.orders_sum,
+                    orders_count = EXCLUDED.orders_count,
+                    adv_spend = EXCLUDED.adv_spend,
+                    profit_by_cond_orders = EXCLUDED.profit_by_cond_orders,
+                    snapshot_status = 'captured', recovery_note = NULL,
+                    delivery_status = 'pending', synced_at = NULL,
+                    last_delivery_error = NULL, saved_at = NOW()
+                WHERE {self._DATABASE_TABLE}.snapshot_status = 'unavailable'
+                RETURNING snapshot_hour
+            """),
+                    params,
+                ).scalar_one_or_none()
+                is not None
             )
         logger.info(
-            "Почасовой снэпшот сохранен в PostgreSQL: date=%s hour=%s",
-            snapshot_local.date().isoformat(),
-            snapshot_local.hour,
+            "Мониторинг: %s | date=%s hour=%s snapshot_at=%s",
+            "срез сохранён, ожидает публикации" if saved else "первый успешный срез уже сохранён",
+            snapshot_at.date(),
+            snapshot_at.hour,
+            snapshot_at.isoformat(),
         )
+        # Ошибка разметки пропусков не отменяет сохранение достоверного среза.
+        try:
+            self._mark_missing_hours(snapshot_at)
+        except Exception as error:
+            logger.warning(
+                "Не удалось отметить пропуски мониторинга; срез сохранён, сценарий продолжается: "
+                "error_type=%s",
+                type(error).__name__,
+            )
+        return saved
+
+    @staticmethod
+    def _money(value: object) -> Decimal:
+        """Приводит итог к копейкам и запрещает ложные срезы с NaN или пропусками."""
+        try:
+            result = Decimal(str(value))
+            if not result.is_finite():
+                raise ValueError("Итог мониторинга должен быть конечным числом.")
+            return result.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        except InvalidOperation:
+            raise ValueError("Итог мониторинга не является допустимой денежной суммой.") from None
 
     def _mark_missing_hours(self, snapshot_at: datetime) -> None:
-        """Фиксирует пропущенные часы до текущего снэпшота.
+        """Помечает завершённые часы без срезов, не выдумывая исторические суммы.
 
-        Бизнес-правило: пропуск не заполняется текущими накопительными
-        расходами Cometa. Если исторические затраты недоступны, час получает
-        статус unavailable и пояснение для последующего восстановления.
+        Проверяются текущие сутки и последние предыдущие сутки архива, включая
+        хвост после последнего среза. Существующие unavailable не меняются.
         """
-        snapshot_local = snapshot_at.astimezone(self._MOSCOW_TIMEZONE)
-        with Database.get_engine().begin() as connection:
+        with self.engine.begin() as connection:
             connection.execute(
-                text(
-                    f"""
-                    CREATE TABLE IF NOT EXISTS {self._DATABASE_TABLE} (
-                        snapshot_date DATE NOT NULL,
-                        snapshot_hour SMALLINT NOT NULL,
-                        snapshot_at TIMESTAMPTZ NOT NULL,
-                        orders_sum NUMERIC(18, 2) NOT NULL,
-                        orders_count BIGINT NOT NULL DEFAULT 0,
-                        adv_spend NUMERIC(18, 2),
-                        profit_by_cond_orders NUMERIC(18, 2),
-                        snapshot_status VARCHAR(16) NOT NULL DEFAULT 'captured',
-                        recovery_note TEXT,
-                        saved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        CONSTRAINT uq_{self._DATABASE_TABLE}_date_hour
-                            UNIQUE (snapshot_date, snapshot_hour)
-                    )
-                    """
+                text(f"""
+                WITH days AS (
+                    SELECT CAST(:snapshot_date AS DATE) AS day, :snapshot_hour - 1 AS last_hour
+                    UNION ALL
+                    SELECT MAX(snapshot_date), 23 FROM {self._DATABASE_TABLE}
+                    WHERE snapshot_date < :snapshot_date
                 )
-            )
-            connection.execute(
-                text(
-                    f"""
-                    ALTER TABLE {self._DATABASE_TABLE}
-                        ADD COLUMN IF NOT EXISTS orders_count BIGINT NOT NULL DEFAULT 0;
-                    ALTER TABLE {self._DATABASE_TABLE}
-                        ADD COLUMN IF NOT EXISTS snapshot_status VARCHAR(16)
-                            NOT NULL DEFAULT 'captured';
-                    ALTER TABLE {self._DATABASE_TABLE}
-                        ADD COLUMN IF NOT EXISTS recovery_note TEXT;
-                    ALTER TABLE {self._DATABASE_TABLE}
-                        ALTER COLUMN orders_sum DROP NOT NULL;
-                    ALTER TABLE {self._DATABASE_TABLE}
-                        ALTER COLUMN adv_spend DROP NOT NULL;
-                    ALTER TABLE {self._DATABASE_TABLE}
-                        ALTER COLUMN profit_by_cond_orders DROP NOT NULL;
-                    """
+                INSERT INTO {self._DATABASE_TABLE} (
+                    snapshot_date, snapshot_hour, snapshot_at, orders_sum,
+                    orders_count, adv_spend, profit_by_cond_orders,
+                    snapshot_status, recovery_note, delivery_status
                 )
+                SELECT day, hour, :snapshot_at, NULL, NULL, NULL, NULL,
+                    'unavailable', 'Достоверный почасовой срез не был сохранён', 'pending'
+                FROM days CROSS JOIN LATERAL generate_series(0, last_hour) AS hour
+                WHERE day IS NOT NULL
+                ON CONFLICT (snapshot_date, snapshot_hour) DO NOTHING
+            """),
+                {
+                    "snapshot_date": snapshot_at.date(),
+                    "snapshot_hour": snapshot_at.hour,
+                    "snapshot_at": snapshot_at,
+                },
             )
-            rows = connection.execute(
-                text(
-                    f"""
-                    SELECT snapshot_hour
-                    FROM {self._DATABASE_TABLE}
-                    WHERE snapshot_date = :snapshot_date
-                    """
-                ),
-                {"snapshot_date": snapshot_local.date()},
-            ).scalars()
-            existing_hours = {int(hour) for hour in rows}
-            if not existing_hours:
-                return
 
-            missing_hours = [
-                hour
-                for hour in range(min(existing_hours), snapshot_local.hour)
-                if hour not in existing_hours
-            ]
-            for missing_hour in missing_hours:
-                order_totals = connection.execute(
-                    text(
-                        """
-                        SELECT
-                            COALESCE(SUM(seller_price), 0) AS orders_sum,
-                            COUNT(*) AS orders_count
-                        FROM wb_order_feed
-                        WHERE status = 'created'
-                            AND created_at >= :day_start
-                            AND created_at < :hour_end
-                        """
-                    ),
-                    {
-                        "day_start": snapshot_local.replace(
-                            hour=0,
-                            minute=0,
-                            second=0,
-                            microsecond=0,
-                        ),
-                        "hour_end": snapshot_local.replace(
-                            hour=missing_hour + 1,
-                            minute=0,
-                            second=0,
-                            microsecond=0,
-                        ),
-                    },
-                ).mappings().one()
-                connection.execute(
-                    text(
-                        f"""
-                        INSERT INTO {self._DATABASE_TABLE} (
-                            snapshot_date, snapshot_hour, snapshot_at,
-                            orders_sum, orders_count, adv_spend, profit_by_cond_orders,
-                            snapshot_status, recovery_note
+    def publish_pending(self) -> MonitoringPublishResult:
+        """Доставляет captured всех дат порциями по 100 под общей блокировкой.
+
+        Транзакционная advisory-блокировка освобождается также при обрыве БД.
+        После сбоя между Sheets и commit повторная сверка находит ту же строку.
+        Ошибки доставки не отменяют ранее сохранённые срезы и основной сценарий.
+        """
+        result = MonitoringPublishResult()
+        try:
+            with self.engine.begin() as connection:
+                locked = connection.execute(
+                    text("SELECT pg_try_advisory_xact_lock(:key)"),
+                    {"key": self._PUBLISH_LOCK},
+                ).scalar_one()
+                if not locked:
+                    result.locked = True
+                    logger.info(
+                        "Мониторинг: публикацию выполняет другой запуск, архив ожидает доставки."
+                    )
+                    return result
+                cursor_date, cursor_hour = "0001-01-01", -1
+                while True:
+                    rows = [
+                        dict(row)
+                        for row in connection.execute(
+                            text(f"""
+                        SELECT snapshot_date, snapshot_hour, orders_sum,
+                            adv_spend, profit_by_cond_orders
+                        FROM {self._DATABASE_TABLE}
+                        WHERE snapshot_status = 'captured' AND delivery_status = 'pending'
+                            AND (snapshot_date, snapshot_hour) > (CAST(:day AS DATE), :hour)
+                        ORDER BY snapshot_date, snapshot_hour
+                        LIMIT :batch_size
+                    """),
+                            {
+                                "day": cursor_date,
+                                "hour": cursor_hour,
+                                "batch_size": self._BATCH_SIZE,
+                            },
+                        ).mappings()
+                    ]
+                    if not rows:
+                        break
+                    cursor_date = rows[-1]["snapshot_date"]
+                    cursor_hour = rows[-1]["snapshot_hour"]
+                    try:
+                        statuses = self._connect_sheet().execute_with_retry(
+                            "публикация архива мониторинга со сверкой ключей",
+                            self._publish_batch,
+                            rows,
                         )
-                        VALUES (
-                            :snapshot_date, :snapshot_hour, :snapshot_at,
-                            :orders_sum, :orders_count, NULL, NULL, 'unavailable',
-                            'Точные затраты за пропущенный час отсутствуют в историческом источнике'
+                    except Exception as error:
+                        code = type(error).__name__[:64]
+                        self._record_delivery(connection, rows, [code] * len(rows))
+                        result.failed = True
+                        logger.warning(
+                            "Мониторинг ожидает публикации после ошибки; основной сценарий продолжается: "
+                            "error_type=%s rows=%s",
+                            code,
+                            len(rows),
                         )
-                        ON CONFLICT (snapshot_date, snapshot_hour) DO NOTHING
-                        """
-                    ),
-                    {
-                        "snapshot_date": snapshot_local.date(),
-                        "snapshot_hour": missing_hour,
-                        "snapshot_at": snapshot_local,
-                        "orders_sum": float(order_totals["orders_sum"] or 0),
-                        "orders_count": int(order_totals["orders_count"] or 0),
-                    },
-                )
-        if missing_hours:
-            logger.warning(
-                "Найдены пропущенные часы почасового мониторинга: date=%s hours=%s; "
-                "срезы отмечены как unavailable без подстановки текущих затрат",
-                snapshot_local.date().isoformat(),
-                missing_hours,
+                        break
+                    self._record_delivery(connection, rows, statuses)
+                    result.synced += statuses.count(None)
+                    result.conflicts += len(statuses) - statuses.count(None)
+        except Exception as error:
+            result.synced = 0
+            result.failed = True
+            logger.error(
+                "Мониторинг: доставка не подтверждена в БД, повторим в следующем запуске; "
+                "основной сценарий продолжается: error_type=%s",
+                type(error).__name__,
             )
+        logger.info(
+            "Мониторинг: итог публикации | synced=%s conflicts=%s failed=%s",
+            result.synced,
+            result.conflicts,
+            result.failed,
+        )
+        return result
+
+    def _record_delivery(
+        self,
+        connection: Connection,
+        rows: list[dict[str, Any]],
+        statuses: list[str | None],
+    ) -> None:
+        """Подтверждает только записанные строки; конфликт или ошибка оставляют pending."""
+        connection.execute(
+            text(f"""
+            UPDATE {self._DATABASE_TABLE}
+            SET delivery_status = CASE WHEN :error IS NULL THEN 'synced' ELSE 'pending' END,
+                synced_at = CASE WHEN :error IS NULL THEN NOW() ELSE NULL END,
+                last_delivery_error = :error
+            WHERE snapshot_date = :day AND snapshot_hour = :hour
+                AND snapshot_status = 'captured'
+        """),
+            [
+                {"day": row["snapshot_date"], "hour": row["snapshot_hour"], "error": error}
+                for row, error in zip(rows, statuses, strict=True)
+            ],
+        )
+
+    def _inspect_batch(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Сверяет ключи и суммы, сохраняя ручные значения и обнаруживая дубли.
+
+        Читаем A:B и только C:E проверяемых строк. Пустую строку с существующим
+        ключом можно заполнить; частично заполненные или отличающиеся суммы
+        требуют разбора. Проверяются также места для новых строк.
+        """
+        sheet = self._connect_sheet().sheet_title
+        keys = sheet.get("A:B", value_render_option="FORMATTED_VALUE")
+        by_key: dict[tuple[str, str], list[int]] = {}
+        for number, row in enumerate(keys[1:], start=2):
+            if len(row) >= 2:
+                key = (self._normalize_date(str(row[0])), self._normalize_time(str(row[1])))
+                by_key.setdefault(key, []).append(number)
+        next_row = max(len(keys) + 1, 2)
+        plans: list[dict[str, Any]] = []
+        for row in rows:
+            key = (str(row["snapshot_date"]), f"{row['snapshot_hour']:02d}:00")
+            matches = by_key.get(key, [])
+            target = matches[0] if matches else next_row
+            if not matches:
+                next_row += 1
+            plans.append(
+                {
+                    "key": key,
+                    "row": target,
+                    "values": [
+                        *key,
+                        *[
+                            float(self._money(row[name]))
+                            for name in (
+                                "orders_sum",
+                                "adv_spend",
+                                "profit_by_cond_orders",
+                            )
+                        ],
+                    ],
+                    "state": "duplicate" if len(matches) > 1 else "missing",
+                    "existing_key": bool(matches),
+                    "actual": [],
+                }
+            )
+        readable = [plan for plan in plans if plan["row"] <= sheet.row_count]
+        existing = (
+            sheet.batch_get(
+                [f"C{plan['row']}:E{plan['row']}" for plan in readable],
+                value_render_option="UNFORMATTED_VALUE",
+            )
+            if readable
+            else []
+        )
+        for plan, values in zip(readable, existing, strict=True):
+            actual = values[0] if values else []
+            plan["actual"] = actual
+            if plan["state"] == "duplicate":
+                continue
+            if not any(value not in (None, "") for value in actual):
+                continue
+            try:
+                equal = len(actual) == 3 and all(
+                    self._money(value) == self._money(expected)
+                    for value, expected in zip(actual, plan["values"][2:], strict=True)
+                )
+            except (ValueError, TypeError):
+                equal = False
+            plan["state"] = "equal" if equal and plan["existing_key"] else "conflict"
+        return plans
+
+    def _publish_batch(self, rows: list[dict[str, Any]]) -> list[str | None]:
+        """Сверяет лист заново и пишет фиксированные диапазоны без append.
+
+        Если предыдущая попытка записала строку, но потеряла ответ, новая
+        попытка узнает ключ и подтвердит её. Конфликты не перезаписываются.
+        """
+        plans = self._inspect_batch(rows)
+        sheet = self._connect_sheet().sheet_title
+        updates = [
+            {"range": f"A{plan['row']}:E{plan['row']}", "values": [plan["values"]]}
+            for plan in plans
+            if plan["state"] == "missing"
+        ]
+        if updates:
+            required_rows = max(plan["row"] for plan in plans if plan["state"] == "missing")
+            if required_rows > sheet.row_count:
+                sheet.resize(rows=required_rows)
+            sheet.batch_update(updates, value_input_option="USER_ENTERED")
+        statuses: list[str | None] = []
+        for plan in plans:
+            error = f"sheet_{plan['state']}" if plan["state"] in ("conflict", "duplicate") else None
+            statuses.append(error)
+            if error:
+                logger.warning(
+                    "Мониторинг: требуется разбор строки, значения сохранены без изменений; "
+                    "остальные строки публикуются | date=%s time=%s row=%s code=%s",
+                    *plan["key"],
+                    plan["row"],
+                    error,
+                )
+        return statuses
+
+    def reconcile(self) -> list[dict[str, Any]]:
+        """Возвращает отчёт сверки архива и Sheets без изменения данных.
+
+        В отчёт входят unavailable, отсутствующие строки, различия и дубли.
+        Отчёт нужен перед внедрением; фактическую доставку выполняет publish_pending.
+        """
+        report: list[dict[str, Any]] = []
+        with self.engine.connect() as connection:
+            with connection.begin():
+                connection.execute(text("SET TRANSACTION READ ONLY"))
+                rows = [
+                    dict(row)
+                    for row in connection.execute(
+                        text(f"""
+                    SELECT snapshot_date, snapshot_hour, snapshot_status,
+                        orders_sum, adv_spend, profit_by_cond_orders
+                    FROM {self._DATABASE_TABLE}
+                    ORDER BY snapshot_date, snapshot_hour
+                """)
+                    ).mappings()
+                ]
+        captured = [row for row in rows if row["snapshot_status"] == "captured"]
+        for start in range(0, len(captured), self._BATCH_SIZE):
+            plans = self._connect_sheet().execute_with_retry(
+                "сверка архива мониторинга",
+                self._inspect_batch,
+                captured[start : start + self._BATCH_SIZE],
+            )
+            report.extend(plan for plan in plans if plan["state"] != "equal")
+        report.extend(
+            {
+                "key": [str(row["snapshot_date"]), f"{row['snapshot_hour']:02d}:00"],
+                "state": "unavailable",
+            }
+            for row in rows
+            if row["snapshot_status"] != "captured"
+        )
+        return report
+
+    def migrate(self) -> None:
+        """Явно применяет повторяемую миграцию перед внедрением мониторинга.
+
+        Hourly не выполняет DDL. Старые срезы получают pending для сверки,
+        повтор миграции не сбрасывает уже доставленные строки.
+        """
+        sql = (
+            Path(__file__)
+            .with_name("monitoring_snapshot_migration.sql")
+            .read_text(encoding="utf-8")
+        )
+        with self.engine.begin() as connection:
+            connection.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"), {"key": self._PUBLISH_LOCK}
+            )
+            connection.execute(text(sql))
+        logger.info("Миграция архива мониторинга применена.")
 
     @staticmethod
     def _normalize_date(value: str) -> str:
-        """Приводит дату из Google Sheets к ISO-формату для поиска строки.
-
-        Google Sheets может вернуть дату как `02.10.2026`, а добавляемая
-        программой строка использует ISO-представление `2026-10-02`. Обе формы
-        приводятся к одному ключу, чтобы повторный запуск находил существующую
-        строку независимо от отображаемого формата ячейки.
-        """
-        for date_format in ("%Y-%m-%d", "%d.%m.%Y"):
+        """Сводит отображаемую дату Sheets к ISO-ключу без дублей при смене формата."""
+        for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
             try:
-                return datetime.strptime(value.strip(), date_format).strftime("%Y-%m-%d")
+                return datetime.strptime(value.strip(), fmt).strftime("%Y-%m-%d")
             except ValueError:
                 continue
         return value.strip()
 
     @staticmethod
     def _normalize_time(value: str) -> str:
-        """Приводит время листа к ключу часа `HH:00`.
+        """Узнаёт час в форматах HH:MM и HH:MM:SS для повторной доставки."""
+        for fmt in ("%H:%M", "%H:%M:%S"):
+            try:
+                return datetime.strptime(value.strip(), fmt).strftime("%H:00")
+            except ValueError:
+                continue
+        return value.strip()
 
-        В техническом листе время хранится с точностью до часа. Нормализация
-        нужна для сравнения значения из Google Sheets с ключом текущего запуска
-        и предотвращает создание дубля при повторной попытке записи.
-        """
-        try:
-            return datetime.strptime(value.strip(), "%H:%M").strftime("%H:00")
-        except ValueError:
-            return value.strip()
+
+def main() -> None:
+    """Запускает явную миграцию, сверку или доставку архива при внедрении.
+
+    Команда reconcile только читает БД и Sheets и выдаёт JSON-отчёт. Ошибки
+    выводятся без секретов; неуспешная доставка возвращает ненулевой код.
+    """
+    parser = argparse.ArgumentParser(description="Обслуживание архива почасового мониторинга")
+    parser.add_argument("action", choices=("migrate", "reconcile", "publish"))
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+    try:
+        writer = MonitoringSnapshotWriter()
+        if args.action == "migrate":
+            writer.migrate()
+        elif args.action == "reconcile":
+            print(json.dumps(writer.reconcile(), ensure_ascii=False, indent=2))
+        else:
+            result = writer.publish_pending()
+            if result.failed or result.conflicts or result.locked:
+                raise SystemExit(1)
+    except Exception as error:
+        logger.error("Обслуживание мониторинга прервано: error_type=%s", type(error).__name__)
+        raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()

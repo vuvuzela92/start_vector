@@ -4,10 +4,12 @@ import asyncio
 import logging
 from collections import defaultdict
 from datetime import date, datetime
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import aiohttp
 import pandas as pd
+from gspread.utils import rowcol_to_a1
 
 from src_oop.core.my_gspread import GoogleTabs
 from src_oop.core.utils_general import load_api_tokens
@@ -18,9 +20,8 @@ from src_oop.jobs.autopilot.config import (
     MAX_CONCURRENT_ACCOUNTS,
     UNIT_ARTICLE_COLUMN_NAME,
     UNIT_EXPECTED_REMAINS_HEADER,
-    UNIT_WB_DISCOUNT_HEADER,
     UNIT_MARGIN_COLUMN_NAME,
-    MONITORING_SNAPSHOT_FIRST_HALF_END_MINUTE,
+    UNIT_WB_DISCOUNT_HEADER,
     autopilot_gs,
     unit_gs,
 )
@@ -66,7 +67,8 @@ class AutopilotHourlyService:
         Выполняет полный почасовой цикл обновления ПУ.
 
         Бизнес-логика:
-        сначала читает артикула из ПУ и собирает Воронку продаж WB для оперативных
+        сначала доставляет ожидающие срезы мониторинга, читает артикула из ПУ
+        и собирает Воронку продаж WB для оперативных
         метрик. Сумма заказов текущего дня заменяется суммой созданных заказов по
         каждому артикулу из `wb_order_feed`, после чего метрики записываются в
         Google Sheets. Сумма заказов записывается первой, и сразу после её
@@ -74,10 +76,14 @@ class AutopilotHourlyService:
         дописывает расходы Cometa, рекламную активность, прибыль по ИУ по
         формуле daily-витрины, остатки UNIT и расчетные показатели порциями по
         каждой метрике. Онлайн-парсинг цен/СПП/рейтинга WB временно защищен
-        флагом.
+        флагом. Первый успешный финансовый срез часа сохраняется в БД до
+        дополнительных блоков и независимо от результата записи ПУ. День
+        определяется по Москве, пересечение полуночи запрещает смешанный срез.
         """
-        report_date = report_date or date.today()
         summary = AutopilotHourlySummary()
+        self._publish_monitoring(summary)
+        collection_started = datetime.now(ZoneInfo("Europe/Moscow"))
+        report_date = report_date or collection_started.date()
 
         autopilot_connector = GoogleTabs(
             table_title=autopilot_gs["title"],
@@ -87,21 +93,38 @@ class AutopilotHourlyService:
         articles = writer.read_articles()
         summary.articles_total = len(articles)
 
-        article_accounts = self.repository.fetch_article_accounts(articles)
-        tokens_by_account = load_api_tokens()
-
-        funnel_df = await self._collect_funnel_data(
-            report_date=report_date,
-            articles=articles,
-            article_accounts=article_accounts,
-            tokens_by_account=tokens_by_account,
-        )
+        article_accounts: dict[int, str] = {}
+        tokens_by_account: dict[str, str] = {}
+        try:
+            article_accounts = self.repository.fetch_article_accounts(articles)
+            tokens_by_account = load_api_tokens()
+            funnel_df = await self._collect_funnel_data(
+                report_date=report_date,
+                articles=articles,
+                article_accounts=article_accounts,
+                tokens_by_account=tokens_by_account,
+            )
+        except Exception as error:
+            logger.warning(
+                "Воронка WB недоступна; продолжаем расчёт по заказам БД: error_type=%s",
+                type(error).__name__,
+            )
+            funnel_df = pd.DataFrame()
         summary.funnel_rows = len(funnel_df.index)
         funnel_metrics = self.calculator.dataframe_to_metric_dicts(funnel_df)
-        today_orders_metrics = self.repository.fetch_today_orders_metrics(
-            report_date=report_date,
-            articles=articles,
-        )
+        try:
+            today_orders_metrics = self.repository.fetch_today_orders_metrics(
+                report_date=report_date,
+                articles=articles,
+            )
+        except Exception as error:
+            summary.monitoring_capture_status = "incomplete"
+            summary.finished_at = datetime.now()
+            logger.error(
+                "Исходные данные заказов не получены; новый срез и обновление ПУ прерваны: "
+                "error_type=%s", type(error).__name__,
+            )
+            return summary
         orders_sum_values = today_orders_metrics["orders_sum_rub"]
         # Сумма и количество должны относиться к одному набору заказов из
         # wb_order_feed; иначе средняя цена и прибыль по ИУ рассчитываются
@@ -147,31 +170,58 @@ class AutopilotHourlyService:
             summary=summary,
         )
 
-        adv_spend = await self.cometa_client.fetch_today_spend(articles=articles)
-        summary.cometa_rows = len(adv_spend)
+        adv_spend: MetricValues = {}
+        calculation_metrics: dict[str, MetricValues] = {}
+        try:
+            adv_spend = await self.cometa_client.fetch_today_spend(articles=articles)
+            summary.cometa_rows = len(adv_spend)
+            profit_inputs = self.repository.fetch_profit_calculation_inputs(
+                report_date=report_date, articles=articles,
+            )
+            calculation_metrics = self.calculator.calculate_financial_metrics(
+                funnel_metrics=funnel_metrics, adv_spend=adv_spend, profit_inputs=profit_inputs,
+            )
+            summary.monitoring_capture_status = self._write_monitoring_snapshot(
+                orders_sum=orders_sum_values,
+                orders_count=today_orders_metrics["orders_count"],
+                adv_spend=adv_spend,
+                profit_by_cond_orders=calculation_metrics.get("profit_by_cond_orders", {}),
+                collection_started=collection_started,
+                report_date=report_date,
+                articles=articles,
+            )
+        except Exception as error:
+            summary.monitoring_capture_status = "incomplete"
+            logger.warning(
+                "Исходные данные финансового среза не получены; мониторинг пропущен, "
+                "остальные метрики продолжаются: error_type=%s", type(error).__name__,
+            )
+        self._publish_monitoring(summary)
 
-        activity_by_article = self.repository.fetch_today_advert_activity(report_date)
-        advert_metrics = self.calculator.calculate_advert_metrics(
-            activity_by_article=activity_by_article,
-            adv_spend=adv_spend,
-        )
+        advert_metrics: dict[str, MetricValues] = {}
+        try:
+            activity_by_article = self.repository.fetch_today_advert_activity(report_date)
+            advert_metrics = self.calculator.calculate_advert_metrics(
+                activity_by_article=activity_by_article, adv_spend=adv_spend,
+            )
+        except Exception as error:
+            logger.warning(
+                "Рекламная статистика недоступна, остальные метрики продолжаются: error_type=%s",
+                type(error).__name__,
+            )
 
-        unit_connector = GoogleTabs(
-            table_title=unit_gs["title"],
-            sheet_title=unit_gs["unit_sheet"],
-        )
-        unit_remains = self._load_unit_remains(unit_connector)
-        unit_wb_discount = self._load_unit_wb_discount(unit_connector)
-        profit_inputs = self.repository.fetch_profit_calculation_inputs(
-            report_date=report_date,
-            articles=articles,
-        )
-
-        calculation_metrics = self.calculator.calculate_financial_metrics(
-            funnel_metrics=funnel_metrics,
-            adv_spend=adv_spend,
-            profit_inputs=profit_inputs,
-        )
+        unit_remains: MetricValues = {}
+        unit_wb_discount: MetricValues = {}
+        try:
+            unit_connector = GoogleTabs(
+                table_title=unit_gs["title"], sheet_title=unit_gs["unit_sheet"],
+            )
+            unit_remains, unit_wb_discount = self._load_unit_metrics(unit_connector)
+        except Exception as error:
+            logger.warning(
+                "Данные UNIT не получены после повторов; остаток и скидка пропущены, "
+                "сценарий продолжается: error_type=%s", type(error).__name__,
+            )
         organic = self.calculator.calculate_organic(
             funnel_metrics=funnel_metrics,
             advert_metrics=advert_metrics,
@@ -191,11 +241,18 @@ class AutopilotHourlyService:
         # заказов и количеством заказов, по которым считается прибыль.
         fallback_articles = set(articles).difference(order_prices)
         if fallback_articles:
-            fallback_prices = await self._collect_full_prices(
-                articles=sorted(fallback_articles),
-                article_accounts=article_accounts,
-                tokens_by_account=tokens_by_account,
-            )
+            try:
+                fallback_prices = await self._collect_full_prices(
+                    articles=sorted(fallback_articles),
+                    article_accounts=article_accounts,
+                    tokens_by_account=tokens_by_account,
+                )
+            except Exception as error:
+                fallback_prices = {}
+                logger.warning(
+                    "Дополнительные цены WB недоступны; продолжаем запись метрик: error_type=%s",
+                    type(error).__name__,
+                )
             order_prices = {**fallback_prices, **order_prices}
             logger.info(
                 "Для артикула без заказов использована резервная цена WB API: rows=%s",
@@ -205,23 +262,29 @@ class AutopilotHourlyService:
             remaining_metrics["full_price"] = order_prices
 
         if ENABLE_WB_ONLINE_PRICE_PARSING:
-            full_prices = await self._collect_full_prices(
-                articles=articles,
-                article_accounts=article_accounts,
-                tokens_by_account=tokens_by_account,
-            )
-            card_snapshots = await self.card_client.fetch_cards(
-                articles=articles,
-                full_prices=full_prices,
-            )
-            summary.wb_card_rows = len(card_snapshots)
-            summary.spp_history_rows = self.repository.insert_spp_history_changes(card_snapshots)
-            card_metrics = self.calculator.card_snapshots_to_metrics(card_snapshots)
-            card_metrics.pop("spp", None)
-            # Цена из заказов имеет приоритет над независимым снэпшотом WB API.
-            card_metrics.pop("full_price", None)
-            remaining_metrics.update(card_metrics)
-            remaining_metrics["spp"] = unit_wb_discount
+            try:
+                full_prices = await self._collect_full_prices(
+                    articles=articles,
+                    article_accounts=article_accounts,
+                    tokens_by_account=tokens_by_account,
+                )
+                card_snapshots = await self.card_client.fetch_cards(
+                    articles=articles,
+                    full_prices=full_prices,
+                )
+                summary.wb_card_rows = len(card_snapshots)
+                summary.spp_history_rows = self.repository.insert_spp_history_changes(card_snapshots)
+                card_metrics = self.calculator.card_snapshots_to_metrics(card_snapshots)
+                card_metrics.pop("spp", None)
+                # Цена из заказов имеет приоритет над независимым снэпшотом WB API.
+                card_metrics.pop("full_price", None)
+                remaining_metrics.update(card_metrics)
+                remaining_metrics["spp"] = unit_wb_discount
+            except Exception as error:
+                logger.warning(
+                    "Онлайн-карточки WB недоступны; продолжаем запись метрик: error_type=%s",
+                    type(error).__name__,
+                )
         else:
             logger.info("Онлайн-парсинг цен и карточек WB отключен для почасового сценария ПУ.")
 
@@ -238,48 +301,19 @@ class AutopilotHourlyService:
                 "profit_by_cond_orders"
             ),
         }
-        if all(
+        summary.monitoring_pu_written = all(
             self._is_complete_metric_write(result, len(articles))
             for result in monitoring_results.values()
-        ):
-            if self._is_first_hourly_run():
-                self._write_monitoring_snapshot(
-                    orders_sum=orders_sum_values,
-                    orders_count=funnel_metrics.get("orders_count", {}),
-                    adv_spend=adv_spend,
-                    profit_by_cond_orders=calculation_metrics.get(
-                        "profit_by_cond_orders",
-                        {},
-                    ),
-                )
-            else:
-                logger.info(
-                    "Почасовой снэпшот мониторинга пропущен: это второй запуск часа | minute=%s",
-                    datetime.now(ZoneInfo("Europe/Moscow")).minute,
-                )
-        else:
-            logger.warning(
-                "Почасовой снэпшот мониторинга пропущен: не все три метрики "
-                "подтверждены записью в ПУ | expected_rows=%s | results=%s",
-                len(articles),
-                {
-                    metric_name: {
-                        "written": result.written if result else False,
-                        "rows": result.rows if result else 0,
-                    }
-                    for metric_name, result in monitoring_results.items()
-                },
-            )
+        )
+        logger.info(
+            "Итог мониторинга hourly: capture=%s synced=%s conflicts=%s "
+            "delivery_failed=%s delivery_locked=%s pu_written=%s",
+            summary.monitoring_capture_status, summary.monitoring_synced,
+            summary.monitoring_conflicts, summary.monitoring_delivery_failed,
+            summary.monitoring_delivery_locked, summary.monitoring_pu_written,
+        )
         summary.finished_at = datetime.now()
         return summary
-
-    @staticmethod
-    def _is_first_hourly_run() -> bool:
-        """Определяет, относится ли запуск к первой половине текущего часа."""
-        return (
-            datetime.now(ZoneInfo("Europe/Moscow")).minute
-            < MONITORING_SNAPSHOT_FIRST_HALF_END_MINUTE
-        )
 
     @staticmethod
     def _is_complete_metric_write(
@@ -299,38 +333,79 @@ class AutopilotHourlyService:
         orders_count: MetricValues,
         adv_spend: MetricValues,
         profit_by_cond_orders: MetricValues,
-    ) -> None:
-        """Сохраняет агрегаты hourly-метрик в технический лист мониторинга.
+        collection_started: datetime,
+        report_date: date,
+        articles: list[int],
+    ) -> str:
+        """Сохраняет полный финансовый срез в архив без зависимости от записи ПУ.
 
-        Бизнес-правило: мониторинг должен видеть тот же почасовой срез, который
-        рассчитан для текущего дня ПУ; сбой дополнительной витрины не должен
-        отменять основной hourly-запуск автопилота.
+        Расчёт прибыли покрывает все полученные заказы. Пустой успешный ответ
+        источника допустим, пустой список артикулов ПУ нет. Исторический запуск
+        и сбор через полночь не создают смешанный срез. Ошибка архива не отменяет ПУ.
         """
+        captured_at = datetime.now(ZoneInfo("Europe/Moscow"))
+        if report_date != captured_at.date() or collection_started.date() != captured_at.date():
+            logger.warning("Мониторинг пропущен: историческая дата или сбор через полночь; ПУ продолжается.")
+            return "skipped_date"
+        valid = (
+            bool(articles)
+            and set(orders_count) == set(orders_sum) == set(profit_by_cond_orders)
+            and set(orders_count).issubset(articles)
+            and set(adv_spend).issubset(articles)
+        )
+        if not valid:
+            logger.warning("Исходные данные среза неполны; мониторинг пропущен, ПУ продолжается.")
+            return "incomplete"
         try:
-            MonitoringSnapshotWriter().upsert_snapshot(
+            count = AutopilotHourlyService._sum_metric(orders_count)
+            if any(float(value) < 0 or not float(value).is_integer() for value in orders_count.values()):
+                raise ValueError("Некорректное количество заказов в срезе.")
+            saved = MonitoringSnapshotWriter().upsert_snapshot(
                 orders_sum=AutopilotHourlyService._sum_metric(orders_sum),
-                orders_count=int(
-                    AutopilotHourlyService._sum_metric(orders_count)
-                ),
+                orders_count=int(count),
                 adv_spend=AutopilotHourlyService._sum_metric(adv_spend),
                 profit_by_cond_orders=AutopilotHourlyService._sum_metric(
                     profit_by_cond_orders,
                 ),
+                snapshot_at=captured_at,
             )
-        except Exception:
-            logger.exception(
-                "Не удалось записать почасовой снэпшот в технический лист мониторинга; "
-                "основной hourly-сценарий уже завершил запись метрик."
+            return "saved" if saved else "existing"
+        except (ValueError, TypeError, ArithmeticError):
+            logger.warning("Числа среза некорректны; мониторинг пропущен, ПУ продолжается.")
+            return "incomplete"
+        except Exception as error:
+            logger.error(
+                "Не удалось сохранить срез в БД; ПУ продолжает работу: error_type=%s",
+                type(error).__name__,
+            )
+            return "failed"
+
+    @staticmethod
+    def _publish_monitoring(summary: AutopilotHourlySummary) -> None:
+        """Доставляет архив до сбора и после сохранения, не блокируя ПУ при ошибке."""
+        try:
+            result = MonitoringSnapshotWriter().publish_pending()
+            summary.monitoring_synced += result.synced
+            summary.monitoring_conflicts = result.conflicts
+            summary.monitoring_delivery_failed = result.failed
+            summary.monitoring_delivery_locked = result.locked
+        except Exception as error:
+            summary.monitoring_delivery_failed = True
+            logger.warning(
+                "Доставка мониторинга недоступна; архив ожидает публикации, ПУ продолжается: "
+                "error_type=%s", type(error).__name__,
             )
 
     @staticmethod
     def _sum_metric(values_by_article: MetricValues) -> float:
-        """Суммирует числовую метрику по артикулам для мониторинга."""
-        return sum(
-            float(value)
-            for value in values_by_article.values()
-            if value not in (None, "")
-        )
+        """Суммирует итог без пропуска повреждённых чисел, защищая полный срез часа."""
+        total = Decimal(0)
+        for value in values_by_article.values():
+            number = Decimal(str(value))
+            if not number.is_finite():
+                raise ValueError("Метрика мониторинга содержит некорректное число.")
+            total += number
+        return float(total)
 
     async def _collect_funnel_data(
         self,
@@ -461,106 +536,70 @@ class AutopilotHourlyService:
         return dict(result)
 
     @staticmethod
-    def _load_unit_remains(connector: GoogleTabs) -> MetricValues:
-        """
-        Читает свободные остатки из UNIT.
+    def _load_unit_metrics(connector: GoogleTabs) -> tuple[MetricValues, MetricValues]:
+        """Читает остатки и скидку UNIT двумя запросами с ограниченными повторами.
 
-        Бизнес-логика:
-        эти данные заполняют метрику `unit_free_stock` в ПУ. Колонки UNIT часто
-        смещаются, поэтому сценарий ищет `Артикул` и `Свободный остаток
-        (сервис)` по заголовкам. Если нужный заголовок, остаток или артикул
-        отсутствует, по артикулу остается пропуск.
+        Заголовки определяют смещаемые колонки. Общая колонка артикулов читается
+        вместе с обеими метриками. Пустые значения пропускаются, скидка переводится
+        в долю. Отсутствие одного заголовка не блокирует другую метрику.
         """
         worksheet = connector.sheet_title
-        headers = worksheet.row_values(1)
-        article_column_index = AutopilotHourlyService._find_unit_column_index(
-            headers,
-            UNIT_ARTICLE_COLUMN_NAME,
+        headers = connector.execute_with_retry(
+            "чтение заголовков UNIT", worksheet.row_values, 1,
         )
-        remains_column_index = AutopilotHourlyService._find_unit_column_index(
-            headers,
-            UNIT_EXPECTED_REMAINS_HEADER,
+        names = (UNIT_ARTICLE_COLUMN_NAME, UNIT_EXPECTED_REMAINS_HEADER, UNIT_WB_DISCOUNT_HEADER)
+        indexes = {
+            name: AutopilotHourlyService._find_unit_column_index(headers, name)
+            for name in names
+        }
+        if indexes[UNIT_ARTICLE_COLUMN_NAME] is None:
+            logger.warning("В UNIT отсутствует колонка артикулов; остаток и скидка пропущены.")
+            return {}, {}
+        available = [name for name in names if indexes[name] is not None]
+        for name in names:
+            if indexes[name] is None:
+                logger.warning("В UNIT отсутствует колонка; остальные метрики продолжаются: column=%s", name)
+        ranges = [
+            f"{rowcol_to_a1(2, indexes[name])}:{rowcol_to_a1(worksheet.row_count, indexes[name])}"
+            for name in available
+        ]
+        raw = connector.execute_with_retry(
+            "чтение артикулов, остатка и скидки UNIT",
+            worksheet.batch_get, ranges, value_render_option="FORMATTED_VALUE",
         )
-        if article_column_index is None or remains_column_index is None:
-            logger.warning(
-                "В UNIT не найдены колонки для свободного остатка, метрика unit_free_stock будет пропущена: "
-                "article_header=%s remains_header=%s",
-                UNIT_ARTICLE_COLUMN_NAME,
-                UNIT_EXPECTED_REMAINS_HEADER,
-            )
-            return {}
-
-        skus = worksheet.col_values(article_column_index)
-        remains = worksheet.col_values(remains_column_index)
-
-        result: MetricValues = {}
-        for index, sku in enumerate(skus[1:], start=1):
+        columns = {
+            name: [row[0] if row else "" for row in values]
+            for name, values in zip(available, raw, strict=True)
+        }
+        remains: MetricValues = {}
+        discounts: MetricValues = {}
+        for position, sku in enumerate(columns[UNIT_ARTICLE_COLUMN_NAME]):
             sku_text = str(sku).strip()
-            if not sku_text.isdigit() or index >= len(remains):
+            if not sku_text.isdigit():
                 continue
-            value = str(remains[index]).strip().replace(" ", "")
-            if value == "":
-                continue
-            try:
-                result[int(sku_text)] = int(float(value.replace(",", ".")))
-            except ValueError:
-                continue
-        return result
-
-    @staticmethod
-    def _load_unit_wb_discount(connector: GoogleTabs) -> MetricValues:
-        """
-        Читает фактическую скидку WB по артикулам из UNIT.
-
-        Бизнес-логика:
-        текущий дневной показатель `spp` в ПУ должен отражать поле
-        `Скидка ВБ факт` из вкладки `MAIN (tested)`, а не результат отключенного
-        онлайн-парсинга публичной карточки WB. Значение из UNIT в процентах
-        переводится в долю, например `4,6` превращается в `0,046`, потому что
-        процентное отображение выполняется форматированием Google Sheets.
-        Отсутствующие или некорректные данные остаются пропусками.
-        """
-        worksheet = connector.sheet_title
-        headers = worksheet.row_values(1)
-        article_column_index = AutopilotHourlyService._find_unit_column_index(
-            headers,
-            UNIT_ARTICLE_COLUMN_NAME,
-        )
-        discount_column_index = AutopilotHourlyService._find_unit_column_index(
-            headers,
-            UNIT_WB_DISCOUNT_HEADER,
-        )
-        if article_column_index is None or discount_column_index is None:
-            logger.warning(
-                "В UNIT не найдены колонки для фактической скидки WB, метрика spp будет пропущена: "
-                "article_header=%s discount_header=%s",
-                UNIT_ARTICLE_COLUMN_NAME,
-                UNIT_WB_DISCOUNT_HEADER,
-            )
-            return {}
-
-        skus = worksheet.col_values(article_column_index)
-        discounts = worksheet.col_values(discount_column_index)
-
-        result: MetricValues = {}
-        for index, sku in enumerate(skus[1:], start=1):
-            sku_text = str(sku).strip()
-            if not sku_text.isdigit() or index >= len(discounts):
-                continue
-            discount_text = (
-                str(discounts[index])
-                .strip()
-                .replace("%", "")
-                .replace(" ", "")
-                .replace(",", ".")
-            )
-            if discount_text == "":
-                continue
-            try:
-                result[int(sku_text)] = float(discount_text) / 100
-            except ValueError:
-                continue
-        return result
+            for name, output in (
+                (UNIT_EXPECTED_REMAINS_HEADER, remains),
+                (UNIT_WB_DISCOUNT_HEADER, discounts),
+            ):
+                column = columns.get(name, [])
+                if position >= len(column):
+                    continue
+                value = (
+                    str(column[position]).strip().replace("%", "")
+                    .replace("\xa0", "").replace(" ", "").replace(",", ".")
+                )
+                if not value:
+                    continue
+                try:
+                    number = Decimal(value)
+                    if not number.is_finite():
+                        continue
+                    output[int(sku_text)] = (
+                        int(number) if name == UNIT_EXPECTED_REMAINS_HEADER else float(number / 100)
+                    )
+                except (ValueError, ArithmeticError):
+                    continue
+        return remains, discounts
 
     @staticmethod
     def _find_unit_column_index(headers: list[str], expected_header: str) -> int | None:

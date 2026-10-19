@@ -59,9 +59,12 @@ class AutopilotSheetsWriter:
         Удаление повторных строк вынесено в отдельную задачу
         `autopilot_remove_duplicates`, чтобы почасовая загрузка метрик не
         прерывалась из-за обслуживания структуры листа. Нечисловые строки
-        пропускаются как служебные или пустые.
+        пропускаются как служебные или пустые. Чтение повторяется при квотах
+        и временных сетевых ошибках через общий механизм Google Sheets.
         """
-        raw_articles = self.worksheet.col_values(1)[self.values_first_row - 1 :]
+        raw_articles = self.connector.execute_with_retry(
+            "чтение артикулов ПУ", self.worksheet.col_values, 1,
+        )[self.values_first_row - 1 :]
         articles: list[int] = []
         for value in raw_articles:
             value_text = str(value).strip()
