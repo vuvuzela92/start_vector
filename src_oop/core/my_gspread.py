@@ -23,8 +23,8 @@ GOOGLE_WRITE_RETRY_ATTEMPTS = 4
 GOOGLE_READ_RETRY_ATTEMPTS = 4
 GOOGLE_WRITE_RETRY_STATUS_CODES = (429, 500, 502, 503, 504)
 GOOGLE_CONNECT_RETRY_ATTEMPTS = 4
-# Ограничиваем отдельный запрос, чтобы зависшее чтение не блокировало cron.
-GOOGLE_HTTP_TIMEOUT = (10, 30)
+# Увеличенный тайм-аут нужен для крупных пакетных записей в Google Sheets.
+GOOGLE_HTTP_TIMEOUT = (10, 180)
 GoogleResult = TypeVar("GoogleResult")
 
 

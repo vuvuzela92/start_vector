@@ -39,8 +39,10 @@ from src_oop.jobs.calculation_of_purchases_china.run import (
 from src_oop.jobs.calculation_of_purchases_russia.run import (
     set_orders_quantity,
     transport_orders_and_supply,
+    update_orders_1c_in_purchase_russia,
     update_penalties_in_gs_purchase_russia,
     update_supplies_1c_in_purchase_russia,
+    update_wb_supplies_in_purchase_russia,
 )
 from src_oop.jobs.conditional_calculations.run import (
     conditional_calculation_to_db_run,
@@ -100,6 +102,7 @@ from src_oop.jobs.wb_api.measurements.run import (
 from src_oop.jobs.wms_stocks.run import historical_stocks_run
 from src_oop.jobs.wms_stocks.run_stock import wms_stock_backfill_run, wms_stock_run
 from src_oop.jobs.wb_stock_control.run import wb_stock_control_run
+from src_oop.jobs.wb_missing_supplies_goods.run import wb_missing_supplies_goods_run
 from src_oop.jobs.yandex_designer_output.run import yandex_designer_output_run
 
 
@@ -386,6 +389,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(wb_stock_control_run),
         "desc": "Полный read-only контроль опубликованных FBS-остатков вне юнитки",
     },
+    "wb_missing_supplies_goods_run": {
+        "func": smart_run(wb_missing_supplies_goods_run),
+        "desc": "WB Supplies API → PostgreSQL `wb_supplies_goods`: первичная и повторная загрузка товаров поставок за последние 30 дней",
+    },
     # UNIT: сервисные обновления справочников, статусов и ценовых витрин.
     "update_adv_participants_to_gs": {
         "func": smart_run(update_adv_participants_to_gs),
@@ -416,6 +423,14 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "update_supplies_1c_in_purchase_russia": {
         "func": smart_run(update_supplies_1c_in_purchase_russia),
         "desc": "Обновление Google Sheets «Расчет закупки Россия», лист «Приходы_1С», данными о поставках из 1С",
+    },
+    "update_orders_1c_in_purchase_russia": {
+        "func": smart_run(update_orders_1c_in_purchase_russia),
+        "desc": "PostgreSQL `ordered_goods_from_buyers` и чеки → Google Sheets «Расчет закупки Россия», лист «Заказы_поставщиков_1С»: публикация валидных заказов 1С",
+    },
+    "update_wb_supplies_in_purchase_russia": {
+        "func": smart_run(update_wb_supplies_in_purchase_russia),
+        "desc": "PostgreSQL `wb_supplies_goods` → Google Sheets «Расчет закупки Россия», лист «БД_поставки»: публикация актуального состояния поставок WB",
     },
     # Автопилот и индивидуальные настройки.
     "update_individual_info": {

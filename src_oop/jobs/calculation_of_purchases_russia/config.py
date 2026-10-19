@@ -169,13 +169,86 @@ query_supplies_1c = text("""
       AND update_document_datetime >= DATE '2025-05-01';
 """)
 
+query_orders_1c = text("""
+    SELECT
+        main.id,
+        main.guid,
+        main.document_number,
+        main.document_created_at::date AS document_created_at,
+        main.supply_date::date AS supply_date,
+        main.local_vendor_code,
+        main.product_name,
+        main.event_status,
+        main.quantity,
+        main.amount_with_vat,
+        main.amount_without_vat,
+        main.supplier_name,
+        main.supplier_code,
+        main.update_document_datetime::date AS update_document_datetime,
+        main.author_of_the_change,
+        main.our_organizations_name,
+        main.warehouse_id,
+        main.is_valid,
+        main.in_acceptance,
+        main.created_at::date AS created_at,
+        main.is_printed_barcode,
+        main.acceptance_completed,
+        main.expected_receipt_date::date AS expected_receipt_date,
+        main.actual_quantity,
+        main.currency,
+        main.unit_price,
+        main.last_purchase_price,
+        main.last_purchase_supplier,
+        main.payment_indicator,
+        main.payment_document_number,
+        main.shipment_date::date AS shipment_date,
+        main.receipt_transaction_number,
+        main.cancelled_due_to,
+        main.comment,
+        main.planned_cost,
+        receipts.reciept_number,
+        receipts.reciept_date::date AS receipt_date,
+        receipts.reciept_quantity,
+        receipts.reciept_amount
+    FROM ordered_goods_from_buyers AS main
+    LEFT JOIN receipts_for_ordered_goods_from_buyers AS receipts
+        ON main.id = receipts.ordered_goods_from_buyers_id
+    WHERE main.is_valid = TRUE
+      AND main.update_document_datetime >= DATE '2025-05-01';
+""")
+
+query_wb_supplies = text("""
+    SELECT DISTINCT ON (wsg.id, wsg.vendor_code)
+        wsg.id AS "Номер поставки",
+        ws.supply_date AS "Плановая дата поставки",
+        ws.fact_date AS "Фактическая дата поставки",
+        ws.status_id AS "Статус",
+        wsg.quantity AS "Добавлено в поставку",
+        wsg.unloading_quantity AS "Раскладывается",
+        wsg.accepted_quantity AS "Принято, шт",
+        wsg.ready_for_sale_quantity AS "Поступило в продажу",
+        a.local_vendor_code AS "Артикул продавца",
+        wsg.nm_id AS "Артикул WB",
+        wsg.supplier_box_amount AS "Указано в упаковке, шт",
+        a.account
+    FROM wb_supplies_goods wsg
+    LEFT JOIN wb_supplies ws
+        ON wsg.id = ws.id
+    LEFT JOIN article a
+        USING(nm_id)
+    WHERE ws.create_date >= NOW() - INTERVAL '2 months'
+    ORDER BY wsg.id, wsg.vendor_code, ws.updated_date DESC, wsg.created_at DESC;
+""")
+
 google_table = {
     "title": "Расчет закупки Россия",
     "calculate_sheet": "Расчет закупки",
     "orders_sheet": "БД_Заказы",
     "statuses_sheet": "Статичный лист статусы",
     "orders_buyers_sheet": "Заказы_и_поступления",
+    "orders_1c_sheet": "Заказы_поставщиков_1С",
     "supplies_1c_sheet": "Приходы_1С",
+    "wb_supplies_sheet": "БД_поставки",
 }
 
 
@@ -261,3 +334,54 @@ supply_1c_output_columns = [
     "Номер машины",
     "Номер трака",
 ]
+
+# Соответствие полей заказов 1С и заголовков legacy-листа Заказы_поставщиков_1С.
+orders_1c_columns_rename = {
+    "document_number": "Номер документа",
+    "document_created_at": "Дата создания документа",
+    "supply_date": "Дата поставки",
+    "local_vendor_code": "Внутренний код поставщика",
+    "product_name": "Наименование товара",
+    "event_status": "Статус события",
+    "quantity": "Количество",
+    "amount_with_vat": "Сумма с НДС",
+    "amount_without_vat": "Сумма без НДС",
+    "supplier_name": "Название поставщика",
+    "supplier_code": "Код поставщика",
+    "update_document_datetime": "Дата обновления документа",
+    "author_of_the_change": "Автор изменения",
+    "our_organizations_name": "Название нашей организации",
+    "warehouse_id": "ID склада",
+    "is_valid": "Корректность документа",
+    "in_acceptance": "В приёмке",
+    "created_at": "Дата создания записи",
+    "is_printed_barcode": "Штрихкод напечатан",
+    "acceptance_completed": "Приёмка завершена",
+    "expected_receipt_date": "Ожидаемая дата поступления",
+    "actual_quantity": "Фактическое количество",
+    "currency": "Валюта",
+    "unit_price": "Цена за единицу",
+    "last_purchase_price": "Цена последней закупки",
+    "last_purchase_supplier": "Поставщик последней закупки",
+    "payment_indicator": "Признак/способ оплаты",
+    "payment_document_number": "Номер платёжного документа",
+    "shipment_date": "Дата отгрузки",
+    "receipt_transaction_number": "Номер приходной операции",
+    "cancelled_due_to": "Причина аннулирования",
+    "comment": "Комментарий",
+    "planned_cost": "Плановая себестоимость",
+    "reciept_number": "Номер чека",
+    "receipt_date": "Дата чека",
+    "reciept_quantity": "Чек кол-во",
+    "reciept_amount": "Чек стоимость",
+}
+
+# Значения статусов WB переводятся в пользовательские названия для листа БД_поставки.
+wb_supply_statuses = {
+    1: "Не запланировано",
+    2: "Запланировано",
+    3: "Отгрузка разрешена",
+    4: "Идёт приёмка",
+    5: "Принято",
+    6: "Отгружено на воротах",
+}

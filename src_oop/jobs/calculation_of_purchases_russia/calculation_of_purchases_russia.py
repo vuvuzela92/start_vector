@@ -1,6 +1,35 @@
+"""Регламентные витрины закупочного контура России.
+
+Бизнес-логика процесса:
+1. Заказы поставщикам из 1С читаются из `ordered_goods_from_buyers` вместе с
+   реквизитами чеков. В витрину попадают только корректные документы,
+   обновлённые с мая 2025 года. Результат публикуется в лист
+   `Заказы_поставщиков_1С` таблицы «Расчет закупки Россия».
+2. Приходы 1С читаются из `supply_to_sellers_warehouse` по тем же правилам
+   корректности и исторической глубины. Даты приводятся к формату
+   `DD.MM.YYYY`, а технические имена полей заменяются пользовательскими
+   заголовками. Один набор данных публикуется в лист `Приходы_1С` таблиц
+   «Расчет закупки Россия» и «Расчет поставки Китай_по обороту».
+3. Состояние поставок WB за последние два месяца собирается из
+   `wb_supplies_goods`, `wb_supplies` и `article`. Для каждой пары поставка-
+   артикул выбирается последнее обновление, а числовые статусы переводятся в
+   понятные названия. Витрина `БД_поставки` очищает строки, не попавшие в
+   новую выборку, чтобы закрытые поставки не отображались как актуальные.
+4. Отдельные расчётные сценарии объединяют заказы, приходы и возвраты для
+   листа `Заказы_и_поступления`, а также точечно обновляют штрафы и
+   виртуальные остатки в листе `Расчет закупки`.
+
+Для legacy-листов заголовки и данные записываются с `A2`, а в `A1` ставится
+отметка времени обновления. Это сохраняет совместимость с существующими
+формулами и ручной работой пользователей в Google Sheets.
+"""
+
 from __future__ import annotations
 
+import json
 import logging
+import time
+from collections.abc import Callable
 from datetime import datetime
 
 import gspread
@@ -11,18 +40,26 @@ from src_oop.core.database import Database
 from src_oop.core.my_gspread import GoogleTabs
 from src_oop.jobs.calculation_of_purchases_russia.config import (
     google_table,
+    orders_1c_columns_rename,
     penalties_column_name,
+    query_orders_1c,
     query_orders_and_supply,
     query_penalties_and_virtual_stock,
     query_supplies_1c,
+    query_wb_supplies,
     supply_1c_output_columns,
     supply_1c_columns_rename,
     supplies_1c_target_sheets,
     unit_table,
     virtual_stock_column_name,
+    wb_supply_statuses,
 )
 
 logger = logging.getLogger(__name__)
+# Ограничиваем размер payload и частоту запросов, чтобы не перегружать Sheets API.
+SUPPLIES_1C_MAX_PAYLOAD_BYTES = 2_000_000
+SUPPLIES_1C_WRITE_CHUNK_SIZE = 1_000
+SUPPLIES_1C_WRITE_PAUSE_SECONDS = 1.0
 
 
 class Calculation_of_purchases_russia:
@@ -58,15 +95,19 @@ class Calculation_of_purchases_russia:
 
         self._purchase_russia_table = google_table["title"]
         self._orders_buyers_sheet = google_table["orders_buyers_sheet"]
+        self._orders_1c_sheet = google_table["orders_1c_sheet"]
         self._calculate_sheet = google_table["calculate_sheet"]
         self._supplies_1c_sheet = google_table["supplies_1c_sheet"]
+        self._wb_supplies_sheet = google_table["wb_supplies_sheet"]
         self._unit_table_title = unit_table["title"]
         self._unit_sheet_title = unit_table["sheet_unit"]
 
         self._conn_purchase_russia: GoogleTabs | None = None
+        self._conn_orders_1c_sheet: GoogleTabs | None = None
         self._conn_calculate_sheet: GoogleTabs | None = None
         self._conn_unit_table: GoogleTabs | None = None
         self._conn_supplies_1c_sheet: GoogleTabs | None = None
+        self._conn_wb_supplies_sheet: GoogleTabs | None = None
 
     @property
     def google_connect_to_purchsase_russia_table(self) -> GoogleTabs:
@@ -135,6 +176,39 @@ class Calculation_of_purchases_russia:
                 self._supplies_1c_sheet,
             )
         return self._conn_supplies_1c_sheet
+
+    @property
+    def google_connect_to_orders_1c_sheet(self) -> GoogleTabs:
+        """Возвращает подключение к листу `Заказы_поставщиков_1С`.
+
+        Бизнес-сценарий:
+        закупочная команда сверяет заказы 1С в отдельной витрине, поэтому
+        подключение создаётся лениво и не влияет на остальные job-сценарии
+        этого модуля.
+        """
+
+        if self._conn_orders_1c_sheet is None:
+            self._conn_orders_1c_sheet = GoogleTabs(
+                self._purchase_russia_table,
+                self._orders_1c_sheet,
+            )
+        return self._conn_orders_1c_sheet
+
+    @property
+    def google_connect_to_wb_supplies_sheet(self) -> GoogleTabs:
+        """Возвращает подключение к листу `БД_поставки`.
+
+        Бизнес-сценарий:
+        лист показывает актуальный состав поставок WB за последние два месяца,
+        поэтому его подключение изолировано от витрин заказов и приходов 1С.
+        """
+
+        if self._conn_wb_supplies_sheet is None:
+            self._conn_wb_supplies_sheet = GoogleTabs(
+                self._purchase_russia_table,
+                self._wb_supplies_sheet,
+            )
+        return self._conn_wb_supplies_sheet
 
     @staticmethod
     def set_data(coonector: GoogleTabs, df: pd.DataFrame) -> None:
@@ -236,6 +310,103 @@ class Calculation_of_purchases_russia:
             value_input_option="USER_ENTERED",
         )
 
+    def _update_values_in_chunks(
+        self,
+        values: list[list[object]],
+        update_range: Callable[[str, list[list[object]]], None],
+        operation_name: str,
+    ) -> None:
+        """Записывает большую выгрузку Google Sheets пакетами.
+
+        Бизнес-сценарий:
+        выгрузка `Приходы_1С` может содержать тысячи строк, и один большой
+        HTTP-запрос иногда превышает тайм-аут Google Sheets. Разбиение на
+        пакеты снижает размер каждого запроса; заголовок записывается только
+        в первом пакете, а вызывающий сценарий обновляет `A1` после завершения
+        всех пакетов.
+        """
+
+        if not values:
+            return
+
+        total_rows = len(values)
+        total_columns = len(values[0])
+        payload_size = len(
+            json.dumps(values, ensure_ascii=False, default=str).encode("utf-8")
+        )
+        chunk_size = (
+            total_rows
+            if payload_size <= SUPPLIES_1C_MAX_PAYLOAD_BYTES
+            else SUPPLIES_1C_WRITE_CHUNK_SIZE
+        )
+        total_chunks = (total_rows + chunk_size - 1) // chunk_size
+
+        for chunk_number, start_index in enumerate(
+            range(0, total_rows, chunk_size),
+            start=1,
+        ):
+            end_index = min(
+                start_index + chunk_size,
+                total_rows,
+            )
+            if chunk_number > 1:
+                time.sleep(SUPPLIES_1C_WRITE_PAUSE_SECONDS)
+            start_row = start_index + 2
+            end_row = end_index + 1
+            range_name = f"A{start_row}:{rowcol_to_a1(end_row, total_columns)}"
+            update_range(range_name, values[start_index:end_index])
+            logger.info(
+                "Пакет выгрузки записан в Google Sheets | operation=%s | range=%s | packet=%s/%s | rows=%s/%s | payload_bytes=%s",
+                operation_name,
+                range_name,
+                chunk_number,
+                total_chunks,
+                end_index,
+                total_rows,
+                payload_size,
+            )
+
+    def _replace_sheet_data_below_status(
+        self,
+        connector: GoogleTabs,
+        output_values: list[list[object]],
+    ) -> None:
+        """Перезаписывает данные с `A2` и очищает только устаревший хвост листа.
+
+        Бизнес-сценарий:
+        витрина `БД_поставки` содержит меняющееся число строк. После сокращения
+        выборки старые позиции не должны оставаться в листе и ошибочно
+        восприниматься закупочной командой как актуальные, при этом служебная
+        отметка в `A1` сохраняется до отдельного обновления.
+        """
+
+        worksheet = connector.sheet_title
+        old_values = connector.get_all_values_with_retry()
+        old_data_rows = max(len(old_values) - 1, 0)
+        old_columns = max((len(row) for row in old_values), default=0)
+        new_columns = max((len(row) for row in output_values), default=0)
+        target_rows = max(old_data_rows, len(output_values))
+        target_columns = max(old_columns, new_columns)
+
+        if target_rows == 0 or target_columns == 0:
+            return
+
+        values = [
+            ["" for _ in range(target_columns)]
+            for _ in range(target_rows)
+        ]
+        for row_index, row in enumerate(output_values):
+            values[row_index][:len(row)] = row
+
+        target_range = f"A2:{rowcol_to_a1(target_rows + 1, target_columns)}"
+        connector._execute_google_write_with_retry(
+            operation_name=f"replace_range {worksheet.title} {target_range}",
+            func=worksheet.update,
+            range_name=target_range,
+            values=values,
+            value_input_option="USER_ENTERED",
+        )
+
     def _open_worksheet_by_spreadsheet_id(
         self,
         spreadsheet_id: str,
@@ -319,6 +490,29 @@ class Calculation_of_purchases_russia:
         """
 
         return Database.read_sql_to_dataframe(query_supplies_1c).fillna("")
+
+    def get_orders_1c_data(self) -> pd.DataFrame:
+        """Читает валидные заказы 1С вместе с данными чеков.
+
+        Бизнес-сценарий:
+        лист `Заказы_поставщиков_1С` объединяет заказ и сведения о его чеке,
+        чтобы закупочная команда контролировала расчёты с поставщиками в одной
+        витрине. Отбираются только корректные документы, обновлённые с мая
+        2025 года, как в legacy-сценарии.
+        """
+
+        return Database.read_sql_to_dataframe(query_orders_1c).fillna("")
+
+    def get_wb_supplies_data(self) -> pd.DataFrame:
+        """Читает актуальные товары поставок WB за последние два месяца.
+
+        Бизнес-сценарий:
+        витрина `БД_поставки` должна содержать только последнее состояние
+        каждой пары поставка-артикул, поэтому SQL фиксирует запись через
+        `DISTINCT ON` и сортировку по времени обновления.
+        """
+
+        return Database.read_sql_to_dataframe(query_wb_supplies)
 
     def get_purchase_calculation_data(self) -> pd.DataFrame:
         """Читает базовый блок расчётного листа для merge по `wild`.
@@ -430,6 +624,109 @@ class Calculation_of_purchases_russia:
         supplies_df = supplies_df.rename(columns=supply_1c_columns_rename)
         return supplies_df[supply_1c_output_columns].copy()
 
+    def build_orders_1c_sheet_data(self) -> pd.DataFrame:
+        """Подготавливает данные для legacy-листа `Заказы_поставщиков_1С`.
+
+        Бизнес-сценарий:
+        метод сохраняет русские заголовки, исторический формат дат
+        `DD.MM.YYYY` и набор полей заказов 1С, включая реквизиты чеков,
+        чтобы существующие формулы и ручная работа в Google Sheets не
+        изменились после переноса в OOP-модуль.
+        """
+
+        orders_df = self.get_orders_1c_data()
+        orders_df = self._format_date_columns_for_google(
+            df=orders_df,
+            date_columns=[
+                "document_created_at",
+                "supply_date",
+                "update_document_datetime",
+                "created_at",
+                "expected_receipt_date",
+                "shipment_date",
+                "receipt_date",
+            ],
+        )
+        return orders_df.rename(columns=orders_1c_columns_rename)
+
+    def build_wb_supplies_sheet_data(self) -> pd.DataFrame:
+        """Подготавливает витрину WB-поставок для листа `БД_поставки`.
+
+        Бизнес-сценарий:
+        числовые статусы WB переводятся в понятные закупочной команде названия,
+        а плановая и фактическая даты приводятся к единому формату. Неизвестный
+        статус сохраняется исходным значением, чтобы не скрывать новые статусы
+        API до их явного добавления в справочник.
+        """
+
+        wb_supplies_df = self.get_wb_supplies_data()
+        if "Статус" in wb_supplies_df.columns:
+            wb_supplies_df["Статус"] = wb_supplies_df["Статус"].replace(
+                wb_supply_statuses,
+            )
+        wb_supplies_df = self._add_in_acceptance_quantity(wb_supplies_df)
+        wb_supplies_df = self._format_date_columns_for_google(
+            df=wb_supplies_df,
+            date_columns=["Плановая дата поставки", "Фактическая дата поставки"],
+        )
+        return wb_supplies_df.replace([float("inf"), float("-inf")], "").fillna("")
+
+    @staticmethod
+    def _add_in_acceptance_quantity(df: pd.DataFrame) -> pd.DataFrame:
+        """Рассчитывает количество товара, которое ещё находится в приёмке.
+
+        Бизнес-правило листа `БД_поставки` полностью повторяет формулу Google
+        Sheets: для статусов «Отгружено на воротах» и «Идёт приёмка» берётся
+        разница между добавленным количеством и поступившим в продажу; для
+        статуса «Принято» — разница между принятым и поступившим в продажу.
+        Для остальных статусов значение равно нулю.
+        """
+        required_columns = (
+            "Статус",
+            "Добавлено в поставку",
+            "Принято, шт",
+            "Поступило в продажу",
+        )
+        if any(column not in df.columns for column in required_columns):
+            logger.warning(
+                "Количество приёмки не рассчитано: в витрине отсутствует обязательная колонка | missing=%s",
+                [column for column in required_columns if column not in df.columns],
+            )
+            df["Идет приемка"] = 0
+            return df
+
+        added_quantity = pd.to_numeric(
+            df["Добавлено в поставку"],
+            errors="coerce",
+        ).fillna(0)
+        accepted_quantity = pd.to_numeric(
+            df["Принято, шт"],
+            errors="coerce",
+        ).fillna(0)
+        ready_for_sale_quantity = pd.to_numeric(
+            df["Поступило в продажу"],
+            errors="coerce",
+        ).fillna(0)
+
+        in_acceptance = pd.Series(0, index=df.index, dtype="int64")
+        active_statuses = df["Статус"].isin(
+            ["Отгружено на воротах", "Идёт приёмка"],
+        )
+        accepted_status = df["Статус"].eq("Принято")
+        in_acceptance = in_acceptance.where(
+            ~active_statuses,
+            added_quantity - ready_for_sale_quantity,
+        )
+        in_acceptance = in_acceptance.where(
+            ~accepted_status,
+            accepted_quantity - ready_for_sale_quantity,
+        )
+
+        if "Идет приемка" in df.columns:
+            df = df.drop(columns=["Идет приемка"])
+        df["Идет приемка"] = in_acceptance
+        return df
+
     def update_penalties_and_virtual_stock(self) -> pd.DataFrame:
         """Точечно обновляет колонки штрафов и виртуального склада.
 
@@ -482,10 +779,14 @@ class Calculation_of_purchases_russia:
                     sheet_title=target_sheet.sheet_title,
                 )
                 if output_values:
-                    self._update_worksheet_range_with_retry(
-                        worksheet=worksheet,
-                        range_name="A2",
+                    self._update_values_in_chunks(
                         values=output_values,
+                        update_range=lambda range_name, values: self._update_worksheet_range_with_retry(
+                            worksheet=worksheet,
+                            range_name=range_name,
+                            values=values,
+                        ),
+                        operation_name=target_sheet.table_title,
                     )
                 else:
                     logger.info(
@@ -501,10 +802,14 @@ class Calculation_of_purchases_russia:
             else:
                 connector = self.google_connect_to_supplies_1c_sheet
                 if output_values:
-                    self._update_sheet_range(
-                        connector=connector,
-                        range_name="A2",
+                    self._update_values_in_chunks(
                         values=output_values,
+                        update_range=lambda range_name, values: self._update_sheet_range(
+                            connector=connector,
+                            range_name=range_name,
+                            values=values,
+                        ),
+                        operation_name=target_sheet.table_title,
                     )
                 else:
                     logger.info(
@@ -525,3 +830,54 @@ class Calculation_of_purchases_russia:
             )
 
         return supplies_sheet_df
+
+    def update_orders_1c_sheet(self) -> pd.DataFrame:
+        """Обновляет лист `Заказы_поставщиков_1С` в legacy-совместимом виде.
+
+        Бизнес-сценарий:
+        job публикует заказы поставщикам и реквизиты чеков с заголовками в
+        строке `A2`, а в `A1` ставит время обновления. Такой формат сохраняет
+        совместимость с действующей структурой закупочной таблицы.
+        """
+
+        orders_sheet_df = self.build_orders_1c_sheet_data()
+        output_values = self._build_sheet_output(orders_sheet_df)
+        connector = self.google_connect_to_orders_1c_sheet
+
+        self._update_sheet_range(
+            connector=connector,
+            range_name="A2",
+            values=output_values,
+        )
+        self._update_sheet_range(
+            connector=connector,
+            range_name="A1",
+            values=[[self._build_updated_label()]],
+        )
+        logger.info("Лист Заказы_поставщиков_1С успешно обновлён.")
+        return orders_sheet_df
+
+    def update_wb_supplies_sheet(self) -> pd.DataFrame:
+        """Обновляет лист `БД_поставки` актуальным состоянием поставок WB.
+
+        Бизнес-сценарий:
+        job заменяет данные под служебной строкой статуса и очищает устаревшие
+        строки, если поставок стало меньше. Это предотвращает отображение
+        закрытых или больше неактуальных поставок в закупочной витрине.
+        """
+
+        wb_supplies_sheet_df = self.build_wb_supplies_sheet_data()
+        output_values = self._build_sheet_output(wb_supplies_sheet_df)
+        connector = self.google_connect_to_wb_supplies_sheet
+
+        self._replace_sheet_data_below_status(
+            connector=connector,
+            output_values=output_values,
+        )
+        self._update_sheet_range(
+            connector=connector,
+            range_name="A1",
+            values=[[self._build_updated_label()]],
+        )
+        logger.info("Лист БД_поставки успешно обновлён.")
+        return wb_supplies_sheet_df

@@ -61,4 +61,30 @@ def update_supplies_1c_in_purchase_russia() -> None:
     calc.update_supplies_1c_sheet()
 
 
+def update_orders_1c_in_purchase_russia() -> None:
+    """Обновляет лист `Заказы_поставщиков_1С` данными заказов из 1С.
+
+    Бизнес-сценарий:
+    функция запускает полный перенос заказов поставщикам и реквизитов чеков
+    из PostgreSQL в закупочную таблицу России, сохраняя legacy-формат дат,
+    пользовательские заголовки и отметку времени обновления в `A1`.
+    """
+
+    calc = Calculation_of_purchases_russia()
+    calc.update_orders_1c_sheet()
+
+
+def update_wb_supplies_in_purchase_russia() -> None:
+    """Обновляет лист `БД_поставки` текущими данными поставок WB.
+
+    Бизнес-сценарий:
+    функция выгружает актуальное состояние товаров в поставках WB за два
+    месяца, заменяет устаревшие строки в закупочной витрине и оставляет
+    пользователю отметку времени последнего обновления.
+    """
+
+    calc = Calculation_of_purchases_russia()
+    calc.update_wb_supplies_sheet()
+
+
 # python -m src_oop.jobs.calculation_of_purchases_russia.run
