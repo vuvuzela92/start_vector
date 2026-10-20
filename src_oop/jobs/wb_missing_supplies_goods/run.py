@@ -20,11 +20,12 @@ async def wb_missing_supplies_goods_async() -> None:
     tokens = load_api_tokens()
     results = await WBSuppliesGoodsService().run(tokens)
     logger.info(
-        "Сценарий первичной и повторной загрузки поставок завершён | accounts=%s | supplies=%s | supplies_saved=%s | goods_inserted=%s",
+        "Сценарий первичной и повторной загрузки поставок завершён | accounts=%s | supplies=%s | supplies_saved=%s | goods_inserted=%s | goods_updated=%s",
         len(results),
         sum(result.supplies_checked for result in results),
         sum(result.supplies_saved for result in results),
         sum(result.goods_inserted for result in results),
+        sum(result.goods_updated for result in results),
     )
 
 

@@ -40,12 +40,11 @@ class WBSuppliesGoodsService:
         ``wb_supplies_goods`` целиком, поэтому список поставок ограничивается
         только окном актуальности, а не наличием ID в локальной таблице.
         """
-        existing_goods = self.repository.fetch_existing_goods()
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_ACCOUNTS)
         timeout = aiohttp.ClientTimeout(total=60)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             tasks = [
-                self._run_account(session, account, token, existing_goods, semaphore)
+                self._run_account(session, account, token, semaphore)
                 for account, token in tokens.items()
             ]
             return await asyncio.gather(*tasks)
@@ -55,7 +54,6 @@ class WBSuppliesGoodsService:
         session: aiohttp.ClientSession,
         account: str,
         token: str,
-        existing_goods: dict[int, set[str]],
         semaphore: asyncio.Semaphore,
     ) -> AccountResult:
         """Обрабатывает один ЛК; ошибка одного ЛК не прерывает остальные."""
@@ -90,32 +88,36 @@ class WBSuppliesGoodsService:
                         )
                 supplies_saved = self.repository.insert_supplies(supply_details)
                 inserted = 0
+                updated = 0
                 for index, supply_id in enumerate(supply_ids):
                     goods = await self.client.fetch_supply_goods(session, token, supply_id)
-                    # Для новой поставки множество пустое, поэтому загрузятся
-                    # все товары; для известной — только отсутствующие vendorCode.
-                    known = existing_goods.get(supply_id, set())
-                    missing = [
-                        row for row in goods if str(row.get("vendorCode")) not in known
-                    ]
-                    inserted += self.repository.insert_missing_goods(missing)
+                    goods_inserted, goods_updated = self.repository.upsert_goods(goods)
+                    inserted += goods_inserted
+                    updated += goods_updated
                     if index + 1 < len(supply_ids):
                         await asyncio.sleep(REQUEST_DELAY_SECONDS)
                 logger.info(
-                    "Обработка товаров поставок завершена | account=%s | supplies=%s | supplies_saved=%s | goods_inserted=%s",
+                    "Обработка товаров поставок завершена | account=%s | supplies=%s | supplies_saved=%s | goods_inserted=%s | goods_updated=%s",
                     account,
                     len(supply_ids),
                     supplies_saved,
                     inserted,
+                    updated,
                 )
-                return AccountResult(account, len(supply_ids), supplies_saved, inserted)
+                return AccountResult(
+                    account,
+                    len(supply_ids),
+                    supplies_saved,
+                    inserted,
+                    updated,
+                )
             except Exception as error:
                 logger.error(
                     "Обработка товаров поставок прервана для ЛК; другие ЛК продолжат работу | account=%s | error_type=%s",
                     account,
                     type(error).__name__,
                 )
-                return AccountResult(account, 0, 0, 0)
+                return AccountResult(account, 0, 0, 0, 0)
 
     @staticmethod
     def _is_recent_supply(row: dict[str, Any], threshold: datetime) -> bool:

@@ -22,3 +22,4 @@ class AccountResult:
     supplies_checked: int
     supplies_saved: int
     goods_inserted: int
+    goods_updated: int

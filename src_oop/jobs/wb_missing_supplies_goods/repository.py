@@ -80,12 +80,13 @@ class WBSuppliesRepository:
                 grouped.setdefault(int(supply_id), set()).add(str(vendor_code))
         return grouped
 
-    def insert_missing_goods(self, records: list[dict[str, Any]]) -> int:
-        """Добавляет валидные товары пакетно и возвращает число переданных строк.
+    def upsert_goods(self, records: list[dict[str, Any]]) -> tuple[int, int]:
+        """Сохраняет новые snapshots товаров поставок идемпотентно.
 
-        Бизнес-правило: первичная загрузка новой поставки и повторная
-        дозагрузка используют один идемпотентный INSERT, поэтому повтор job не
-        создаёт дубликаты в ``wb_supplies_goods``.
+        Бизнес-правило: таблица ``wb_supplies_goods`` хранит историю состояний,
+        поэтому изменение количеств записывается новой комбинацией ключа, а
+        старый snapshot не изменяется. Отсутствующие в свежем ответе WB товары
+        не удаляются из БД.
         """
         normalized = []
         for record in records:
@@ -97,9 +98,11 @@ class WBSuppliesRepository:
             if row.get("id") is not None and row.get("vendor_code") is not None:
                 normalized.append(row)
         if not normalized:
-            return 0
+            return 0, 0
 
-        statement = insert(self.goods_table).values(normalized).on_conflict_do_nothing()
+        inserted = 0
         with self.engine.begin() as connection:
-            connection.execute(statement)
-        return len(normalized)
+            statement = insert(self.goods_table).values(normalized).on_conflict_do_nothing()
+            result = connection.execute(statement)
+            inserted = result.rowcount or 0
+        return inserted, 0
