@@ -62,6 +62,69 @@ class AutopilotRepository:
         logger.info("Соответствие артикулов и кабинетов WB загружено из БД: rows=%s", len(result))
         return result
 
+    def fetch_latest_payment_types(self, articles: list[int]) -> dict[int, str]:
+        """
+        Возвращает актуальный тип оплаты рекламы по артикулам из advert_campaigns_info.
+
+        Бизнес-логика:
+        для каждого артикула ПУ выбирается одна рекламная кампания с максимальной
+        датой создания, а при одинаковой дате — с максимальным campaign_id.
+        Кампании без payment_type пропускаются, чтобы не затирать существующее
+        значение в фиксированном поле AS пустой или технической заглушкой.
+        """
+        if not articles:
+            return {}
+
+        params = {
+            f"article_{index}": article_id
+            for index, article_id in enumerate(sorted(set(articles)))
+        }
+        placeholders = ", ".join(f":{name}" for name in params)
+        dataframe = self.database_cls.read_sql_to_dataframe(
+            text(
+                f"""
+                WITH ranked_campaigns AS (
+                    SELECT
+                        nm_id,
+                        payment_type,
+                        created_at_campaign,
+                        campaign_id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY nm_id
+                            ORDER BY created_at_campaign DESC NULLS LAST,
+                                     campaign_id DESC
+                        ) AS row_number
+                    FROM advert_campaigns_info
+                    WHERE nm_id IN ({placeholders})
+                        AND payment_type IS NOT NULL
+                        AND payment_type <> ''
+                )
+                SELECT nm_id, payment_type
+                FROM ranked_campaigns
+                WHERE row_number = 1
+                """
+            ),
+            params=params,
+        )
+        result: dict[int, str] = {}
+        for row in dataframe.to_dict(orient="records"):
+            try:
+                article_id = int(row["nm_id"])
+                payment_type = str(row["payment_type"]).strip()
+            except (KeyError, TypeError, ValueError):
+                continue
+            if payment_type:
+                result[article_id] = payment_type
+
+        logger.info(
+            "Типы оплаты рекламы загружены из advert_campaigns_info: "
+            "articles_requested=%s articles_found=%s articles_missing=%s",
+            len(set(articles)),
+            len(result),
+            len(set(articles)) - len(result),
+        )
+        return result
+
     def fetch_today_orders_sum(
         self,
         report_date: date,

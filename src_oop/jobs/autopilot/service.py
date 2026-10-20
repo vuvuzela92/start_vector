@@ -210,6 +210,16 @@ class AutopilotHourlyService:
                 type(error).__name__,
             )
 
+        payment_types: MetricValues = {}
+        try:
+            payment_types = self.repository.fetch_latest_payment_types(articles)
+        except Exception as error:
+            logger.warning(
+                "Типы оплаты рекламы недоступны; поле AS пропущено, "
+                "остальные метрики продолжаются: error_type=%s",
+                type(error).__name__,
+            )
+
         unit_remains: MetricValues = {}
         unit_wb_discount: MetricValues = {}
         try:
@@ -231,8 +241,10 @@ class AutopilotHourlyService:
         remaining_metrics["adv_spend"] = adv_spend
         remaining_metrics["unit_free_stock"] = unit_remains
         remaining_metrics["spp"] = unit_wb_discount
+        remaining_metrics["payment_type"] = payment_types
         logger.info("Свободные остатки UNIT подготовлены для почасовой записи в ПУ: rows=%s", len(unit_remains))
         logger.info("Фактическая скидка WB из UNIT подготовлена для почасовой записи в ПУ: rows=%s", len(unit_wb_discount))
+        logger.info("Типы оплаты рекламы подготовлены для записи в AS: rows=%s", len(payment_types))
         remaining_metrics.update(calculation_metrics)
         remaining_metrics.update(advert_metrics)
         remaining_metrics["organic"] = organic

@@ -56,7 +56,7 @@ UNIT_WB_DISCOUNT_HEADER = "Скидка ВБ факт"
 UNIT_MARGIN_COLUMN_NAME = "Мар"
 
 # Часть метрик является текущим снимком, а не дневным рядом, поэтому пишется в базовую колонку без смещения.
-METRICS_WITHOUT_DATE_OFFSET = {"unit_free_stock"}
+METRICS_WITHOUT_DATE_OFFSET = {"unit_free_stock", "payment_type"}
 
 # Метрики ПУ пишутся в фиксированные колонки. Значение смещается на AUTOPILOT_DATE_COLUMN_OFFSET.
 METRIC_TO_BASE_COLUMN: dict[str, str] = {
@@ -84,4 +84,5 @@ METRIC_TO_BASE_COLUMN: dict[str, str] = {
     "organic": "II",
     "unit_free_stock": "DU",
     "discounted_price": "CK",
+    "payment_type": "AS",
 }
