@@ -454,12 +454,30 @@ def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> Non
     проверяет дубли и подготавливает batch запись в PostgreSQL. Перед upsert
     дополнительно выполняет защитную диагностику integer-диапазонов, чтобы
     заранее ловить переполнения схемы и логировать проблемные строки.
+    Параметры задают включительный диапазон завершённых дней относительно
+    `CURRENT_DATE`; допустимы значения `days_ago_total >= days_to >= 1`.
+    При некорректных границах функция выбрасывает `ValueError` до обращения
+    к PostgreSQL.
     """
+    if (
+        not isinstance(days_ago_total, int)
+        or isinstance(days_ago_total, bool)
+        or not isinstance(days_to, int)
+        or isinstance(days_to, bool)
+    ):
+        raise ValueError("Границы периода должны быть целыми числами")
+    if days_to < 1 or days_ago_total < days_to:
+        raise ValueError(
+            "Некорректный период: нужно, чтобы days_ago_total >= days_to >= 1"
+        )
+
+    total_days = days_ago_total - days_to + 1
     current_stage = "initialization"
     logger.info(
-        "Запущена задача orders_article_analyze_run | days_ago_total=%s | days_to=%s",
+        "Запущена задача orders_article_analyze_run | days_ago_total=%s | days_to=%s | total_days=%s",
         days_ago_total,
         days_to,
+        total_days,
     )
 
     try:
@@ -488,10 +506,12 @@ def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> Non
             )
             df = processor.build_dataset(days_ago=day, days_to=day)
             logger.info(
-                "DataFrame для дня собран | day=%s | rows=%s | columns=%s",
+                "DataFrame для дня собран | day=%s | rows=%s | columns=%s | min_date=%s | max_date=%s",
                 day,
                 len(df.index),
                 list(df.columns),
+                df["date"].min() if "date" in df.columns and not df.empty else None,
+                df["date"].max() if "date" in df.columns and not df.empty else None,
             )
 
             if df.empty:

@@ -314,7 +314,30 @@ advert_spend
 обеспечивать корректную загрузку в таблицу с уникальным ключом;
 быстрее обнаруживать ошибки в SQL-агрегации.
 Пример запуска
-orders_article_analyze_run(days_ago=30, days_to=1)
+По умолчанию обрабатываются два последних завершённых дня:
+
+```bash
+python main.py orders_article_analyze_run
+```
+
+Для разового выбора периода доступны параметры CLI:
+
+```bash
+# Последние 10 завершённых дней, включая вчера
+python main.py orders_article_analyze_run --days 10
+
+# Период от 10 до 5 дней назад включительно
+python main.py orders_article_analyze_run --days-ago 10 --days-to 5
+
+# Один день, который был 5 дней назад
+python main.py orders_article_analyze_run --days-ago 5 --days-to 5
+```
+
+Внутренний вызов функции выглядит так:
+
+```python
+orders_article_analyze_run(days_ago_total=2, days_to=1)
+```
 Используемые зависимости
 Для работы джобы используются:
 

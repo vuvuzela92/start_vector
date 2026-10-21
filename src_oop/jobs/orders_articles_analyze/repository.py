@@ -12,10 +12,6 @@ logger = logging.getLogger(__name__)
 class ArticleAnalyzeRepository:
     """Содержит SQL-запросы для формирования артикульного анализа."""
 
-    def __init__(self, days_ago: int = 2, days_to: int = 1):
-        self.days_ago = days_ago
-        self.days_to = days_to
-
     @staticmethod
     def _safe_preview(
         df: pd.DataFrame,
@@ -147,7 +143,15 @@ class ArticleAnalyzeRepository:
         )
 
     def get_general_stat(self, days_ago: int, days_to: int) -> pd.DataFrame:
-        """Возвращает общую статистику по артикулам за указанный период."""
+        """Возвращает общую статистику по артикулам за указанный период.
+
+        Сумма и количество заказов в витрине должны приходить из одной строки
+        funnel_daily: orders_sum и order_count. Это сохраняет согласованность
+        суммы, количества и средней цены в историческом дневном блоке. Данные
+        wb_order_feed по-прежнему используются для дополнительных метрик, где
+        они предусмотрены текущим запросом, но не подменяют историческое
+        количество заказов.
+        """
         logger.info(
             "Начато выполнение запроса общей статистики | method=get_general_stat | days_ago=%s | days_to=%s",
             days_ago,
@@ -194,11 +198,11 @@ class ArticleAnalyzeRepository:
                 cd.subject_name,
                 COALESCE(wbf.avg_price, o.avg_price, pd.avg_price, 0) AS price_with_disc,
                 ord.spp,
-                COALESCE(wbf.orders_sum_rub, o.orders_sum, 0) AS orders_sum_rub,
-                COALESCE(wbf.orders_count, o.order_count, 0) AS orders_count,
+                COALESCE(o.orders_sum, 0) AS orders_sum_rub,
+                COALESCE(o.order_count, 0) AS orders_count,
                 COALESCE(anpd.profit_by_orders, 0) AS profit_by_orders,
 
-                COALESCE(wbf.orders_count, o.order_count, 0) * (
+                COALESCE(o.order_count, 0) * (
                     COALESCE(wbf.avg_price, o.avg_price, pd.avg_price, 0) - (
                         (COALESCE(wbf.avg_price, o.avg_price, pd.avg_price, 0) / 100.0 * (8 + 3 +
                             CASE
@@ -227,7 +231,7 @@ class ArticleAnalyzeRepository:
                 COALESCE(o.open_count, 0) AS open_card_count,
                 COALESCE(o.cart_count, 0) AS add_to_cart_count,
                 ROUND(COALESCE(o.cart_count, 0) / NULLIF(o.open_count::NUMERIC, 0), 2) * 100 AS to_cart_convers,
-                ROUND(COALESCE(wbf.orders_count, o.order_count, 0) / NULLIF(o.cart_count::NUMERIC, 0), 2) * 100 AS to_orders_convers,
+                ROUND(COALESCE(o.order_count, 0) / NULLIF(o.cart_count::NUMERIC, 0), 2) * 100 AS to_orders_convers,
                 pami.manager, pami.promo_title, pami.promo_status,
                 itr.central, itr.south, itr.privolzhskiy, itr.north_caucase,
                 COALESCE(itr.total_quantity, ws.quantity) AS total_quantity,
