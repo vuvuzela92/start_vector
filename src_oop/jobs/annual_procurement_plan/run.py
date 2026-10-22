@@ -166,7 +166,8 @@ def _append_quarterly_white_plan_cost(
     Вспомогательная функция защищает бизнес-сценарий, где закупщик хочет видеть
     в листе ``Поквартально`` ориентир по себестоимости для каждого `wild`.
     Если один и тот же `wild` встречается в белых заказах несколько раз,
-    используется последнее положительное значение из текущего снимка листа.
+    используется последнее положительное значение из текущего снимка листа,
+    кроме строк со статусом ``в планах``.
     Перед записью себестоимость очищается от валютных префиксов и лишних
     символов, чтобы Google Sheets воспринимал результат как число, а не как
     текст вроде ``р.428,10``. При отсутствии данных в источнике ранее
@@ -174,13 +175,20 @@ def _append_quarterly_white_plan_cost(
     """
     df_result = df_quarterly.copy()
 
-    if df_white_orders.empty or source_column_name not in df_white_orders.columns:
+    status_column_name = "Статус"
+    required_columns = {"wild", source_column_name, status_column_name}
+    if (
+        df_white_orders.empty
+        or not required_columns.issubset(df_white_orders.columns)
+    ):
         if target_column_name not in df_result.columns:
             df_result[target_column_name] = ""
         return df_result
 
     prepared_quarterly = df_result.copy()
-    prepared_white_orders = df_white_orders[["wild", source_column_name]].copy()
+    prepared_white_orders = df_white_orders[
+        ["wild", source_column_name, status_column_name]
+    ].copy()
 
     prepared_quarterly["_merge_wild"] = (
         prepared_quarterly["wild"].fillna("").astype(str).str.strip()
@@ -191,9 +199,17 @@ def _append_quarterly_white_plan_cost(
     prepared_white_orders["_clean_cost_value"] = (
         prepared_white_orders[source_column_name].apply(clean_currency_value)
     )
+    prepared_white_orders["_normalized_status"] = (
+        prepared_white_orders[status_column_name]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.casefold()
+    )
     prepared_white_orders = prepared_white_orders.loc[
         (prepared_white_orders["_merge_wild"] != "")
         & (prepared_white_orders["_clean_cost_value"] > 0)
+        & (prepared_white_orders["_normalized_status"] != "в планах")
     ]
     prepared_white_orders = prepared_white_orders[
         ["_merge_wild", "_clean_cost_value"]
