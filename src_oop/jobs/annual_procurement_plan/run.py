@@ -293,7 +293,7 @@ def transport_parfume_data_to_annual_procurement_plan():
 
 
 def update_quarterly_prices_to_annual_procurement_plan() -> None:
-    """Обновляет ценовые колонки листа ``Поквартально`` по ключу `wild`.
+    """Обновляет цены и дни без остатков в годовом плане закупа.
 
     Сценарий читает квартальный план из таблицы ``Годовой план закупа 2026``,
     находит для каждой строки с `wild` самую свежую `Цена WB` из БД и
@@ -301,7 +301,10 @@ def update_quarterly_prices_to_annual_procurement_plan() -> None:
     ``Себестоимость 1 шт. в руб ПЛАН``, а затем точечно записывает значения в
     колонки ``цена продажная плановая`` и ``себестоимость 2025-2026``. Если по
     товару нет данных в источнике, существующее, в том числе ручное, значение
-    в квартальном плане сохраняется без изменений.
+    в квартальном плане сохраняется без изменений. Затем тот же запуск
+    выгружает агрегированные дни с остатком и без остатка во вкладку
+    ``Дней с остатком``.
+    Пустой результат второй выгрузки не очищает уже заполненную вкладку.
     """
     plan = AnnualProcurementPlan()
     df_quarterly = plan.get_quarterly_plan_data()
@@ -345,4 +348,22 @@ def update_quarterly_prices_to_annual_procurement_plan() -> None:
         len(df_quarterly.index),
         plan.quarter_price_column,
         plan.quarter_cost_column,
+    )
+
+    days_without_stocks = plan.get_days_without_stocks_data()
+
+    if days_without_stocks.empty:
+        logger.warning(
+            "Выгрузка дней без остатков пропущена: запрос не вернул данных."
+        )
+        return
+
+    plan.set_data(
+        plan.annual_plan_connect_to_days_without_stocks_sheet,
+        days_without_stocks,
+    )
+    logger.info(
+        "Выгрузка дней без остатков завершена | rows=%s | sheet=%s",
+        len(days_without_stocks.index),
+        "Дней с остатком",
     )

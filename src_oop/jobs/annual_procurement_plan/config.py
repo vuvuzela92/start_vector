@@ -20,11 +20,27 @@ delivery_calculation_china = {
 annual_procurement_plan = {
                         "title": "Годовой план закупа 2026",
                         "orders_sheet": "БД_ЗАКАЗЫ",
+                        "days_without_stocks_sheet": "Дней с остатком",
                         "quarter_sheet": "Поквартально",
                         "unit_sheet": "Данные_Юнитки",
                         "supply_sheet": "Данные_Поставки",
                         "parfume_sheet": "Данные_Парфюм"
                             }
+
+days_without_stocks_query = text("""
+    SELECT
+        TO_CHAR(s."date", 'YYYY-MM') AS month,
+        s.wild,
+        COUNT(*) FILTER (WHERE s.is_active IS FALSE) AS days_without_stocks,
+        COUNT(*) FILTER (WHERE s.is_active IS TRUE) AS days_with_stocks
+    FROM sales_wild_status_daily AS s
+    GROUP BY
+        TO_CHAR(s."date", 'YYYY-MM'),
+        s.wild
+    ORDER BY
+        month,
+        s.wild
+""")
 
 unit_gs = {
     "title": "UNIT 2.0 (tested)",

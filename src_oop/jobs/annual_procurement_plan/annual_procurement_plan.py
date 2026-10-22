@@ -8,6 +8,7 @@ from src_oop.jobs.annual_procurement_plan.config import (
     parfume_query,
     seller_price_query,
     purchase_price_query,
+    days_without_stocks_query,
 )
 from src_oop.core.database import Database
 # Импортируем внешние библиотеки
@@ -40,9 +41,13 @@ class AnnualProcurementPlan:
         self._unit_sheet = annual_procurement_plan.get("unit_sheet")
         self._supply_sheet = annual_procurement_plan.get("supply_sheet")
         self._parfume_sheet = annual_procurement_plan.get("parfume_sheet")
+        self._days_without_stocks_sheet = annual_procurement_plan.get(
+            "days_without_stocks_sheet"
+        )
         self._quarter_sheet = annual_procurement_plan.get("quarter_sheet")
         self._conn_to = None
         self._conn_quarter = None
+        self._conn_days_without_stocks = None
 
         # Настройки для юнитки
         self._table_unit = unit_gs.get("title")
@@ -126,6 +131,22 @@ class AnnualProcurementPlan:
         return self._conn_quarter
 
     @property
+    def annual_plan_connect_to_days_without_stocks_sheet(self):
+        """Возвращает подключение к витрине дней без остатков.
+
+        Свойство обслуживает регламентную выгрузку агрегированных данных из
+        `sales_wild_status_daily` в отдельную вкладку годового плана закупа.
+        Подключение создается лениво, чтобы остальные сценарии годового плана
+        не открывали этот лист без необходимости.
+        """
+        if self._conn_days_without_stocks is None:
+            self._conn_days_without_stocks = GoogleTabs(
+                self._table_to_name,
+                self._days_without_stocks_sheet,
+            )
+        return self._conn_days_without_stocks
+
+    @property
     def annual_plan_connect_to_parfume_sheet(self):
         """Ленивое подключение к листу с данными парфюма в таблице Годовой план закупа 2026"""
         if self._conn_to is None:
@@ -163,6 +184,16 @@ class AnnualProcurementPlan:
         data = self.annual_plan_connect_to_quarter_sheet.get_all_values_with_retry()
         df = pd.DataFrame(data[4:], columns=data[3])
         return df
+
+    def get_days_without_stocks_data(self):
+        """Получает число дней без остатков по месяцу и `wild`.
+
+        Метод обслуживает вкладку ``Дней с остатком`` и считает отдельно
+        дневные записи, где `sales_wild_status_daily.is_active` равно `FALSE`
+        и `TRUE`. Результат уже сгруппирован в PostgreSQL по месяцу и товару
+        и отсортирован для стабильной выгрузки в Google Sheets.
+        """
+        return Database.read_sql_to_dataframe(days_without_stocks_query)
 
     def get_supplies_data(self):
         """Получает данные поставок для блока фактических приходов годового плана.
