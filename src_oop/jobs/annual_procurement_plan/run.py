@@ -303,7 +303,9 @@ def update_quarterly_prices_to_annual_procurement_plan() -> None:
     товару нет данных в источнике, существующее, в том числе ручное, значение
     в квартальном плане сохраняется без изменений. Затем тот же запуск
     выгружает агрегированные дни с остатком и без остатка во вкладку
-    ``Дней с остатком``.
+    ``Дней с остатком`` и актуальную цену в колонку ``цена продажная плановая``
+    листа ``Заказы белые ТЕСТ``. При отсутствии цены ручное значение в белых
+    заказах также сохраняется.
     Пустой результат второй выгрузки не очищает уже заполненную вкладку.
     """
     plan = AnnualProcurementPlan()
@@ -348,6 +350,22 @@ def update_quarterly_prices_to_annual_procurement_plan() -> None:
         len(df_quarterly.index),
         plan.quarter_price_column,
         plan.quarter_cost_column,
+    )
+
+    white_orders_with_price = _append_quarterly_seller_price(
+        df_quarterly=df_white_orders,
+        df_seller_price=df_seller_price,
+        target_column_name="цена продажная плановая",
+    )
+    plan.google_connect_white.update_column_by_name_at_header_row(
+        column_name="цена продажная плановая",
+        data_to_write=white_orders_with_price["цена продажная плановая"].tolist(),
+        header_row_number=4,
+        data_start_row_number=5,
+    )
+    logger.info(
+        "Цена продажная плановая обновлена в белых заказах | rows=%s",
+        len(white_orders_with_price.index),
     )
 
     days_without_stocks = plan.get_days_without_stocks_data()
