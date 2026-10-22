@@ -166,7 +166,7 @@ def _append_quarterly_white_plan_cost(
     Вспомогательная функция защищает бизнес-сценарий, где закупщик хочет видеть
     в листе ``Поквартально`` ориентир по себестоимости для каждого `wild`.
     Если один и тот же `wild` встречается в белых заказах несколько раз,
-    используется последнее непустое значение из текущего снимка листа.
+    используется последнее положительное значение из текущего снимка листа.
     Перед записью себестоимость очищается от валютных префиксов и лишних
     символов, чтобы Google Sheets воспринимал результат как число, а не как
     текст вроде ``р.428,10``. При отсутствии данных в источнике ранее
@@ -193,7 +193,7 @@ def _append_quarterly_white_plan_cost(
     )
     prepared_white_orders = prepared_white_orders.loc[
         (prepared_white_orders["_merge_wild"] != "")
-        & (prepared_white_orders["_clean_cost_value"].notna())
+        & (prepared_white_orders["_clean_cost_value"] > 0)
     ]
     prepared_white_orders = prepared_white_orders[
         ["_merge_wild", "_clean_cost_value"]
