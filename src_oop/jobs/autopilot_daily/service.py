@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib
 import logging
-from datetime import datetime
+from datetime import date, datetime, timedelta
+from math import isfinite
+from zoneinfo import ZoneInfo
 
 import gspread
 import pandas as pd
@@ -23,6 +25,7 @@ from src_oop.jobs.autopilot_daily.models import AutopilotDailySummary
 from src_oop.jobs.autopilot_daily.repository import AutopilotDailyRepository
 from src_oop.jobs.autopilot_daily.sheets_writer import AutopilotDailySheetsWriter
 from src_oop.jobs.autopilot_daily.unit_updates import AutopilotDailyUnitUpdater
+from src_oop.jobs.autopilot.monitoring_snapshot import MonitoringSnapshotWriter
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +58,19 @@ class AutopilotDailyService:
         """
         summary = AutopilotDailySummary()
         logger.info("Запущен дневной сценарий обновления автопилота.")
+        report_date = datetime.now(ZoneInfo("Europe/Moscow")).date()
+        monitoring_writer = MonitoringSnapshotWriter()
+        try:
+            delivery = monitoring_writer.publish_pending()
+            summary.monitoring_synced = delivery.synced
+        except Exception as error:
+            logger.warning(
+                "Начальная доставка мониторинга недоступна; дневной сценарий продолжается: "
+                "error_type=%s",
+                type(error).__name__,
+            )
 
-        current_metrics = self.repository.fetch_current_metrics()
+        current_metrics = self.repository.fetch_current_metrics(report_date)
         history_metrics = self.repository.fetch_history_metrics()
         growth_metrics = self.repository.fetch_sales_growth_metrics()
         summary.current_rows = len(current_metrics.index)
@@ -70,6 +84,13 @@ class AutopilotDailyService:
         writer.apply_percentage_format()
         articles = writer.read_articles()
         summary.articles_total = len(articles)
+        self._save_daily_monitoring_snapshots(
+            monitoring_writer,
+            current_metrics,
+            articles,
+            report_date,
+            summary,
+        )
 
         self._write_current_metrics(
             writer,
@@ -98,12 +119,138 @@ class AutopilotDailyService:
 
         summary.finished_at = datetime.now()
         logger.info(
-            "Дневной сценарий обновления автопилота завершен: articles=%s metrics_written=%s metrics_failed=%s",
+            "Дневной сценарий обновления автопилота завершен: articles=%s "
+            "metrics_written=%s metrics_failed=%s monitoring_saved=%s "
+            "monitoring_existing=%s monitoring_failed=%s monitoring_synced=%s",
             summary.articles_total,
             summary.metrics_written,
             summary.metrics_failed,
+            summary.monitoring_saved,
+            summary.monitoring_existing,
+            summary.monitoring_failed,
+            summary.monitoring_synced,
         )
         return summary
+
+    def _save_daily_monitoring_snapshots(
+        self,
+        monitoring_writer: MonitoringSnapshotWriter,
+        current_metrics: pd.DataFrame,
+        articles: list[int],
+        report_date: date,
+        summary: AutopilotDailySummary,
+    ) -> None:
+        """Сохраняет 24-й час за шесть завершённых дней из дневного источника.
+
+        Бизнес-логика:
+        `autopilot_daily_run` завершает сутки итогом из
+        `orders_articles_analyze`. В расчёт попадают только артикулы текущего
+        ПУ, дубли даты и артикула блокируют конкретный день, а успешный архивный
+        итог не перезаписывается. Ошибка одной даты не отменяет остальные дни.
+        """
+        required_columns = {
+            "date",
+            "article_id",
+            "orders_sum_rub",
+            "orders_count",
+            "adv_spend",
+            "profit_by_cond_orders",
+        }
+        if not required_columns.issubset(current_metrics.columns):
+            logger.warning(
+                "Дневной источник не содержит все поля для 24-го часа; "
+                "мониторинг пропущен, ПУ продолжается."
+            )
+            summary.monitoring_failed += 6
+            return
+
+        articles_set = set(articles)
+        metrics = current_metrics[current_metrics["article_id"].isin(articles_set)].copy()
+        source_articles = set(current_metrics["article_id"].dropna().tolist())
+        logger.info(
+            "Подготовлены данные для 24-го часа: articles=%s matched=%s missing=%s",
+            len(articles_set),
+            len(source_articles & articles_set),
+            len(articles_set - source_articles),
+        )
+        metrics["_report_date"] = pd.to_datetime(metrics["date"], errors="coerce").dt.date
+        for offset in range(1, 7):
+            target_date = report_date - timedelta(days=offset)
+            daily = metrics[metrics["_report_date"] == target_date]
+            if daily.empty:
+                logger.warning(
+                    "Нет данных дневного источника для 24-го часа; "
+                    "дата ожидает восстановления | date=%s",
+                    target_date,
+                )
+                continue
+            if daily.duplicated(subset=["_report_date", "article_id"]).any():
+                logger.warning(
+                    "В дневном источнике найдены дубли даты и артикула; "
+                    "24-й час не сохранён | date=%s",
+                    target_date,
+                )
+                summary.monitoring_failed += 1
+                continue
+            try:
+                totals = {
+                    column: self._sum_daily_metric(daily[column])
+                    for column in (
+                        "orders_sum_rub",
+                        "orders_count",
+                        "adv_spend",
+                        "profit_by_cond_orders",
+                    )
+                }
+                saved = monitoring_writer.upsert_daily_snapshot(
+                    report_date=target_date,
+                    orders_sum=totals["orders_sum_rub"],
+                    orders_count=int(totals["orders_count"]),
+                    adv_spend=totals["adv_spend"],
+                    profit_by_cond_orders=totals["profit_by_cond_orders"],
+                )
+                if saved:
+                    summary.monitoring_saved += 1
+                else:
+                    summary.monitoring_existing += 1
+            except (TypeError, ValueError, ArithmeticError) as error:
+                summary.monitoring_failed += 1
+                logger.warning(
+                    "Дневные данные не прошли проверку для 24-го часа; "
+                    "дата ожидает восстановления: date=%s error_type=%s",
+                    target_date,
+                    type(error).__name__,
+                )
+            except Exception as error:
+                summary.monitoring_failed += 1
+                logger.error(
+                    "Не удалось сохранить 24-й час; остальные даты и ПУ продолжаются: "
+                    "date=%s error_type=%s",
+                    target_date,
+                    type(error).__name__,
+                )
+
+        try:
+            delivery = monitoring_writer.publish_pending()
+            summary.monitoring_synced += delivery.synced
+        except Exception as error:
+            logger.warning(
+                "Доставка дневных срезов мониторинга недоступна; архив ожидает публикации: "
+                "error_type=%s",
+                type(error).__name__,
+            )
+
+    @staticmethod
+    def _sum_daily_metric(values: pd.Series) -> float:
+        """Проверяет и суммирует один столбец дневного итога мониторинга."""
+        numbers = pd.to_numeric(values, errors="coerce")
+        if numbers.isna().any() or not numbers.map(isfinite).all():
+            raise ValueError("Дневная метрика содержит пропуск или некорректное число.")
+        if values.name == "orders_count" and not numbers.map(
+            lambda value: float(value).is_integer()
+        ).all():
+            raise ValueError("Количество заказов должно быть целым числом.")
+        return float(numbers.sum())
 
     def _write_current_metrics(
         self,

@@ -359,6 +359,9 @@ class AutopilotHourlyService:
         if report_date != captured_at.date() or collection_started.date() != captured_at.date():
             logger.warning("Мониторинг пропущен: историческая дата или сбор через полночь; ПУ продолжается.")
             return "skipped_date"
+        if captured_at.hour == 0:
+            logger.info("Мониторинг: час 00:00 пропущен; первый час суток начинается с 01:00.")
+            return "skipped_hour"
         valid = (
             bool(articles)
             and set(orders_count) == set(orders_sum) == set(profit_by_cond_orders)

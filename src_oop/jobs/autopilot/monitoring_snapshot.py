@@ -4,7 +4,7 @@ import argparse
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -35,7 +35,7 @@ class MonitoringPublishResult:
 
 
 class MonitoringSnapshotWriter:
-    """Архивирует первый успешный срез часа и доставляет архив в Google Sheets."""
+    """Архивирует часы 1–23 и дневной итог 24-го часа для Google Sheets."""
 
     _MOSCOW_TIMEZONE = ZoneInfo("Europe/Moscow")
     _DATABASE_TABLE = "autopilot_hourly_snapshots"
@@ -78,9 +78,91 @@ class MonitoringSnapshotWriter:
         snapshot_at = snapshot_at.astimezone(self._MOSCOW_TIMEZONE)
         if orders_count < 0 or int(orders_count) != orders_count:
             raise ValueError("Количество заказов должно быть целым неотрицательным.")
+        saved = self._upsert_by_key(
+            snapshot_date=snapshot_at.date(),
+            snapshot_hour=snapshot_at.hour,
+            snapshot_at=snapshot_at,
+            orders_sum=orders_sum,
+            orders_count=orders_count,
+            adv_spend=adv_spend,
+            profit_by_cond_orders=profit_by_cond_orders,
+        )
+        logger.info(
+            "Мониторинг: %s | date=%s hour=%s snapshot_at=%s",
+            "срез сохранён, ожидает публикации" if saved else "первый успешный срез уже сохранён",
+            snapshot_at.date(),
+            snapshot_at.hour,
+            snapshot_at.isoformat(),
+        )
+        # Ошибка разметки пропусков не отменяет сохранение достоверного среза.
+        try:
+            self._mark_missing_hours(snapshot_at)
+        except Exception as error:
+            logger.warning(
+                "Не удалось отметить пропуски мониторинга; срез сохранён, сценарий продолжается: "
+                "error_type=%s",
+                type(error).__name__,
+            )
+        return saved
+
+    def upsert_daily_snapshot(
+        self,
+        report_date: date,
+        orders_sum: float,
+        orders_count: int,
+        adv_spend: float,
+        profit_by_cond_orders: float,
+        snapshot_at: datetime | None = None,
+    ) -> bool:
+        """Сохраняет итог завершённых суток как 24-й час мониторинга.
+
+        `report_date` является логической датой данных, а `snapshot_at` хранит
+        фактическое время их получения на следующий день. Успешный итог не
+        перезаписывается; запись unavailable может быть заменена полным итогом.
+        """
+        snapshot_at = snapshot_at or datetime.now(self._MOSCOW_TIMEZONE)
+        if snapshot_at.tzinfo is None:
+            raise ValueError("Для дневного среза требуется время с часовым поясом.")
+        snapshot_at = snapshot_at.astimezone(self._MOSCOW_TIMEZONE)
+        if snapshot_at.date() < report_date:
+            raise ValueError("Время получения дневного среза не может быть раньше даты отчёта.")
+        if orders_count < 0 or int(orders_count) != orders_count:
+            raise ValueError("Количество заказов должно быть целым неотрицательным.")
+        saved = self._upsert_by_key(
+            snapshot_date=report_date,
+            snapshot_hour=24,
+            snapshot_at=snapshot_at,
+            orders_sum=orders_sum,
+            orders_count=orders_count,
+            adv_spend=adv_spend,
+            profit_by_cond_orders=profit_by_cond_orders,
+        )
+        logger.info(
+            "Мониторинг: итог 24-го часа %s | date=%s snapshot_at=%s",
+            "сохранён, ожидает публикации" if saved else "уже сохранён",
+            report_date,
+            snapshot_at.isoformat(),
+        )
+        return saved
+
+    def _upsert_by_key(
+        self,
+        snapshot_date: date,
+        snapshot_hour: int,
+        snapshot_at: datetime,
+        orders_sum: float,
+        orders_count: int,
+        adv_spend: float,
+        profit_by_cond_orders: float,
+    ) -> bool:
+        """Атомарно сохраняет срез по явному ключу даты и часа.
+
+        Общий путь защищает правило первого успешного среза и используется как
+        для hourly-часов, так и для дневного 24-го часа.
+        """
         params = {
-            "snapshot_date": snapshot_at.date(),
-            "snapshot_hour": snapshot_at.hour,
+            "snapshot_date": snapshot_date,
+            "snapshot_hour": snapshot_hour,
             "snapshot_at": snapshot_at,
             "orders_sum": self._money(orders_sum),
             "orders_count": orders_count,
@@ -88,7 +170,7 @@ class MonitoringSnapshotWriter:
             "profit_by_cond_orders": self._money(profit_by_cond_orders),
         }
         with self.engine.begin() as connection:
-            saved = (
+            return (
                 connection.execute(
                     text(f"""
                 INSERT INTO {self._DATABASE_TABLE} (
@@ -116,23 +198,6 @@ class MonitoringSnapshotWriter:
                 ).scalar_one_or_none()
                 is not None
             )
-        logger.info(
-            "Мониторинг: %s | date=%s hour=%s snapshot_at=%s",
-            "срез сохранён, ожидает публикации" if saved else "первый успешный срез уже сохранён",
-            snapshot_at.date(),
-            snapshot_at.hour,
-            snapshot_at.isoformat(),
-        )
-        # Ошибка разметки пропусков не отменяет сохранение достоверного среза.
-        try:
-            self._mark_missing_hours(snapshot_at)
-        except Exception as error:
-            logger.warning(
-                "Не удалось отметить пропуски мониторинга; срез сохранён, сценарий продолжается: "
-                "error_type=%s",
-                type(error).__name__,
-            )
-        return saved
 
     @staticmethod
     def _money(value: object) -> Decimal:
@@ -148,8 +213,9 @@ class MonitoringSnapshotWriter:
     def _mark_missing_hours(self, snapshot_at: datetime) -> None:
         """Помечает завершённые часы без срезов, не выдумывая исторические суммы.
 
-        Проверяются текущие сутки и последние предыдущие сутки архива, включая
-        хвост после последнего среза. Существующие unavailable не меняются.
+        Для текущих суток создаются часы 1–23 до текущего запуска, а для
+        предыдущей даты архива также резервируется 24-й час. Существующие
+        unavailable и captured не меняются.
         """
         with self.engine.begin() as connection:
             connection.execute(
@@ -157,7 +223,7 @@ class MonitoringSnapshotWriter:
                 WITH days AS (
                     SELECT CAST(:snapshot_date AS DATE) AS day, :snapshot_hour - 1 AS last_hour
                     UNION ALL
-                    SELECT MAX(snapshot_date), 23 FROM {self._DATABASE_TABLE}
+                    SELECT MAX(snapshot_date), 24 FROM {self._DATABASE_TABLE}
                     WHERE snapshot_date < :snapshot_date
                 )
                 INSERT INTO {self._DATABASE_TABLE} (
@@ -167,7 +233,7 @@ class MonitoringSnapshotWriter:
                 )
                 SELECT day, hour, :snapshot_at, NULL, NULL, NULL, NULL,
                     'unavailable', 'Достоверный почасовой срез не был сохранён', 'pending'
-                FROM days CROSS JOIN LATERAL generate_series(0, last_hour) AS hour
+                FROM days CROSS JOIN LATERAL generate_series(1, last_hour) AS hour
                 WHERE day IS NOT NULL
                 ON CONFLICT (snapshot_date, snapshot_hour) DO NOTHING
             """),
@@ -298,7 +364,7 @@ class MonitoringSnapshotWriter:
         next_row = max(len(keys) + 1, 2)
         plans: list[dict[str, Any]] = []
         for row in rows:
-            key = (str(row["snapshot_date"]), f"{row['snapshot_hour']:02d}:00")
+            key = (str(row["snapshot_date"]), self._format_sheet_hour(row["snapshot_hour"]))
             matches = by_key.get(key, [])
             target = matches[0] if matches else next_row
             if not matches:
@@ -366,7 +432,7 @@ class MonitoringSnapshotWriter:
             required_rows = max(plan["row"] for plan in plans if plan["state"] == "missing")
             if required_rows > sheet.row_count:
                 sheet.resize(rows=required_rows)
-            sheet.batch_update(updates, value_input_option="USER_ENTERED")
+            sheet.batch_update(updates, value_input_option="RAW")
         statuses: list[str | None] = []
         for plan in plans:
             error = f"sheet_{plan['state']}" if plan["state"] in ("conflict", "duplicate") else None
@@ -412,7 +478,10 @@ class MonitoringSnapshotWriter:
             report.extend(plan for plan in plans if plan["state"] != "equal")
         report.extend(
             {
-                "key": [str(row["snapshot_date"]), f"{row['snapshot_hour']:02d}:00"],
+                "key": [
+                    str(row["snapshot_date"]),
+                    self._format_sheet_hour(row["snapshot_hour"]),
+                ],
                 "state": "unavailable",
             }
             for row in rows
@@ -450,13 +519,20 @@ class MonitoringSnapshotWriter:
 
     @staticmethod
     def _normalize_time(value: str) -> str:
-        """Узнаёт час в форматах HH:MM и HH:MM:SS для повторной доставки."""
+        """Узнаёт час в форматах HH:MM, HH:MM:SS и 24:00 для доставки."""
+        if value.strip() in ("24:00", "24:00:00"):
+            return "24:00"
         for fmt in ("%H:%M", "%H:%M:%S"):
             try:
                 return datetime.strptime(value.strip(), fmt).strftime("%H:00")
             except ValueError:
                 continue
         return value.strip()
+
+    @staticmethod
+    def _format_sheet_hour(snapshot_hour: int) -> str:
+        """Формирует ключ времени для Sheets, сохраняя специальный час 24:00."""
+        return "24:00" if snapshot_hour == 24 else f"{snapshot_hour:02d}:00"
 
 
 def main() -> None:

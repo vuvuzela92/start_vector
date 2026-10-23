@@ -25,5 +25,9 @@ class AutopilotDailySummary:
     goods_info_rows: int = 0
     unit_adv_rows: int = 0
     sopost_rows: int = 0
+    monitoring_saved: int = 0
+    monitoring_existing: int = 0
+    monitoring_failed: int = 0
+    monitoring_synced: int = 0
     started_at: datetime = field(default_factory=datetime.now)
     finished_at: datetime | None = None

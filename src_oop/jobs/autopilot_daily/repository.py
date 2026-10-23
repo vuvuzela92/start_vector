@@ -29,17 +29,18 @@ class AutopilotDailyRepository:
         """
         self.database_cls = database_cls
 
-    def fetch_current_metrics(self) -> pd.DataFrame:
+    def fetch_current_metrics(self, report_date: date | None = None) -> pd.DataFrame:
         """Читает текущие дневные метрики за последние 6 завершенных дней.
 
         Бизнес-логика:
         дневной ПУ показывает завершенные дни, поэтому запрос исключает текущую
-        дату и берет период от `CURRENT_DATE - 6 days` до вчера. Процентные
+        дату и берет период от даты отчёта минус 6 дней до вчера. Процентные
         метрики сохраняются как доли, потому что форматирование процентов
         выполняется средствами Google Sheets. Историческая скидка WB (`spp`)
         берется напрямую из `orders`: значения агрегируются по дате и артикулу,
         чтобы несколько заказов одного артикула не дублировали дневную метрику.
         """
+        report_date = report_date or date.today()
         query = text(
             """
             WITH daily_spp AS (
@@ -48,8 +49,8 @@ class AutopilotDailyRepository:
                     article_id,
                     ROUND(AVG(spp)) AS spp
                 FROM orders
-                WHERE date BETWEEN CURRENT_DATE - INTERVAL '6 days'
-                    AND CURRENT_DATE - INTERVAL '1 days'
+                WHERE date BETWEEN CAST(:report_date AS DATE) - INTERVAL '6 days'
+                    AND CAST(:report_date AS DATE) - INTERVAL '1 days'
                 GROUP BY date, article_id
             )
             SELECT
@@ -93,11 +94,14 @@ class AutopilotDailyRepository:
             LEFT JOIN daily_spp
                 ON daily_spp.date = metrics.date
                 AND daily_spp.article_id = metrics.article_id
-            WHERE metrics.date BETWEEN CURRENT_DATE - INTERVAL '6 days'
-                AND CURRENT_DATE - INTERVAL '1 days'
+            WHERE metrics.date BETWEEN CAST(:report_date AS DATE) - INTERVAL '6 days'
+                AND CAST(:report_date AS DATE) - INTERVAL '1 days'
             """
         )
-        dataframe = self.database_cls.read_sql_to_dataframe(query)
+        dataframe = self.database_cls.read_sql_to_dataframe(
+            query,
+            {"report_date": report_date},
+        )
         logger.info(
             "Текущие дневные метрики ПУ загружены из PostgreSQL: rows=%s",
             len(dataframe.index),
