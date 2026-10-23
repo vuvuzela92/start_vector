@@ -239,12 +239,16 @@ class AutopilotSheetsWriter:
 
         Бизнес-логика:
         показывает пользователям таблицы, когда hourly job записал свежий блок Воронки продаж,
-        потому что именно этот блок актуализируется в ПУ первым.
+        потому что именно этот блок актуализируется в ПУ первым. Запись защищена
+        общим retry-механизмом Google Sheets, чтобы краткий разрыв соединения не
+        оставлял устаревшее время актуализации в A2.
         """
         updated_at = updated_at or datetime.now()
         value = f"Актуализировано на {updated_at.strftime('%d.%m.%Y %H:%M:%S')}"
         try:
-            self.worksheet.update(
+            self.connector._execute_google_write_with_retry(
+                operation_name="обновление служебного статуса ПУ",
+                func=self.worksheet.update,
                 range_name=AUTOPILOT_STATUS_CELL,
                 values=[[value]],
                 value_input_option="USER_ENTERED",

@@ -67,10 +67,13 @@ class AutopilotRepository:
         Возвращает актуальный тип оплаты рекламы по артикулам из advert_campaigns_info.
 
         Бизнес-логика:
-        для каждого артикула ПУ выбирается одна рекламная кампания с максимальной
-        датой создания, а при одинаковой дате — с максимальным campaign_id.
-        Кампании без payment_type пропускаются, чтобы не затирать существующее
-        значение в фиксированном поле AS пустой или технической заглушкой.
+        сначала выбирается кампания с самой поздней датой списания в
+        `advert_spend`, а тип рекламной модели `cpc/cpm` берется исключительно
+        из `advert_campaigns_info.payment_type`. Поле `advert_spend.payment_type`
+        намеренно не используется: оно относится к источнику оплаты рекламных
+        расходов и не является типом рекламной кампании. Если списаний нет,
+        используется последняя статистика `advert_stat` как резерв. Кампании
+        без payment_type пропускаются, чтобы не затирать поле AS пустым значением.
         """
         if not articles:
             return {}
@@ -83,23 +86,71 @@ class AutopilotRepository:
         dataframe = self.database_cls.read_sql_to_dataframe(
             text(
                 f"""
-                WITH ranked_campaigns AS (
+                WITH spend_by_campaign AS (
                     SELECT
-                        nm_id,
-                        payment_type,
-                        created_at_campaign,
-                        campaign_id,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY nm_id
-                            ORDER BY created_at_campaign DESC NULLS LAST,
-                                     campaign_id DESC
-                        ) AS row_number
-                    FROM advert_campaigns_info
-                    WHERE nm_id IN ({placeholders})
-                        AND payment_type IS NOT NULL
+                        advert_id AS campaign_id,
+                        MAX(COALESCE(upd_time, date)) AS last_spend_at
+                    FROM advert_spend
+                    WHERE payment_type IS NOT NULL
                         AND payment_type <> ''
+                    GROUP BY advert_id
+                ),
+                campaign_candidates AS (
+                    SELECT
+                        stats.article_id,
+                        stats.campaign_id,
+                        spend.last_spend_at AS activity_at,
+                        1 AS activity_priority
+                    FROM (
+                        SELECT
+                            article_id,
+                            campaign_id,
+                            MAX(date) AS last_stat_date
+                        FROM advert_stat
+                        WHERE article_id IN ({placeholders})
+                        GROUP BY article_id, campaign_id
+                    ) AS stats
+                    JOIN spend_by_campaign AS spend
+                        ON spend.campaign_id = stats.campaign_id
+
+                    UNION ALL
+
+                    SELECT
+                        stats.article_id,
+                        stats.campaign_id,
+                        stats.last_stat_date AS activity_at,
+                        0 AS activity_priority
+                    FROM (
+                        SELECT
+                            article_id,
+                            campaign_id,
+                            MAX(date) AS last_stat_date
+                        FROM advert_stat
+                        WHERE article_id IN ({placeholders})
+                        GROUP BY article_id, campaign_id
+                    ) AS stats
+                ),
+                ranked_campaigns AS (
+                    SELECT
+                        candidates.article_id AS nm_id,
+                        candidates.campaign_id,
+                        candidates.activity_at,
+                        info.payment_type,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY candidates.article_id
+                            ORDER BY candidates.activity_priority DESC,
+                                     candidates.activity_at DESC NULLS LAST,
+                                     candidates.campaign_id DESC
+                        ) AS row_number
+                    FROM campaign_candidates AS candidates
+                    LEFT JOIN advert_campaigns_info AS info
+                        ON info.campaign_id = candidates.campaign_id
+                    WHERE info.payment_type IS NOT NULL
+                        AND info.payment_type <> ''
                 )
-                SELECT nm_id, payment_type
+                SELECT
+                    nm_id,
+                    payment_type
                 FROM ranked_campaigns
                 WHERE row_number = 1
                 """

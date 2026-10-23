@@ -212,10 +212,10 @@ class AutopilotHourlyService:
 
         payment_types: MetricValues = {}
         try:
-            payment_types = self.repository.fetch_latest_payment_types(articles)
+            payment_types = await self.cometa_client.fetch_payment_types(articles=articles)
         except Exception as error:
             logger.warning(
-                "Типы оплаты рекламы недоступны; поле AS пропущено, "
+                "Типы рекламной модели Cometa недоступны; поле AS пропущено, "
                 "остальные метрики продолжаются: error_type=%s",
                 type(error).__name__,
             )

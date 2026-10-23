@@ -29,6 +29,47 @@ class CometaAdvSpendClient:
     retry_max_sleep_seconds: int = RETRY_MAX_SLEEP_SECONDS
     spend_multiplier: float = COMETA_SPEND_MULTIPLIER
 
+    async def fetch_payment_types(self, articles: list[int] | None = None) -> dict[int, str]:
+        """
+        Загружает тип рекламной модели по артикулам напрямую из Cometa.
+
+        Бизнес-логика:
+        поле `cpc_mode` в ответе `/v1/autopilots` является источником истины
+        для колонки AS: `True` означает модель `cpc`, `False` — модель `cpm`.
+        Источник списания из `advert_spend.payment_type` для этой метрики не
+        используется. Артикулы без корректного `cpc_mode` пропускаются.
+        """
+        api_key = os.getenv("COMETA_API_KEY")
+        if not api_key:
+            raise RuntimeError("COMETA_API_KEY не задан в окружении.")
+
+        timeout = aiohttp.ClientTimeout(total=self.request_timeout_seconds)
+        headers = {"Authorization": api_key}
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            payload = await self._request_json(session=session, headers=headers)
+
+        if not isinstance(payload, list):
+            raise ValueError("Cometa вернула неожиданный тип ответа вместо списка автопилотов.")
+
+        article_filter = set(articles) if articles is not None else None
+        result: dict[int, str] = {}
+        for row in payload:
+            if not isinstance(row, dict):
+                raise ValueError("Cometa вернула некорректную строку автопилота.")
+            try:
+                article_id = int(row["product_id"])
+                cpc_mode = row["cpc_mode"]
+            except (KeyError, TypeError, ValueError):
+                continue
+            if article_filter is not None and article_id not in article_filter:
+                continue
+            if not isinstance(cpc_mode, bool):
+                continue
+            result[article_id] = "cpc" if cpc_mode else "cpm"
+
+        logger.info("Типы рекламной модели загружены из Cometa: rows=%s", len(result))
+        return result
+
     async def fetch_today_spend(self, articles: list[int] | None = None) -> dict[int, float]:
         """
         Загружает сегодняшние рекламные расходы из Cometa и агрегирует их по артикулу.
