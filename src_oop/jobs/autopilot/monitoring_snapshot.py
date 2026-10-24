@@ -136,6 +136,7 @@ class MonitoringSnapshotWriter:
             orders_count=orders_count,
             adv_spend=adv_spend,
             profit_by_cond_orders=profit_by_cond_orders,
+            replace_captured=True,
         )
         logger.info(
             "Мониторинг: итог 24-го часа %s | date=%s snapshot_at=%s",
@@ -154,6 +155,7 @@ class MonitoringSnapshotWriter:
         orders_count: int,
         adv_spend: float,
         profit_by_cond_orders: float,
+        replace_captured: bool = False,
     ) -> bool:
         """Атомарно сохраняет срез по явному ключу даты и часа.
 
@@ -168,6 +170,7 @@ class MonitoringSnapshotWriter:
             "orders_count": orders_count,
             "adv_spend": self._money(adv_spend),
             "profit_by_cond_orders": self._money(profit_by_cond_orders),
+            "replace_captured": replace_captured,
         }
         with self.engine.begin() as connection:
             return (
@@ -192,6 +195,7 @@ class MonitoringSnapshotWriter:
                     delivery_status = 'pending', synced_at = NULL,
                     last_delivery_error = NULL, saved_at = NOW()
                 WHERE {self._DATABASE_TABLE}.snapshot_status = 'unavailable'
+                    OR :replace_captured = TRUE
                 RETURNING snapshot_hour
             """),
                     params,
@@ -419,25 +423,50 @@ class MonitoringSnapshotWriter:
         """Сверяет лист заново и пишет фиксированные диапазоны без append.
 
         Если предыдущая попытка записала строку, но потеряла ответ, новая
-        попытка узнает ключ и подтвердит её. Конфликты не перезаписываются.
+        попытка узнает ключ и подтвердит её. Конфликты обычных часов не
+        перезаписываются; для закрытого дня строка 24:00 обновляется из
+        PostgreSQL, поскольку этот источник является достоверным итогом.
         """
         plans = self._inspect_batch(rows)
         sheet = self._connect_sheet().sheet_title
+        # Для закрытого дня PostgreSQL является источником истины: строка 24:00
+        # может содержать устаревший результат предыдущего восстановления.
+        overwrite_conflicts = {
+            plan["row"]
+            for plan in plans
+            if plan["state"] == "conflict" and plan["key"][1] == "24:00"
+        }
         updates = [
             {"range": f"A{plan['row']}:E{plan['row']}", "values": [plan["values"]]}
             for plan in plans
-            if plan["state"] == "missing"
+            if plan["state"] == "missing" or plan["row"] in overwrite_conflicts
         ]
         if updates:
-            required_rows = max(plan["row"] for plan in plans if plan["state"] == "missing")
+            required_rows = max(
+                plan["row"]
+                for plan in plans
+                if plan["state"] == "missing" or plan["row"] in overwrite_conflicts
+            )
             if required_rows > sheet.row_count:
                 sheet.resize(rows=required_rows)
             sheet.batch_update(updates, value_input_option="RAW")
         statuses: list[str | None] = []
         for plan in plans:
-            error = f"sheet_{plan['state']}" if plan["state"] in ("conflict", "duplicate") else None
+            overwritten = plan["row"] in overwrite_conflicts
+            error = (
+                None
+                if overwritten or plan["state"] not in ("conflict", "duplicate")
+                else f"sheet_{plan['state']}"
+            )
             statuses.append(error)
-            if error:
+            if overwritten:
+                logger.info(
+                    "Мониторинг: конфликт 24-го часа перезаписан данными PostgreSQL | "
+                    "date=%s time=%s row=%s",
+                    *plan["key"],
+                    plan["row"],
+                )
+            elif error:
                 logger.warning(
                     "Мониторинг: требуется разбор строки, значения сохранены без изменений; "
                     "остальные строки публикуются | date=%s time=%s row=%s code=%s",

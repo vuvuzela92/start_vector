@@ -115,13 +115,11 @@ class AutopilotDailyRepository:
         накопительный ответ Cometa и значение из текущей дневной витрины не
         используются. Источником являются строки WB, сохранённые в PostgreSQL.
         """
-        query = text(
-            """
+        query = """
             SELECT COALESCE(SUM(upd_sum), 0) AS adv_spend
             FROM advert_spend
             WHERE date::date = :report_date
-            """
-        )
+        """
         rows = self.database_cls.read_sql_to_dict(
             query,
             params={"report_date": report_date},
