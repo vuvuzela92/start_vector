@@ -202,6 +202,9 @@ class AutopilotDailyService:
                         "profit_by_cond_orders",
                     )
                 }
+                totals["adv_spend"] = self.repository.fetch_historical_ad_spend(
+                    target_date
+                )
                 saved = monitoring_writer.upsert_daily_snapshot(
                     report_date=target_date,
                     orders_sum=totals["orders_sum_rub"],

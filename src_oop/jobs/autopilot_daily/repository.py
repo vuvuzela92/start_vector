@@ -108,6 +108,33 @@ class AutopilotDailyRepository:
         )
         return dataframe
 
+    def fetch_historical_ad_spend(self, report_date: date) -> float:
+        """Возвращает итоговые рекламные затраты закрытого дня из advert_spend.
+
+        Бизнес-правило: для 24-го часа нужен исторический итог, поэтому
+        накопительный ответ Cometa и значение из текущей дневной витрины не
+        используются. Источником являются строки WB, сохранённые в PostgreSQL.
+        """
+        query = text(
+            """
+            SELECT COALESCE(SUM(upd_sum), 0) AS adv_spend
+            FROM advert_spend
+            WHERE date::date = :report_date
+            """
+        )
+        rows = self.database_cls.read_sql_to_dict(
+            query,
+            params={"report_date": report_date},
+        )
+        spend = float(rows[0].get("adv_spend") or 0) if rows else 0.0
+        logger.info(
+            "Исторические затраты для 24-го часа загружены из advert_spend: "
+            "date=%s adv_spend=%s",
+            report_date.isoformat(),
+            spend,
+        )
+        return spend
+
     def fetch_history_metrics(self) -> pd.DataFrame:
         """Читает исторические средние метрики для дневного ПУ.
 
