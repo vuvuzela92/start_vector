@@ -193,6 +193,7 @@ class AutopilotDailyService:
                 summary.monitoring_failed += 1
                 continue
             try:
+                stage = "суммирование дневных метрик"
                 totals = {
                     column: self._sum_daily_metric(daily[column])
                     for column in (
@@ -202,6 +203,11 @@ class AutopilotDailyService:
                         "profit_by_cond_orders",
                     )
                 }
+                stage = "загрузка исторических затрат из advert_spend"
+                totals["adv_spend"] = self.repository.fetch_historical_ad_spend(
+                    target_date
+                )
+                stage = "сохранение среза 24-го часа"
                 saved = monitoring_writer.upsert_daily_snapshot(
                     report_date=target_date,
                     orders_sum=totals["orders_sum_rub"],
@@ -217,9 +223,12 @@ class AutopilotDailyService:
                 summary.monitoring_failed += 1
                 logger.warning(
                     "Дневные данные не прошли проверку для 24-го часа; "
-                    "дата ожидает восстановления: date=%s error_type=%s",
+                    "дата ожидает восстановления: date=%s stage=%s "
+                    "error_type=%s error_message=%s",
                     target_date,
+                    stage,
                     type(error).__name__,
+                    str(error),
                 )
             except Exception as error:
                 summary.monitoring_failed += 1
