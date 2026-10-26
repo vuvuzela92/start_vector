@@ -366,6 +366,33 @@ class Calculation_of_purchases_russia:
                 payload_size,
             )
 
+    @staticmethod
+    def _ensure_worksheet_rows(
+        worksheet: gspread.Worksheet,
+        required_rows: int,
+    ) -> None:
+        """Расширяет сетку листа перед записью выгрузки.
+
+        Бизнес-сценарий:
+        выгрузка приходов 1С может вырасти после очередного обновления базы.
+        Google Sheets не увеличивает число строк автоматически при записи в
+        диапазон за пределами текущей сетки, поэтому лист расширяется только
+        при нехватке строк. Уже существующие данные и форматирование при этом
+        не очищаются.
+        """
+
+        current_rows = worksheet.row_count
+        if required_rows <= current_rows:
+            return
+
+        worksheet.resize(rows=required_rows)
+        logger.info(
+            "Лист Google Sheets расширен перед выгрузкой | sheet=%s | old_rows=%s | new_rows=%s",
+            worksheet.title,
+            current_rows,
+            required_rows,
+        )
+
     def _replace_sheet_data_below_status(
         self,
         connector: GoogleTabs,
@@ -779,6 +806,10 @@ class Calculation_of_purchases_russia:
                     sheet_title=target_sheet.sheet_title,
                 )
                 if output_values:
+                    self._ensure_worksheet_rows(
+                        worksheet=worksheet,
+                        required_rows=len(output_values) + 1,
+                    )
                     self._update_values_in_chunks(
                         values=output_values,
                         update_range=lambda range_name, values: self._update_worksheet_range_with_retry(
@@ -802,6 +833,10 @@ class Calculation_of_purchases_russia:
             else:
                 connector = self.google_connect_to_supplies_1c_sheet
                 if output_values:
+                    self._ensure_worksheet_rows(
+                        worksheet=connector.sheet_title,
+                        required_rows=len(output_values) + 1,
+                    )
                     self._update_values_in_chunks(
                         values=output_values,
                         update_range=lambda range_name, values: self._update_sheet_range(
