@@ -44,6 +44,7 @@ from src_oop.jobs.calculation_of_purchases_russia.config import (
     penalties_column_name,
     query_orders_1c,
     query_orders_and_supply,
+    query_fbs_fbo_orders,
     query_penalties_and_virtual_stock,
     query_supplies_1c,
     query_wb_supplies,
@@ -99,6 +100,7 @@ class Calculation_of_purchases_russia:
         self._calculate_sheet = google_table["calculate_sheet"]
         self._supplies_1c_sheet = google_table["supplies_1c_sheet"]
         self._wb_supplies_sheet = google_table["wb_supplies_sheet"]
+        self._fbs_fbo_orders_sheet = google_table["fbs_fbo_orders_sheet"]
         self._unit_table_title = unit_table["title"]
         self._unit_sheet_title = unit_table["sheet_unit"]
 
@@ -108,6 +110,7 @@ class Calculation_of_purchases_russia:
         self._conn_unit_table: GoogleTabs | None = None
         self._conn_supplies_1c_sheet: GoogleTabs | None = None
         self._conn_wb_supplies_sheet: GoogleTabs | None = None
+        self._conn_fbs_fbo_orders_sheet: GoogleTabs | None = None
 
     @property
     def google_connect_to_purchsase_russia_table(self) -> GoogleTabs:
@@ -209,6 +212,23 @@ class Calculation_of_purchases_russia:
                 self._wb_supplies_sheet,
             )
         return self._conn_wb_supplies_sheet
+
+    @property
+    def google_connect_to_fbs_fbo_orders_sheet(self) -> GoogleTabs:
+        """Возвращает подключение к листу `Заказы ФБС-ФБО`.
+
+        Бизнес-сценарий:
+        лист содержит дневную сводку FBS и расчетной части FBO по внутреннему
+        артикулу продавца. Подключение создается лениво и не влияет на другие
+        выгрузки модуля.
+        """
+
+        if self._conn_fbs_fbo_orders_sheet is None:
+            self._conn_fbs_fbo_orders_sheet = GoogleTabs(
+                self._purchase_russia_table,
+                self._fbs_fbo_orders_sheet,
+            )
+        return self._conn_fbs_fbo_orders_sheet
 
     @staticmethod
     def set_data(coonector: GoogleTabs, df: pd.DataFrame) -> None:
@@ -517,6 +537,37 @@ class Calculation_of_purchases_russia:
         """
 
         return Database.read_sql_to_dataframe(query_supplies_1c).fillna("")
+
+    def get_fbs_fbo_orders_data(self) -> pd.DataFrame:
+        """Загружает дневную сводку FBS, FBO и воронки за 14 дней.
+
+        Бизнес-сценарий:
+        FBS считаются по уникальным сборочным заданиям без отмененных
+        статусов. FBO рассчитывается как неотрицательная разница между
+        заказами воронки и FBS по дате и внутреннему коду продавца.
+        """
+
+        return Database.read_sql_to_dataframe(query_fbs_fbo_orders)
+
+    def update_fbs_fbo_orders_sheet(self) -> pd.DataFrame:
+        """Обновляет лист `Заказы ФБС-ФБО` дневными агрегатами FBS и FBO.
+
+        Бизнес-сценарий:
+        метод получает данные за последние 14 завершенных дней, приводит дату
+        и пропуски к формату Google Sheets и полностью обновляет отдельную
+        витрину закупочной таблицы России.
+        """
+
+        orders_df = self.get_fbs_fbo_orders_data()
+        if "date" in orders_df.columns:
+            orders_df["date"] = orders_df["date"].astype(str)
+        orders_df = orders_df.fillna(0)
+        self.set_data(self.google_connect_to_fbs_fbo_orders_sheet, orders_df)
+        logger.info(
+            "Лист Заказы ФБС-ФБО успешно обновлён | rows=%s",
+            len(orders_df),
+        )
+        return orders_df
 
     def get_orders_1c_data(self) -> pd.DataFrame:
         """Читает валидные заказы 1С вместе с данными чеков.

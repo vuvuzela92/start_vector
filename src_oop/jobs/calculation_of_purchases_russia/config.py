@@ -23,6 +23,54 @@ query = """
     ORDER BY f.date DESC;
     """
 
+# Агрегированные заказы FBS и расчетные заказы FBO для листа
+# «Заказы ФБС-ФБО» за последние 14 завершенных дней.
+query_fbs_fbo_orders = text("""
+    WITH fbs AS (
+        SELECT
+            t.date,
+            a.local_vendor_code AS wild,
+            COUNT(DISTINCT t.task_id) AS fbs_qnt
+        FROM assembly_task AS t
+        JOIN article AS a ON a.nm_id = t.article_id
+        WHERE t.date >= CURRENT_DATE - INTERVAL '14 days'
+          AND t.date < CURRENT_DATE
+          AND EXISTS (
+              SELECT 1
+              FROM status_assembly_task AS s
+              WHERE s.assembly_task_id = t.task_id
+                AND s.wb_status NOT IN (
+                    'declined_by_client',
+                    'canceled',
+                    'canceled_by_carrier',
+                    'canceled_by_client'
+                )
+          )
+        GROUP BY t.date, a.local_vendor_code
+    ),
+    funnel AS (
+        SELECT
+            fd.date,
+            fd.wild,
+            SUM(fd.order_count) AS funnel_orders
+        FROM funnel_daily AS fd
+        WHERE fd.date >= CURRENT_DATE - INTERVAL '14 days'
+          AND fd.date < CURRENT_DATE
+        GROUP BY fd.date, fd.wild
+    )
+    SELECT
+        fbs.date,
+        fbs.wild,
+        fbs.fbs_qnt,
+        GREATEST(COALESCE(funnel.funnel_orders, 0) - fbs.fbs_qnt, 0) AS fbo_qnt,
+        COALESCE(funnel.funnel_orders, 0) AS funnel_orders
+    FROM fbs
+    LEFT JOIN funnel
+        ON funnel.date = fbs.date
+       AND LOWER(TRIM(funnel.wild)) = LOWER(TRIM(fbs.wild))
+    ORDER BY fbs.date DESC, fbs.wild;
+""")
+
 # Витрина сопоставления заказов поставщикам, приходов и возвратов.
 # Результат используется листом «Заказы_и_поступления».
 # В выборку попадают только проведенные и корректные документы без служебных
@@ -281,6 +329,7 @@ google_table = {
     "orders_1c_sheet": "Заказы_поставщиков_1С",
     "supplies_1c_sheet": "Приходы_1С",
     "wb_supplies_sheet": "БД_поставки",
+    "fbs_fbo_orders_sheet": "Заказы ФБС-ФБО",
 }
 
 

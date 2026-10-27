@@ -430,7 +430,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
     },
     "update_wb_supplies_in_purchase_russia": {
         "func": smart_run(update_wb_supplies_in_purchase_russia),
-        "desc": "PostgreSQL `wb_supplies_goods` → Google Sheets «Расчет закупки Россия», лист «БД_поставки»: публикация актуального состояния поставок WB",
+        "desc": "PostgreSQL `wb_supplies_goods`, `assembly_task` и `funnel_daily` → Google Sheets «Расчет закупки Россия»: обновление листов «БД_поставки» и «Заказы ФБС-ФБО»",
     },
     # Автопилот и индивидуальные настройки.
     "update_individual_info": {
