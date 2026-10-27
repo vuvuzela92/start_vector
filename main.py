@@ -14,8 +14,10 @@ def main() -> None:
     """Запускает задачу из реестра и передаёт ей параметры периода.
 
     Для `orders_article_analyze_run` поддерживаются сокращённый параметр
-    `--days` и явные границы `--days-ago`/`--days-to`. Остальные задачи
-    запускаются без параметров периода.
+    `--days` и явные границы `--days-ago`/`--days-to`. Для
+    `purchase_price_update_run` поддерживается отдельное окно
+    `--purchase-price-days`, необходимое в том числе для разовой догрузки
+    после простоя задачи. Остальные задачи запускаются без параметров периода.
     """
     setup_logger()
 
@@ -40,12 +42,29 @@ def main() -> None:
         type=int,
         help="Конечная граница периода в днях назад для orders_article_analyze_run",
     )
+    parser.add_argument(
+        "--purchase-price-days",
+        type=int,
+        help=(
+            "Размер окна выборки закупочных цен в днях для "
+            "purchase_price_update_run"
+        ),
+    )
 
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(1)
 
     args = parser.parse_args()
+    if args.purchase_price_days is not None:
+        if args.task != "purchase_price_update_run":
+            parser.error(
+                "Параметр --purchase-price-days доступен только для "
+                "purchase_price_update_run"
+            )
+        if args.purchase_price_days < 1:
+            parser.error("Параметр --purchase-price-days должен быть больше нуля")
+
     period_arguments = (args.days, args.days_ago, args.days_to)
     if any(value is not None for value in period_arguments):
         if args.task != "orders_article_analyze_run":
@@ -64,6 +83,9 @@ def main() -> None:
             }
     else:
         task_kwargs = {}
+
+    if args.purchase_price_days is not None:
+        task_kwargs["days_count"] = args.purchase_price_days
     logger.info(
         "Получен запрос на запуск задачи из CLI | task=%s | argv=%s",
         args.task,

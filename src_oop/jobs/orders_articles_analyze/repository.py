@@ -213,18 +213,28 @@ class ArticleAnalyzeRepository:
                     )
                 ) AS profit_by_cond_orders,
 
-                COALESCE(s.sales_sum, 0) AS sales_sum,
-                COALESCE(s.sales_count, 0) AS sales_count,
+                -- Основной источник реализаций — последний финансовый snapshot.
+                COALESCE(fin_sales.sales_sum, s.sales_sum, orders_sales.sales_sum, 0) AS sales_sum,
+                COALESCE(fin_sales.sales_count, s.sales_count, orders_sales.sales_count, 0) AS sales_count,
 
                 ROUND(
-                    COALESCE(s.sales_count, 0) * (
-                        COALESCE(s.sales_sum / NULLIF(s.sales_count, 0), 0) - (
-                            (COALESCE(s.sales_sum / NULLIF(s.sales_count, 0), 0) / 100.0 * (6 +
+                    COALESCE(fin_sales.sales_count, s.sales_count, orders_sales.sales_count, 0) * (
+                        COALESCE(
+                            COALESCE(fin_sales.sales_sum, s.sales_sum, orders_sales.sales_sum)
+                            / NULLIF(COALESCE(fin_sales.sales_count, s.sales_count, orders_sales.sales_count), 0),
+                            0
+                        ) - (
+                            (COALESCE(
+                                COALESCE(fin_sales.sales_sum, s.sales_sum, orders_sales.sales_sum)
+                                / NULLIF(COALESCE(fin_sales.sales_count, s.sales_count, orders_sales.sales_count), 0),
+                                0
+                            ) / 100.0 * (6 +
                                 CASE
                                     WHEN b.date >= '2026-01-01' THEN ic_2026.fbo_individual_conditions
                                     WHEN b.date BETWEEN '2025-01-01' AND '2025-12-31' THEN ic_2025.fbo_individual_conditions
                                     ELSE 26
-                                END)) + COALESCE(cp.purchase_price, 0)
+                                END
+                            )) + COALESCE(cp.purchase_price, 0)
                         )
                     ), 2
                 ) AS profit_by_cond_sales,
@@ -297,6 +307,63 @@ class ArticleAnalyzeRepository:
                 GROUP BY s.article_id, s.date
             ) s ON s.article_id = b.article_id AND s."date" = b."date"
             LEFT JOIN (
+                SELECT
+                    DATE(financial_sales.date_from) AS date,
+                    financial_sales.nm_id AS article_id,
+                    SUM(
+                        CASE
+                            WHEN financial_sales.supplier_oper_name = 'Продажа'
+                                THEN financial_sales.retail_price_withdisc_rub
+                            WHEN financial_sales.supplier_oper_name IN ('Возврат', 'Коррекция возвратов')
+                                THEN -financial_sales.retail_price_withdisc_rub
+                            WHEN financial_sales.supplier_oper_name = 'Коррекция продаж'
+                                THEN financial_sales.retail_price_withdisc_rub
+                            ELSE 0
+                        END
+                    ) AS sales_sum,
+                    SUM(
+                        CASE
+                            WHEN financial_sales.doc_type_name = 'Продажа'
+                                THEN financial_sales.quantity
+                            ELSE 0
+                        END
+                    ) AS sales_count
+                FROM daily_fin_reports_full financial_sales
+                INNER JOIN (
+                    SELECT
+                        snapshot.account,
+                        snapshot.nm_id AS article_id,
+                        DATE(snapshot.date_from) AS date,
+                        MAX(snapshot.create_dt) AS create_dt
+                    FROM daily_fin_reports_full snapshot
+                    WHERE DATE(snapshot.date_from) BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days'
+                        AND CURRENT_DATE - INTERVAL '{days_to} days'
+                        AND snapshot.nm_id IS NOT NULL
+                    GROUP BY snapshot.account, snapshot.nm_id, DATE(snapshot.date_from)
+                ) latest_snapshot
+                    ON latest_snapshot.account = financial_sales.account
+                    AND latest_snapshot.article_id = financial_sales.nm_id
+                    AND latest_snapshot.date = DATE(financial_sales.date_from)
+                    AND latest_snapshot.create_dt = financial_sales.create_dt
+                WHERE DATE(financial_sales.date_from) BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days'
+                    AND CURRENT_DATE - INTERVAL '{days_to} days'
+                    AND financial_sales.nm_id IS NOT NULL
+                GROUP BY DATE(financial_sales.date_from), financial_sales.nm_id
+            ) fin_sales ON fin_sales.article_id = b.article_id
+                AND fin_sales.date = b.date
+            -- sales и orders используются только как fallback для отсутствующих финансовых данных.
+            LEFT JOIN (
+                SELECT ord_sales.date, ord_sales.article_id,
+                    SUM(ord_sales.price_with_disc) AS sales_sum,
+                    COUNT(*) AS sales_count
+                FROM orders ord_sales
+                WHERE ord_sales.is_realization IS TRUE
+                    AND ord_sales.date BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days'
+                    AND CURRENT_DATE - INTERVAL '{days_to} days'
+                GROUP BY ord_sales.article_id, ord_sales.date
+            ) orders_sales ON orders_sales.article_id = b.article_id
+                AND orders_sales."date" = b."date"
+            LEFT JOIN (
                 SELECT pami.date, pami.nm_id, pami.manager, pami.promo_title, pami.promo_status
                 FROM promo_and_managers_info AS pami
                 WHERE pami.date BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days' AND CURRENT_DATE - INTERVAL '{days_to} days'
@@ -358,6 +425,26 @@ class ArticleAnalyzeRepository:
             len(df.index),
             list(df.columns),
         )
+        if "sales_count" in df.columns:
+            sales_count = pd.to_numeric(df["sales_count"], errors="coerce").fillna(0)
+            sales_sum = (
+                pd.to_numeric(df["sales_sum"], errors="coerce").fillna(0)
+                if "sales_sum" in df.columns
+                else pd.Series(dtype="float64")
+            )
+            profit_by_cond_sales = (
+                pd.to_numeric(df["profit_by_cond_sales"], errors="coerce").fillna(0)
+                if "profit_by_cond_sales" in df.columns
+                else pd.Series(dtype="float64")
+            )
+            logger.info(
+                "Диагностика profit_by_cond_sales после загрузки | "
+                "строк с продажами=%s | сумма sales_sum=%s | "
+                "сумма profit_by_cond_sales=%s",
+                int((sales_count > 0).sum()),
+                float(sales_sum.sum()),
+                float(profit_by_cond_sales.sum()),
+            )
         return df
 
     def get_fin_report_stat(self, days_ago: int, days_to: int) -> pd.DataFrame:
