@@ -22,12 +22,27 @@ from src_oop.jobs.purchase_price_update.service import (
 logger = logging.getLogger(__name__)
 
 
-def purchase_price_update_run(round_price: bool = True) -> PurchasePriceUpdateSummary:
+def purchase_price_update_run(
+    round_price: bool = True,
+    days_count: int = 2,
+) -> PurchasePriceUpdateSummary:
     """
     Боевая точка входа для обновления закупочных цен.
 
     По умолчанию используется legacy-совместимое округление,
     чтобы поведение новой реализации не отличалось от исторического скрипта.
+    Параметр `days_count` позволяет временно расширить окно для разовой
+    догрузки данных после вынужденного простоя задачи.
+
+    Параметры:
+    `round_price` — применять ли совместимое со старым скриптом округление.
+    `days_count` — сколько календарных дней включить в выборку из PostgreSQL.
+
+    Возвращаемый результат:
+    `PurchasePriceUpdateSummary` со статистикой прочитанных и обновлённых строк.
+
+    Возможные исключения:
+    пробрасывает ошибки чтения БД, Google Sheets и бизнес-проверок сервиса.
     """
 
     setup_logger()
@@ -35,7 +50,7 @@ def purchase_price_update_run(round_price: bool = True) -> PurchasePriceUpdateSu
     service = PurchasePriceUpdateService(
         repository=PurchasePriceUpdateRepository(),
     )
-    return service.run(round_price=round_price)
+    return service.run(round_price=round_price, days_count=days_count)
 
 
 def purchase_price_update_compare(round_price: bool = True) -> ComparisonSummary:

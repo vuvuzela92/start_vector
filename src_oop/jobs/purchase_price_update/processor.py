@@ -137,7 +137,8 @@ def prepare_unit_state(dataframe: pd.DataFrame) -> pd.DataFrame:
 
     Возможные исключения:
     `MissingRequiredColumnsError`, если отсутствуют обязательные колонки.
-    `DuplicateBusinessKeyError`, если `wild` не уникален.
+    `DuplicateBusinessKeyError`, если в структуре листа отсутствуют обязательные
+    колонки или данные БД содержат неоднозначные ключи.
 
     Особенности поведения:
     пустые `wild` отбрасываются, а цена из UNIT приводится к числу и округляется
@@ -148,7 +149,15 @@ def prepare_unit_state(dataframe: pd.DataFrame) -> pd.DataFrame:
     2. очищаем `wild` от пустых значений;
     3. приводим цену из UNIT к числу;
     4. вычисляем флаг "цену менять нельзя";
-    5. проверяем уникальность business key `wild`.
+    5. сохраняем все строки с одинаковым `wild`, чтобы одно рассчитанное
+       значение можно было записать во все связанные строки листа.
+
+    Важное бизнес-правило:
+    одинаковый `wild` в листе `Сопост` не считается ошибкой. Если один SKU
+    представлен несколькими строками, задача обновляет закупочную цену во всех
+    этих строках. Это необходимо, когда строки являются несколькими
+    представлениями одной бизнес-позиции. Дубли в данных БД проверяются отдельно,
+    потому что там для одного SKU должна быть одна однозначная актуальная цена.
     """
 
     _ensure_required_columns(dataframe, REQUIRED_UNIT_COLUMNS, source_name="лист Сопост")
@@ -162,15 +171,6 @@ def prepare_unit_state(dataframe: pd.DataFrame) -> pd.DataFrame:
     prepared["is_locked_price"] = prepared[NEVER_CHANGE_PRICE_COLUMN].map(
         _is_locked_price_flag
     )
-
-    duplicates = prepared[
-        prepared[ARTICLE_COLUMN].duplicated(keep=False)
-    ][ARTICLE_COLUMN].unique().tolist()
-    if duplicates:
-        raise DuplicateBusinessKeyError(
-            "В листе Сопост найдены дубли по business key 'wild': "
-            f"{', '.join(duplicates)}"
-        )
 
     return prepared[
         [
