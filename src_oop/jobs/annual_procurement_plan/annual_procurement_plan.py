@@ -9,6 +9,7 @@ from src_oop.jobs.annual_procurement_plan.config import (
     seller_price_query,
     purchase_price_query,
     days_without_stocks_query,
+    sales_plan_new_items,
 )
 from src_oop.core.database import Database
 # Импортируем внешние библиотеки
@@ -48,6 +49,13 @@ class AnnualProcurementPlan:
         self._conn_to = None
         self._conn_quarter = None
         self._conn_days_without_stocks = None
+
+        # Источник дат запуска новых товаров.
+        self._new_items_table_name = sales_plan_new_items.get("title")
+        self._new_items_spreadsheet_id = sales_plan_new_items.get("spreadsheet_id")
+        self._new_items_sheet_name = sales_plan_new_items.get("sheet")
+        self._new_items_header_row = sales_plan_new_items.get("header_row")
+        self._conn_new_items = None
 
         # Настройки для юнитки
         self._table_unit = unit_gs.get("title")
@@ -147,6 +155,22 @@ class AnnualProcurementPlan:
         return self._conn_days_without_stocks
 
     @property
+    def sales_plan_new_items_connect(self):
+        """Возвращает подключение к вкладке `НОВИНКИ` панели продаж.
+
+        Свойство обслуживает перенос даты запуска товара в продажу в
+        квартальный план закупа. Таблица открывается по стабильному ID, чтобы
+        ручное переименование документа не сломало регламентную выгрузку.
+        """
+        if self._conn_new_items is None:
+            self._conn_new_items = GoogleTabs(
+                self._new_items_table_name,
+                self._new_items_sheet_name,
+                spreadsheet_id=self._new_items_spreadsheet_id,
+            )
+        return self._conn_new_items
+
+    @property
     def annual_plan_connect_to_parfume_sheet(self):
         """Ленивое подключение к листу с данными парфюма в таблице Годовой план закупа 2026"""
         if self._conn_to is None:
@@ -194,6 +218,24 @@ class AnnualProcurementPlan:
         и отсортирован для стабильной выгрузки в Google Sheets.
         """
         return Database.read_sql_to_dataframe(days_without_stocks_query)
+
+    def get_new_items_data(self):
+        """Получает `WILD` и дату запуска из вкладки `НОВИНКИ`.
+
+        Метод обслуживает перенос дат запуска в ``Поквартально``. В источнике
+        заголовки находятся во второй строке, поэтому первая строка считается
+        служебной и не попадает в DataFrame.
+        """
+        data = self.sales_plan_new_items_connect.sheet_title.get_all_values()
+        header_index = self._new_items_header_row - 1
+        if len(data) <= header_index:
+            return pd.DataFrame(columns=["WILD", "Запуск"])
+
+        headers = [
+            str(header).replace("\u00a0", " ").strip()
+            for header in data[header_index]
+        ]
+        return pd.DataFrame(data[header_index + 1 :], columns=headers)
 
     def get_supplies_data(self):
         """Получает данные поставок для блока фактических приходов годового плана.

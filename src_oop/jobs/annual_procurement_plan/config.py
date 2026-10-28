@@ -27,6 +27,13 @@ annual_procurement_plan = {
                         "parfume_sheet": "Данные_Парфюм"
                             }
 
+sales_plan_new_items = {
+                        "title": "Панель управления продажами Вектор",
+                        "spreadsheet_id": "1j2H1sGdhuQYsMDs8JkDQ4DEL27pNxXtKVE6JcJbyvzo",
+                        "sheet": "НОВИНКИ",
+                        "header_row": 2,
+                            }
+
 days_without_stocks_query = text("""
     SELECT
         TO_CHAR(s."date", 'YYYY-MM') AS month,

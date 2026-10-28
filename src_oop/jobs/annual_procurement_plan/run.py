@@ -231,6 +231,83 @@ def _append_quarterly_white_plan_cost(
     return merged.drop(columns=["_merge_wild", "_clean_cost_value"])
 
 
+def _append_quarterly_launch_date(
+    df_quarterly: pd.DataFrame,
+    df_new_items: pd.DataFrame,
+    target_column_name: str,
+) -> pd.DataFrame:
+    """Подмешивает дату запуска товара в квартальный план по ключу `wild`.
+
+    Вспомогательная функция обслуживает перенос из вкладки `НОВИНКИ`.
+    Используется последнее непустое значение `Запуск` для каждого `WILD`;
+    если дата запуска не найдена, существующее значение в `Поквартально`
+    сохраняется без изменений.
+    """
+    df_result = df_quarterly.copy()
+    if df_new_items.empty:
+        return df_result
+
+    prepared_quarterly = df_result.copy()
+    source_columns = {
+        str(column).replace("\u00a0", " ").strip().casefold(): column
+        for column in df_new_items.columns
+    }
+    wild_column = source_columns.get("wild")
+    launch_column = source_columns.get("запуск")
+    if wild_column is None or launch_column is None:
+        logger.warning(
+            "Не найдены колонки WILD и Запуск во вкладке НОВИНКИ; "
+            "даты запуска не обновлены, существующие значения сохранены"
+        )
+        return df_result
+
+    prepared_new_items = df_new_items[[wild_column, launch_column]].copy()
+    prepared_new_items.columns = ["WILD", "Запуск"]
+    prepared_quarterly["_merge_wild"] = (
+        prepared_quarterly["wild"]
+        .fillna("")
+        .astype(str)
+        .str.replace("\u00a0", " ", regex=False)
+        .str.strip()
+        .str.casefold()
+    )
+    prepared_new_items["_merge_wild"] = (
+        prepared_new_items["WILD"]
+        .fillna("")
+        .astype(str)
+        .str.replace("\u00a0", " ", regex=False)
+        .str.strip()
+        .str.casefold()
+    )
+    prepared_new_items["_launch_date"] = (
+        prepared_new_items["Запуск"].fillna("").astype(str).str.strip()
+    )
+    prepared_new_items = prepared_new_items.loc[
+        (prepared_new_items["_merge_wild"] != "")
+        & (prepared_new_items["_launch_date"] != "")
+    ]
+    prepared_new_items = prepared_new_items[
+        ["_merge_wild", "_launch_date"]
+    ].drop_duplicates(subset=["_merge_wild"], keep="last")
+
+    merged = prepared_quarterly.merge(
+        prepared_new_items,
+        on="_merge_wild",
+        how="left",
+    )
+    if target_column_name not in merged.columns:
+        merged[target_column_name] = ""
+    merged[target_column_name] = merged["_launch_date"].where(
+        merged["_launch_date"].notna(),
+        merged[target_column_name],
+    )
+    logger.info(
+        "Для квартального плана сопоставлено дат запуска: %s",
+        int(merged["_launch_date"].notna().sum()),
+    )
+    return merged.drop(columns=["_merge_wild", "_launch_date"])
+
+
 def transport_data_to_annual_procurement_plan():
     """Переносит заказы из рабочих листов в вкладку ``БД_ЗАКАЗЫ`` годового плана.
 
@@ -272,6 +349,14 @@ def transport_data_to_annual_procurement_plan():
 
 
 def transport_unit_data_to_annual_procurement_plan():
+    """Обновляет юнит-данные и даты запуска товаров в годовом плане закупа.
+
+    Сценарий сохраняет агрегированный остаток ФБО во вкладке
+    ``Данные_Юнитки``, затем читает `WILD` и `Запуск` из вкладки ``НОВИНКИ``
+    панели продаж и точечно обновляет `Дата запуска в продажу` во вкладке
+    ``Поквартально``. При отсутствии даты исходное значение в квартальном
+    плане сохраняется.
+    """
     # Создаем экземпляр класса и получаем данные
     plan = AnnualProcurementPlan()
     df_unit = plan.get_unit_data()
@@ -292,6 +377,20 @@ def transport_unit_data_to_annual_procurement_plan():
     }).reset_index()
     # Обновляем данные в таблице Годовой план закупа 2026
     plan.set_data(plan.annual_plan_connect_to_unit_sheet, df_unit_short)
+
+    df_quarterly = plan.get_quarterly_plan_data()
+    df_new_items = plan.get_new_items_data()
+    df_quarterly = _append_quarterly_launch_date(
+        df_quarterly=df_quarterly,
+        df_new_items=df_new_items,
+        target_column_name="Дата запуска в продажу",
+    )
+    plan.annual_plan_connect_to_quarter_sheet.update_column_by_name_at_header_row(
+        column_name="Дата запуска в продажу",
+        data_to_write=df_quarterly["Дата запуска в продажу"].tolist(),
+        header_row_number=4,
+        data_start_row_number=5,
+    )
 
 def transport_supplies_data_to_annual_procurement_plan():
     # Создаем экземпляр класса и получаем данные
