@@ -7,6 +7,9 @@ from src_oop.jobs.fbs2_test.config import (
     PURCHASERS_DATABASE_TABLE_TITLE,
     SHIPMENTS_SHEET_TITLE,
     STOCKS_SHEET_TITLE,
+    WMS_REMAINS_SHEET_TITLE,
+    WMS_REMAINS_SPREADSHEET_ID,
+    WMS_REMAINS_TABLE_TITLE,
 )
 from src_oop.jobs.fbs2_test.google_sheets_client import (
     PurchasersDatabaseGoogleSheetsClient,
@@ -34,10 +37,11 @@ def fbs2_test_movements_run() -> None:
 
 
 def fbs2_test_stocks_run() -> None:
-    """Обновляет вкладку «БД Остатки» карты БД закупщиков актуальными остатками.
+    """Обновляет витрину остатков и поле `fbs2` на листе `WMS остатки`.
 
-    Точка входа создаёт компоненты отдельной витрины остатков и запускает путь
-    от SQL-запроса PostgreSQL до полной публикации результата в Google Sheets.
+    Точка входа создаёт компоненты витрины остатков, публикует основную
+    выгрузку в карту БД закупщиков, затем выполняет SQL по `card_data` и
+    публикует полученный список wild в указанную колонку внешнего листа.
     """
 
     service = StocksService(
@@ -46,6 +50,11 @@ def fbs2_test_stocks_run() -> None:
             spreadsheet_id=PURCHASERS_DATABASE_SPREADSHEET_ID,
             table_title=PURCHASERS_DATABASE_TABLE_TITLE,
             sheet_title=STOCKS_SHEET_TITLE,
+        ),
+        wms_remains_sheets_client=PurchasersDatabaseGoogleSheetsClient(
+            spreadsheet_id=WMS_REMAINS_SPREADSHEET_ID,
+            table_title=WMS_REMAINS_TABLE_TITLE,
+            sheet_title=WMS_REMAINS_SHEET_TITLE,
         ),
     )
     service.run()

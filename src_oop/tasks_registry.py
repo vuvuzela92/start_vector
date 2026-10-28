@@ -157,7 +157,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
     },
     "fbs2_test_stocks_run": {
         "func": smart_run(fbs2_test_stocks_run),
-        "desc": "PostgreSQL/WMS → Google Sheets «Карта БД Закупщиков», лист «БД Остатки»: дневные остатки по состояниям WMS — общий остаток, FBS, приёмка, упаковка, недостача, ФБО, брак и хранение",
+        "desc": "PostgreSQL/WMS → Google Sheets «Карта БД Закупщиков», лист «БД Остатки», и card_data → Google Sheets «WMS остатки», поле fbs2",
     },
     # Старый контур Google Sheets и управленческих витрин.
     "update_penalties_in_gs_purchase_russia": {

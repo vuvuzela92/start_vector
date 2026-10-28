@@ -91,19 +91,26 @@ class StocksService:
 
     repository: ShipmentsRepository
     sheets_client: PurchasersDatabaseGoogleSheetsClient
+    wms_remains_sheets_client: PurchasersDatabaseGoogleSheetsClient | None = None
 
     def run(self) -> None:
-        """Запускает полное обновление вкладки «БД Остатки».
+        """Обновляет витрину остатков и список wild в поле `fbs2`.
 
         Сценарий получает остатки заданных товаров из PostgreSQL, приводит
         значения к формату Google Sheets и полностью заменяет данные целевой
         вкладки, чтобы закупщики работали с актуальными снимками остатков.
+        После этого тем же запуском получает из `card_data` отсортированный
+        список wild и записывает его в отдельный документ на лист `WMS остатки`,
+        в колонку `fbs2`.
         """
 
         logger.info("Старт выгрузки ежедневной витрины остатков.")
         dataframe = self.repository.fetch_stocks()
         prepared_dataframe = self._prepare_for_google_sheets(dataframe)
         self.sheets_client.upload_dataframe(prepared_dataframe)
+        if self.wms_remains_sheets_client is not None:
+            wilds = self.repository.fetch_wms_remains_wilds()
+            self.wms_remains_sheets_client.update_fbs2_by_wild(wilds)
         logger.info(
             "Выгрузка ежедневной витрины остатков завершена: строк=%s.",
             len(prepared_dataframe.index),

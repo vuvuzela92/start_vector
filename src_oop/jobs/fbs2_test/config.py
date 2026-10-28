@@ -8,6 +8,10 @@ PURCHASERS_DATABASE_SPREADSHEET_ID = "1md1hQgysVfh36KSkiqnLjO8SXVuJl5ZvnNEEvtKSA
 PURCHASERS_DATABASE_TABLE_TITLE = "Карта БД Закупщиков"
 SHIPMENTS_SHEET_TITLE = "БД Отгрузки"
 STOCKS_SHEET_TITLE = "БД Остатки"
+WMS_REMAINS_SPREADSHEET_ID = "1bvZLSNb-CdWzuyBScL6C6x2fw--U1F8BD9PY4krElc4"
+WMS_REMAINS_TABLE_TITLE = "WMS остатки"
+WMS_REMAINS_SHEET_TITLE = "WMS остатки"
+WMS_REMAINS_FBS2_COLUMN = "fbs2"
 
 SHIPMENTS_COLUMNS = [
     "id",
@@ -208,5 +212,19 @@ STOCKS_DATABASE_QUERY = text(
     JOIN products_list AS p
         ON p.product_id = ws.product_id
     WHERE ws.balance_date > '2026-08-31'::date;
+    """
+)
+
+WMS_REMAINS_WILDS_QUERY = text(
+    """
+    SELECT wild
+    FROM (
+        SELECT DISTINCT
+            substring(cd.product_article FROM '^wild[0-9]+') AS wild,
+            substring(cd.product_article FROM '^wild([0-9]+)')::bigint AS num
+        FROM card_data cd
+        WHERE cd.product_article ~ '^wild[0-9]+'
+    ) w
+    ORDER BY num;
     """
 )
