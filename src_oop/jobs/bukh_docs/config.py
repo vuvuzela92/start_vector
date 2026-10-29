@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from datetime import timedelta
 
-from sqlalchemy import BigInteger, DateTime, Numeric, String
+from sqlalchemy import BigInteger, DateTime, Numeric, String, Text
 
 DOCUMENT_LIST_URL = "https://documents-api.wildberries.ru/api/v1/documents/list"
 DOCUMENT_DOWNLOAD_URL = "https://documents-api.wildberries.ru/api/v1/documents/download/all"
@@ -49,14 +49,16 @@ WEEKLY_REPORT_SCHEMA = {
 }
 
 REDEEM_NOTIFICATION_SCHEMA = {
-    "№": String(255),
-    "wild": String(255),
-    "subject_name": String(255),
+    # Идентификаторы и служебные значения WB не имеют надежного ограничения
+    # в 255 символов.
+    "№": Text,
+    "wild": Text,
+    "subject_name": Text,
     "quantity": BigInteger,
     "sum_rub_with_vat": Numeric(12, 2),
     "vat_rate": String(10),
     "vat_sum_rub": Numeric(12, 2),
-    "kiz": String(255),
-    "doc_name": String(255),
-    "account": String(255),
+    "kiz": Text,
+    "doc_name": Text,
+    "account": Text,
 }

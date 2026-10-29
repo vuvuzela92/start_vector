@@ -130,6 +130,12 @@ def _append_quarterly_seller_price(
 
     prepared_quarterly = df_result.copy()
     prepared_prices = df_seller_price.copy()
+    # PostgreSQL NUMERIC приходит как Decimal/object; перед записью в Sheets
+    # приводим только новые цены к обычному числовому типу.
+    prepared_prices["seller_price"] = pd.to_numeric(
+        prepared_prices["seller_price"],
+        errors="coerce",
+    )
 
     prepared_quarterly["_merge_wild"] = (
         prepared_quarterly["wild"].fillna("").astype(str).str.strip()

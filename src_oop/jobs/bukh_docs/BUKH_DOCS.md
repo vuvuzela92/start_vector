@@ -100,6 +100,12 @@ python main.py update_week_n_redeem
 - `vat_rate` и `vat_sum_rub` - ставка и сумма НДС;
 - `kiz` - маркировка, если присутствует.
 
+Поле `subject_name` хранится в PostgreSQL как `TEXT`, потому что WB может
+передать наименование товара длиннее 255 символов. Миграция
+`migrations/001_expand_redeem_subject_name.sql` обязательна для уже созданной
+таблицы `redeem_notification`; она только расширяет допустимый тип и не меняет
+исторические значения.
+
 ### Финансовый отчет WB
 
 Источник для витрины `week_n_redeem`: таблица `fin_reports_full`.
