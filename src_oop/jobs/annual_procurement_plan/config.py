@@ -75,6 +75,7 @@ seller_price_query = text("""
         ON a.nm_id = f.nm_id
     WHERE a.local_vendor_code IS NOT NULL
       AND a.local_vendor_code != ''
+      AND LOWER(TRIM(f.status)) NOT IN ('cancel', 'отмена')
     ORDER BY
         a.local_vendor_code,
         f.created_at DESC;
