@@ -228,7 +228,7 @@ class ArticleAnalyzeRepository:
                                 COALESCE(fin_sales.sales_sum, s.sales_sum, orders_sales.sales_sum)
                                 / NULLIF(COALESCE(fin_sales.sales_count, s.sales_count, orders_sales.sales_count), 0),
                                 0
-                            ) / 100.0 * (6 +
+                            ) / 100.0 * (8 + 3 +
                                 CASE
                                     WHEN b.date >= '2026-01-01' THEN ic_2026.fbo_individual_conditions
                                     WHEN b.date BETWEEN '2025-01-01' AND '2025-12-31' THEN ic_2025.fbo_individual_conditions
