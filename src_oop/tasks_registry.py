@@ -141,7 +141,11 @@ TASKS: Dict[str, Dict[str, Any]] = {
     # Yandex Disk и ежедневная выработка дизайнеров.
     "yandex_designer_output": {
         "func": smart_run(yandex_designer_output_run),
-        "desc": "Яндекс.Диск → Google Sheets «Дизайнеры выработка», лист «Дизайнеры»: создание папок дизайнеров и публикация ежедневной выработки",
+        "desc": "Яндекс.Диск → Google Sheets «Дизайнеры выработка», лист «Подсчет с типом файлов»: ежедневный пересчет выработки дизайнеров за последние 10 дней",
+    },
+    "yandex_designer_output_initial": {
+        "func": smart_run(yandex_designer_output_run),
+        "desc": "Первичный пересчет выработки дизайнеров за последние 10 дней → Google Sheets «Дизайнеры выработка», лист «Подсчет с типом файлов»",
     },
     "order_feed": {
         "func": smart_run(order_feed),

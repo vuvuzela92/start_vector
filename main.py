@@ -30,7 +30,7 @@ def main() -> None:
     parser.add_argument(
         "--days",
         type=int,
-        help="Количество последних завершённых дней для orders_article_analyze_run",
+        help="Период анализа или число последних календарных дней выработки дизайнеров",
     )
     parser.add_argument(
         "--days-ago",
@@ -67,14 +67,23 @@ def main() -> None:
 
     period_arguments = (args.days, args.days_ago, args.days_to)
     if any(value is not None for value in period_arguments):
-        if args.task != "orders_article_analyze_run":
-            parser.error("Параметры периода доступны только для orders_article_analyze_run")
-        if args.days is not None and (args.days_ago is not None or args.days_to is not None):
+        designer_tasks = {"yandex_designer_output", "yandex_designer_output_initial"}
+        if args.task in designer_tasks:
+            if args.days is None or args.days_ago is not None or args.days_to is not None:
+                parser.error("Для задач дизайнеров укажите только параметр --days")
+            if args.days < 1:
+                parser.error("Параметр --days должен быть больше нуля")
+            task_kwargs = {"days": args.days}
+        elif args.task != "orders_article_analyze_run":
+            parser.error(
+                "Параметры периода доступны только для orders_article_analyze_run "
+                "и задач учета выработки дизайнеров"
+            )
+        elif args.days is not None and (args.days_ago is not None or args.days_to is not None):
             parser.error("Нельзя одновременно использовать --days и --days-ago/--days-to")
-        if args.days is None and (args.days_ago is None or args.days_to is None):
+        elif args.days is None and (args.days_ago is None or args.days_to is None):
             parser.error("Для диапазона нужно одновременно указать --days-ago и --days-to")
-
-        if args.days is not None:
+        elif args.days is not None:
             task_kwargs = {"days_ago_total": args.days, "days_to": 1}
         else:
             task_kwargs = {

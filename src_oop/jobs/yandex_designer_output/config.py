@@ -40,7 +40,9 @@ def get_config() -> YandexDesignerOutputConfig:
         spreadsheet_title=os.getenv(
             "YANDEX_DESIGNER_SPREADSHEET_TITLE", "Дизайнеры выработка"
         ).strip(),
-        worksheet_title=os.getenv("YANDEX_DESIGNER_WORKSHEET_TITLE", "Дизайнеры").strip(),
+        worksheet_title=os.getenv(
+            "YANDEX_DESIGNER_WORKSHEET_TITLE", "Подсчет с типом файлов"
+        ).strip(),
         request_timeout_seconds=float(os.getenv("YANDEX_DISK_REQUEST_TIMEOUT_SECONDS", "30")),
         max_retries=int(os.getenv("YANDEX_DISK_MAX_RETRIES", "4")),
         max_concurrent_requests=int(os.getenv("YANDEX_DISK_MAX_CONCURRENT_REQUESTS", "5")),

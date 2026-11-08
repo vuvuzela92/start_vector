@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from src_oop.jobs.yandex_designer_output.api_client import YandexDiskClient
 from src_oop.jobs.yandex_designer_output.config import YandexDesignerOutputConfig
@@ -12,6 +13,10 @@ from src_oop.jobs.yandex_designer_output.models import DesignerOutputRow
 from src_oop.jobs.yandex_designer_output.repository import DesignerOutputRepository
 
 logger = logging.getLogger(__name__)
+MOSCOW_TIMEZONE = ZoneInfo("Europe/Moscow")
+DISK_PAGE_SIZE = 100
+SLIDE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 
 
 class DesignerOutputService:
@@ -27,15 +32,18 @@ class DesignerOutputService:
         self.config = config
         self.repository = repository or DesignerOutputRepository(config)
 
-    async def run(self) -> int:
-        """Запускает полный сценарий ежедневной выработки дизайнеров.
+    async def run(self, days: int = 10) -> int:
+        """Пересчитывает заданное число последних дней и публикует выработку.
 
         Бизнес-сценарий: список дизайнеров читается из корневой папки,
-        для каждого обеспечивается папка на завтра, затем по сегодняшним
-        папкам собирается число файлов и добавляется дневной срез в таблицу.
+        обеспечивается папка на завтра, затем содержимое дневных папок за
+        сегодня и заданное количество предыдущих дней классифицируется и
+        обновляется в Google Sheets по московскому времени.
         """
 
-        today = date.today()
+        if days < 1:
+            raise ValueError("Период пересчета должен содержать хотя бы один день")
+        today = datetime.now(MOSCOW_TIMEZONE).date()
         tomorrow = today + timedelta(days=1)
         async with YandexDiskClient(self.config) as client:
             root = await client.get_resource(self.config.root_path)
@@ -44,13 +52,18 @@ class DesignerOutputService:
                 *(client.create_folder(self._folder_path(designer, tomorrow)) for designer in designers)
             )
             rows = await asyncio.gather(
-                *(self._get_designer_row(client, designer, today) for designer in designers)
+                *(
+                    self._get_designer_row(client, designer, today - timedelta(days=days_ago))
+                    for designer in designers
+                    for days_ago in range(days)
+                )
             )
 
         prepared_rows = [row for row in rows if row is not None]
         written_rows = self.repository.save(prepared_rows)
         logger.info(
-            "Сценарий выработки дизайнеров завершён | designers=%s | written_rows=%s | date=%s",
+            "Пересчет выработки дизайнеров завершён | days=%s | designers=%s | written_rows=%s | date=%s",
+            days,
             len(designers),
             written_rows,
             today.strftime("%d.%m.%Y"),
@@ -75,20 +88,66 @@ class DesignerOutputService:
         designer: str,
         work_date: date,
     ) -> DesignerOutputRow | None:
-        """Получает количество файлов дизайнера за указанную дату."""
+        """Классифицирует все файлы дизайнера за указанную дату.
 
+        Бизнес-правило: изображения учитываются как слайды, видеофайлы — как
+        видео, PDF — как инструкции; каждый прочий файл отражается отдельно.
+        Вложенные папки обходятся рекурсивно, а недоступная страница прерывает
+        сбор этой строки, чтобы частичные данные не попали в отчет.
+        """
+
+        root_path = self._folder_path(designer, work_date)
+        counts = {"slides": 0, "videos": 0, "pdf_instructions": 0, "other_files": 0}
+        folders = [root_path]
         try:
-            resource = await client.get_resource(self._folder_path(designer, work_date))
+            resource = await client.get_resource(root_path, limit=DISK_PAGE_SIZE)
+            while folders:
+                folder = folders.pop()
+                folder_resource = resource if folder == root_path else await client.get_resource(
+                    folder, limit=DISK_PAGE_SIZE
+                )
+                embedded = folder_resource.get("_embedded", {})
+                if not isinstance(embedded, dict):
+                    raise RuntimeError("Ответ Yandex Disk не содержит содержимое папки")
+                total = int(embedded.get("total", 0))
+                items = embedded.get("items", [])
+                while len(items) < total:
+                    page = await client.get_resource(
+                        folder, limit=DISK_PAGE_SIZE, offset=len(items)
+                    )
+                    page_embedded = page.get("_embedded", {})
+                    if not isinstance(page_embedded, dict):
+                        raise RuntimeError("Ответ Yandex Disk не содержит страницу папки")
+                    page_items = page_embedded.get("items", [])
+                    if not page_items:
+                        raise RuntimeError("Yandex Disk вернул неполную страницу папки")
+                    items.extend(page_items)
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("type") == "dir":
+                        item_path = item.get("path")
+                        if item_path:
+                            folders.append(str(item_path))
+                        continue
+                    name = str(item.get("name", ""))
+                    extension = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
+                    if extension in SLIDE_EXTENSIONS:
+                        counts["slides"] += 1
+                    elif extension in VIDEO_EXTENSIONS:
+                        counts["videos"] += 1
+                    elif extension == ".pdf":
+                        counts["pdf_instructions"] += 1
+                    else:
+                        counts["other_files"] += 1
         except RuntimeError:
             logger.warning(
-                "Папка дизайнера недоступна, строка пропущена | designer=%s | date=%s",
+                "Папка или её содержимое недоступны, строка пропущена; пересчет остальных продолжается | designer=%s | date=%s",
                 designer,
                 work_date.strftime("%d.%m.%Y"),
             )
             return None
-        embedded = resource.get("_embedded", {})
-        total = embedded.get("total", 0) if isinstance(embedded, dict) else 0
-        return DesignerOutputRow(work_date, designer, int(total))
+        return DesignerOutputRow(work_date, designer, **counts)
 
     def _folder_path(self, designer: str, folder_date: date) -> str:
         """Формирует путь папки дизайнера в формате исходного сценария."""

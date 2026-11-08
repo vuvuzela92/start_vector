@@ -41,10 +41,21 @@ class YandexDiskClient:
         if self._session is not None:
             await self._session.close()
 
-    async def get_resource(self, path: str) -> dict[str, Any]:
-        """Возвращает метаданные ресурса по пути на Yandex Disk."""
+    async def get_resource(
+        self, path: str, *, limit: int | None = None, offset: int = 0
+    ) -> dict[str, Any]:
+        """Возвращает метаданные ресурса или страницу содержимого папки.
 
-        return await self._request("GET", path)
+        Бизнес-правило: для точной выработки вызывающая сторона должна пройти
+        все страницы содержимого, не полагаясь на ограниченный ответ API.
+        """
+
+        params: dict[str, str | int] = {"path": path}
+        if limit is not None:
+            params["limit"] = limit
+        if offset:
+            params["offset"] = offset
+        return await self._request("GET", path, params=params)
 
     async def create_folder(self, path: str) -> bool:
         """Создает папку и возвращает False, если она уже существовала.
@@ -59,7 +70,9 @@ class YandexDiskClient:
         except FileExistsError:
             return False
 
-    async def _request(self, method: str, path: str) -> dict[str, Any]:
+    async def _request(
+        self, method: str, path: str, *, params: dict[str, str | int] | None = None
+    ) -> dict[str, Any]:
         """Выполняет запрос к ресурсу с обработкой временных ошибок API."""
 
         if self._session is None:
@@ -71,7 +84,7 @@ class YandexDiskClient:
             async with self._semaphore:
                 try:
                     async with self._session.request(
-                        method, url, params={"path": path}
+                        method, url, params=params or {"path": path}
                     ) as response:
                         if response.status in {200, 201}:
                             return {} if method == "PUT" else await response.json()
