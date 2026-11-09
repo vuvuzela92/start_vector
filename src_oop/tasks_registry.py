@@ -56,6 +56,7 @@ from src_oop.jobs.fin_reports_analyze.run import (
     update_monthly_report,
     update_outcomes_detalize,
     update_stock_analyze,
+    update_wb_fin_model_report,
     update_weekly_profit_report,
 )
 from src_oop.jobs.fin_reports_analyze.system_penalties_analytics import (
@@ -163,10 +164,6 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "update_penalties_in_gs_purchase_russia": {
         "func": smart_run(update_penalties_in_gs_purchase_russia),
         "desc": "PostgreSQL/WB → Google Sheets «Расчет закупки Россия»: обновление показателей штрафов и остатков для расчёта закупки по России",
-    },
-    "get_bukh_docs": {
-        "func": smart_run(get_bukh_docs_async),
-        "desc": "Запуск получения данных по бухгалтерским документам",
     },
     "get_bukh_docs_async": {
         "func": smart_run(get_bukh_docs_async),
@@ -319,6 +316,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "update_stock_analyze": {
         "func": smart_run(update_stock_analyze),
         "desc": "Данные артикульного анализа/PostgreSQL → Google Sheets «Анализ_фин_отчетов_Вектор», лист «анализ_остатков»",
+    },
+    "update_wb_fin_model_report": {
+        "func": smart_run(update_wb_fin_model_report),
+        "desc": "PostgreSQL `wb_stock_2`, `prices_data`, `article`, `cost_price`; Google Sheets «Расчет поставки Китай_по обороту», лист «Заказы белые ТЕСТ»; Google Sheets «UNIT 2.0 (tested)», листы «Сопост» и «WMS остатки»; Google Sheets «Платежный календарь», лист «Аналитика_платежей» → Google Sheets «Модель фин отчетов», лист «Фин отчет управл»: суммы остатков ВВТ, товара в пути и WB, а также неоплаченной задолженности поставщикам и перед таможней",
     },
     "run_system_penalties_analysis": {
         "func": smart_run(run_system_penalties_analysis),
