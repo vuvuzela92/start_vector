@@ -82,6 +82,67 @@ query_stock_analyze = """
     ORDER BY o."date" DESC;
             """
 
+# Остатки WB и цены по артикулам за вчера без складов, признанных сгоревшими.
+query_wb_stock_financial_report = """
+WITH stock_by_article AS (
+    SELECT
+        w.nm_id,
+        SUM(w.quantity) AS quantity,
+        SUM(w.in_way_to_client) AS in_way_to_client,
+        SUM(w.in_way_from_client) AS in_way_from_client
+    FROM wb_stock_2 AS w
+    WHERE w.snapshot_date = CURRENT_DATE - INTERVAL '1 day'
+      AND NOT EXISTS (
+          SELECT 1
+          FROM unnest(ARRAY[
+              'Волгоград', 'Самара', 'Тула',
+              'Пенза', 'Краснодар', 'Сарапул',
+              'Шушары', 'Электросталь', 'Коледино'
+          ]) AS excluded_city(city_name)
+          WHERE w.warehouse_name ILIKE '%%' || excluded_city.city_name || '%%'
+      )
+    GROUP BY w.nm_id
+),
+price_by_article AS (
+    SELECT DISTINCT ON (p.article_id)
+        p.article_id,
+        p.discounted_price
+    FROM prices_data AS p
+    WHERE p.date = CURRENT_DATE - INTERVAL '1 day'
+    ORDER BY p.article_id, p.date DESC
+),
+stock_by_nm_id AS (
+    SELECT
+        a.nm_id,
+        a.local_vendor_code,
+        MAX(p.discounted_price) AS discounted_price,
+        SUM(s.quantity + s.in_way_to_client + s.in_way_from_client) AS total_quantity
+    FROM stock_by_article AS s
+    JOIN article AS a
+      ON a.nm_id = s.nm_id
+    LEFT JOIN price_by_article AS p
+      ON p.article_id = s.nm_id
+    GROUP BY a.nm_id, a.local_vendor_code
+),
+purchase_price_by_product AS (
+    SELECT
+        cp.local_vendor_code,
+        AVG(cp.purchase_price) AS average_purchase_price
+    FROM cost_price AS cp
+    WHERE cp."date" = CURRENT_DATE - INTERVAL '1 day'
+    GROUP BY cp.local_vendor_code
+)
+SELECT
+    s.local_vendor_code,
+    s.total_quantity,
+    COALESCE(c.average_purchase_price, 0) AS average_purchase_price,
+    s.discounted_price
+FROM stock_by_nm_id AS s
+LEFT JOIN purchase_price_by_product AS c
+  ON c.local_vendor_code = s.local_vendor_code
+ORDER BY s.nm_id;
+"""
+
 query_outcomes_detalize = """
             SELECT *
             FROM (
