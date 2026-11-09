@@ -169,6 +169,29 @@ class PostgreSQLAccessAdapter:
 
         return self._list_user_schemas()
 
+    def list_tables_in_schema(self, schema_name: str) -> tuple[str, ...]:
+        """Возвращает таблицы и обычные представления схемы для формы Telegram.
+
+        Список нужен сценарию выдачи чтения отдельных таблиц. Имена схемы и
+        объектов передаются параметрами через системный каталог; фильтр включает
+        базовые таблицы и представления, которые поддерживают обычный `SELECT`.
+        Материализованные представления требуют отдельного решения и не включены.
+        """
+
+        self._quote_identifier(schema_name)
+        query = text(
+            """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = :schema_name
+              AND table_type IN ('BASE TABLE', 'VIEW')
+            ORDER BY table_name
+            """
+        )
+        with self._engine.connect() as connection:
+            rows = connection.execute(query, {"schema_name": schema_name}).scalars().all()
+        return tuple(str(table_name) for table_name in rows)
+
     def build_grant_plan(
         self,
         request: AccessGrantRequest,

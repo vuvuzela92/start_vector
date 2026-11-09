@@ -59,6 +59,7 @@ def create_database_access_router():
         target = State()
         level = State()
         schema = State()
+        tables = State()
         details = State()
         password = State()
 
@@ -694,15 +695,19 @@ def create_database_access_router():
                 await query.answer()
                 await query.message.answer("В целевой базе не найдены прикладные схемы.")
                 return
+            await state.update_data(selected_schemas=[])
             await state.set_state(GrantForm.schema)
             await query.answer()
             await query.message.answer(
-                "Выберите схему:",
+                "Выберите одну или несколько схем. После выбора нажмите «Готово»:",
                 reply_markup=InlineKeyboardMarkup(
                     inline_keyboard=[
-                        [InlineKeyboardButton(text=schema_name, callback_data=f"dam_schema:{schema_name}")]
+                        [InlineKeyboardButton(text=f"◻ {schema_name}", callback_data=f"dam_schema_toggle:{schema_name}")]
                         for schema_name in schema_names
-                    ] + [[InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:grant_level")]]
+                    ] + [
+                        [InlineKeyboardButton(text="Готово", callback_data="dam_schema_done")],
+                        [InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:grant_level")],
+                    ]
                 ),
             )
             return
@@ -935,40 +940,197 @@ def create_database_access_router():
             return
         await state.update_data(level=selected_level)
         await state.set_state(GrantForm.schema)
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text=schema_name, callback_data=f"dam_schema:{schema_name}")]
-                for schema_name in schema_names
-            ] + [[InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:grant_level")]]
+        await state.update_data(selected_schemas=[])
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"◻ {schema_name}", callback_data=f"dam_schema_toggle:{schema_name}")]
+            for schema_name in schema_names
+        ] + [
+            [InlineKeyboardButton(text="Готово", callback_data="dam_schema_done")],
+            [InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:grant_level")],
+        ])
+        await query.message.answer(
+            "Выберите одну или несколько схем. После выбора нажмите «Готово»:",
+            reply_markup=keyboard,
         )
-        await query.message.answer("Выберите схему:", reply_markup=keyboard)
 
-    @router.callback_query(GrantForm.schema, lambda query: query.data and query.data.startswith("dam_schema:"))
-    async def select_schema(query: CallbackQuery, state: FSMContext) -> None:
-        """Сохраняет выбранную схему и запрашивает логин с таблицами при необходимости."""
+    @router.callback_query(GrantForm.schema, lambda query: query.data and query.data.startswith("dam_schema_toggle:"))
+    async def toggle_schema(query: CallbackQuery, state: FSMContext) -> None:
+        """Добавляет или убирает схему в множественном выборе формы доступа."""
 
         if query.message is None or not _is_manager_chat(query.message.chat.id, settings):
             await query.answer("Доступ не разрешён", show_alert=True)
             return
-        schema_name = query.data.removeprefix("dam_schema:")
+        schema_name = query.data.removeprefix("dam_schema_toggle:")
         form_data = await state.get_data()
-        await state.update_data(schema_name=schema_name)
-        await state.set_state(GrantForm.details)
-        prompt = (
-            "Отправьте логин, затем по одной таблице на строку"
-            if form_data["level"] == "read_tables"
-            else "Отправьте логин пользователя PostgreSQL"
-        )
-        await query.message.answer(
-            f"{prompt}\n\nПример: ivanov_i",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:grant_schema")]
-                ]
-            ),
-        )
+        selected = list(form_data.get("selected_schemas", []))
+        if schema_name in selected:
+            selected.remove(schema_name)
+        else:
+            selected.append(schema_name)
+        await state.update_data(selected_schemas=selected)
+        await query.answer(f"Выбрано схем: {len(selected)}")
+        if query.message.reply_markup:
+            buttons = []
+            for row in query.message.reply_markup.inline_keyboard:
+                new_row = []
+                for button in row:
+                    if button.callback_data and button.callback_data.startswith("dam_schema_toggle:"):
+                        name = button.callback_data.removeprefix("dam_schema_toggle:")
+                        prefix = "☑" if name in selected else "◻"
+                        new_row.append(InlineKeyboardButton(
+                            text=f"{prefix} {name}", callback_data=button.callback_data
+                        ))
+                    else:
+                        new_row.append(button)
+                buttons.append(new_row)
+            await query.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+    @router.callback_query(GrantForm.schema, lambda query: query.data == "dam_schema_done")
+    async def finish_schema_selection(query: CallbackQuery, state: FSMContext) -> None:
+        """Завершает выбор схем и переходит к таблицам или логину."""
+
+        if query.message is None or not _is_manager_chat(query.message.chat.id, settings):
+            await query.answer("Доступ не разрешён", show_alert=True)
+            return
+        form_data = await state.get_data()
+        selected_schemas = form_data.get("selected_schemas", [])
+        if not selected_schemas:
+            await query.answer("Выберите хотя бы одну схему", show_alert=True)
+            return
+        if len(selected_schemas) > 30:
+            await query.answer("За одну заявку можно выбрать не более 30 схем", show_alert=True)
+            return
+        await state.update_data(schema_tables={})
+        if form_data["level"] == "read_tables":
+            await state.update_data(current_schema_index=0, selected_tables=[])
+            await state.set_state(GrantForm.tables)
+            await show_table_selection(query.message, state)
+        else:
+            await state.set_state(GrantForm.details)
+            await query.message.answer(
+                "Введите логин пользователя PostgreSQL:",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:grant_schema")
+                ]]),
+            )
         await query.answer()
 
+    async def show_table_selection(message: Message, state: FSMContext) -> None:
+        """Показывает выбор таблиц для текущей схемы в сценарии read."""
+
+        form_data = await state.get_data()
+        schemas = form_data["selected_schemas"]
+        schema_index = form_data["current_schema_index"]
+        schema_name = schemas[schema_index]
+        service_settings = DatabaseAccessManagementSettings.from_env()
+        adapter = PostgreSQLAccessAdapter(service_settings.database_url)
+        try:
+            table_names = await asyncio.to_thread(adapter.list_tables_in_schema, schema_name)
+        except Exception as error:
+            logger.error(
+                "Не удалось получить таблицы схемы PostgreSQL | schema_name=%s | error_type=%s",
+                schema_name,
+                type(error).__name__,
+            )
+            await message.answer(f"Не удалось загрузить таблицы схемы {schema_name}.")
+            await state.clear()
+            return
+        await state.update_data(current_schema_tables=list(table_names), selected_tables=[])
+        if not table_names:
+            await message.answer(f"В схеме {schema_name} нет обычных таблиц.")
+            current_tables = form_data.get("schema_tables", {})
+            current_tables[schema_name] = []
+            await state.update_data(schema_tables=current_tables)
+            next_index = schema_index + 1
+            await state.update_data(current_schema_index=next_index)
+            if next_index < len(schemas):
+                await show_table_selection(message, state)
+            else:
+                await state.set_state(GrantForm.details)
+                await message.answer("Введите логин пользователя PostgreSQL:")
+            return
+        await message.answer(
+            f"Схема {schema_name}: выберите одну или несколько таблиц и нажмите «Далее»:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="➡️ Далее", callback_data="dam_table_done")],
+                [InlineKeyboardButton(text="↩️ К выбору схем", callback_data="dam_back:grant_schema")],
+            ] + [
+                [InlineKeyboardButton(text=f"◻ {table_name}", callback_data=f"dam_table_toggle:{index}")]
+                for index, table_name in enumerate(table_names)
+            ] + [
+                [InlineKeyboardButton(text="➡️ Далее", callback_data="dam_table_done")],
+                [InlineKeyboardButton(text="↩️ К выбору схем", callback_data="dam_back:grant_schema")],
+            ]),
+        )
+
+    @router.callback_query(GrantForm.tables, lambda query: query.data and query.data.startswith("dam_table_toggle:"))
+    async def toggle_table(query: CallbackQuery, state: FSMContext) -> None:
+        """Переключает таблицу в выборе нескольких таблиц выбранной схемы."""
+
+        if query.message is None or not _is_manager_chat(query.message.chat.id, settings):
+            await query.answer("Доступ не разрешён", show_alert=True)
+            return
+        form_data = await state.get_data()
+        index = int(query.data.removeprefix("dam_table_toggle:"))
+        table_names = form_data["current_schema_tables"]
+        if index < 0 or index >= len(table_names):
+            await query.answer("Таблица больше не доступна", show_alert=True)
+            return
+        selected = list(form_data.get("selected_tables", []))
+        if index in selected:
+            selected.remove(index)
+        else:
+            selected.append(index)
+        await state.update_data(selected_tables=selected)
+        await query.answer(f"Выбрано таблиц: {len(selected)}")
+        if query.message.reply_markup:
+            keyboard = []
+            for row in query.message.reply_markup.inline_keyboard:
+                button = row[0]
+                if button.callback_data and button.callback_data.startswith("dam_table_toggle:"):
+                    item_index = int(button.callback_data.removeprefix("dam_table_toggle:"))
+                    mark = "☑" if item_index in selected else "◻"
+                    button = InlineKeyboardButton(
+                        text=f"{mark} {table_names[item_index]}", callback_data=button.callback_data
+                    )
+                keyboard.append([button])
+            await query.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+
+    @router.callback_query(GrantForm.tables, lambda query: query.data == "dam_table_done")
+    async def finish_table_selection(query: CallbackQuery, state: FSMContext) -> None:
+        """Сохраняет таблицы схемы и ведёт к следующей схеме либо логину."""
+
+        if query.message is None or not _is_manager_chat(query.message.chat.id, settings):
+            await query.answer("Доступ не разрешён", show_alert=True)
+            return
+        form_data = await state.get_data()
+        selected_indices = form_data.get("selected_tables", [])
+        if not selected_indices:
+            await query.answer("Выберите хотя бы одну таблицу", show_alert=True)
+            return
+        if len(selected_indices) > 50:
+            await query.answer("В одной схеме можно выбрать не более 50 таблиц", show_alert=True)
+            return
+        schema_index = form_data["current_schema_index"]
+        schema_name = form_data["selected_schemas"][schema_index]
+        current_tables = form_data["schema_tables"]
+        current_tables[schema_name] = [
+            form_data["current_schema_tables"][index]
+            for index in selected_indices
+        ]
+        next_index = schema_index + 1
+        await state.update_data(schema_tables=current_tables, current_schema_index=next_index)
+        await query.answer()
+        if next_index < len(form_data["selected_schemas"]):
+            await show_table_selection(query.message, state)
+            return
+        await state.set_state(GrantForm.details)
+        await query.message.answer(
+            "Введите логин пользователя PostgreSQL:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="↩️ Назад", callback_data="dam_back:grant_schema")
+            ]]),
+        )
     @router.message(GrantForm.details)
     async def create_read_all_grant(message: Message, state: FSMContext) -> None:
         """Создаёт распоряжение чтения всех данных для выбранной PostgreSQL-базы."""
@@ -979,26 +1141,12 @@ def create_database_access_router():
         parts = [part.strip() for part in (message.text or "").split("|")]
         form_data = await state.get_data()
         level = form_data["level"]
-        if level == "read_tables":
-            parts = [line.strip() for line in (message.text or "").splitlines() if line.strip()]
-        expected_count = 2 if level == "read_tables" else 1
-        if len(parts) < expected_count or not all(parts):
+        if not parts or not parts[0]:
             await message.answer("Формат сообщения не соответствует выбранной роли.")
             return
         login_name = parts[0]
         display_name = login_name
-        if level == "read_tables":
-            schema_name = form_data["schema_name"]
-            table_names = parts[1:]
-            reason = "Выдача доступа через Telegram-бота"
-            scope = {
-                "database": "",
-                "schema_name": schema_name,
-                "tables": table_names,
-            }
-        else:
-            reason = "Выдача доступа через Telegram-бота"
-            scope = {"database": "", "schema_name": form_data.get("schema_name")}
+        reason = "Выдача доступа через Telegram-бота"
         service_settings = DatabaseAccessManagementSettings.from_env()
         repository = AccessGrantRepository.from_database_url(
             service_settings.database_url, schema_name=service_settings.schema_name
@@ -1009,31 +1157,53 @@ def create_database_access_router():
             await state.clear()
             await message.answer("Выбранная база больше недоступна. Начните заново: /grant")
             return
-        scope["database"] = target.database_name
+        selected_schemas = form_data.get("selected_schemas")
+        if level == "read_tables":
+            scopes = [
+                {
+                    "database": target.database_name,
+                    "schema_name": schema_name,
+                    "tables": tables,
+                }
+                for schema_name, tables in form_data.get("schema_tables", {}).items()
+            ]
+        elif selected_schemas:
+            scopes = [
+                {"database": target.database_name, "schema_name": schema_name}
+                for schema_name in selected_schemas
+            ]
+        else:
+            scopes = [{"database": target.database_name, "schema_name": None}]
+        if not scopes:
+            await message.answer("Для выбранной схемы не выбраны таблицы. Начните выдачу заново.")
+            await state.clear()
+            return
+        requested_by = str(message.from_user.id if message.from_user else message.chat.id)
         try:
-            grant = repository.create_pending_grant(
-                AccessGrantRequest(
-                    principal={"principal_id": login_name, "principal_type": "human", "login_name": login_name, "display_name": display_name, "secret_ref": "manual://password"},
-                    target_id=target.target_id, engine="postgresql", level=level,
-                    scope=scope, reason=reason,
-                    requested_by=str(message.from_user.id if message.from_user else message.chat.id),
-                )
-            )
+            grant_requests = [
+                    AccessGrantRequest(
+                        principal={"principal_id": login_name, "principal_type": "human", "login_name": login_name, "display_name": display_name, "secret_ref": "manual://password"},
+                        target_id=target.target_id, engine="postgresql", level=level,
+                        scope=scope, reason=reason, requested_by=requested_by,
+                    )
+                for scope in scopes
+            ]
+            created_grants = repository.create_pending_grants(grant_requests)
         except (LookupError, ValueError) as error:
-            await message.answer(f"Не удалось создать распоряжение: {error}")
+            await message.answer(f"Не удалось создать распоряжения: {error}")
             return
         await state.update_data(
-            grant_id=grant.id,
+            grant_ids=[grant.id for grant in created_grants],
             login_name=login_name,
             target_id=target.target_id,
             level=level,
-            scope=scope,
+            scopes=scopes,
             reason=reason,
-            requested_by=str(message.from_user.id if message.from_user else message.chat.id),
+            requested_by=requested_by,
         )
         await state.set_state(GrantForm.password)
         await message.answer(
-            f"Распоряжение {grant.id} зарегистрировано. Введите пароль новой учётной записи "
+            f"Создано распоряжений: {len(created_grants)}. Введите пароль новой учётной записи "
             "одним сообщением. Пароль не сохраняется в сервисе."
         )
         await message.answer(
@@ -1073,16 +1243,24 @@ def create_database_access_router():
         executor = PostgreSQLGrantExecutor(
             repository=repository, secret_resolver=EnvironmentSecretResolver()
         )
-        granted = await asyncio.to_thread(
-            executor.execute_with_password, form_data["grant_id"], password
-        )
+        results = []
+        for grant_id in form_data["grant_ids"]:
+            granted = await asyncio.to_thread(
+                executor.execute_with_password, grant_id, password
+            )
+            results.append(granted)
         login_name = form_data["login_name"]
         await state.clear()
-        await message.answer(
-            f"Доступ для {login_name} выдан и отмечен активным."
-            if granted
-            else f"Не удалось выдать доступ для {login_name}. Проверьте параметры подключения и права технического администратора."
-        )
+        successful_count = sum(results)
+        if successful_count == len(results):
+            await message.answer(
+                f"Доступ для {login_name} выдан по всем выбранным схемам и таблицам."
+            )
+        else:
+            await message.answer(
+                f"Для {login_name} успешно обработано {successful_count} из {len(results)} распоряжений. "
+                "Неуспешные распоряжения отмечены в журнале. Проверьте права технического администратора."
+            )
 
     @router.callback_query(
         GrantForm.password,
@@ -1099,9 +1277,11 @@ def create_database_access_router():
         repository = AccessGrantRepository.from_database_url(
             service_settings.database_url, schema_name=service_settings.schema_name
         )
-        cancelled = repository.cancel_pending_grant(
-            form_data["grant_id"], actor_id=form_data["requested_by"]
-        )
+        cancellations = [
+            repository.cancel_pending_grant(grant_id, actor_id=form_data["requested_by"])
+            for grant_id in form_data.get("grant_ids", [])
+        ]
+        cancelled = bool(cancellations) and all(cancellations)
         await state.clear()
         await query.answer()
         await query.message.answer(

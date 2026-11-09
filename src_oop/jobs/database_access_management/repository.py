@@ -701,3 +701,22 @@ class AccessGrantRepository:
             request.level.value,
         )
         return AccessGrantResponse(id=grant_id, status=status, created_at=created_at)
+
+    def create_pending_grants(
+        self,
+        requests: list[AccessGrantRequest],
+    ) -> list[AccessGrantResponse]:
+        """Сохраняет набор областей одного решения общей транзакцией.
+
+        Метод обслуживает множественный выбор схем и таблиц в Telegram: все
+        распоряжения создаются вместе либо не создаётся ни одно, чтобы частично
+        сохранённый выбор не остался в очереди без соответствующей выдачи прав.
+        """
+
+        if not requests:
+            raise ValueError("Для создания распоряжений нужен хотя бы один запрос.")
+        created: list[AccessGrantResponse] = []
+        with self.engine.begin():
+            for request in requests:
+                created.append(self.create_pending_grant(request))
+        return created
