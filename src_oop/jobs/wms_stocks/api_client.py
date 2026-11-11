@@ -259,14 +259,40 @@ class WMSStockService:
                     return self._extract_daily_balance_items(payload_json)
             except aiohttp.ClientError as error:
                 wait_seconds = retry_delays[min(attempt - 1, len(retry_delays) - 1)]
+                connector_error = (
+                    error
+                    if isinstance(error, aiohttp.ClientConnectorError)
+                    else None
+                )
+                underlying_error = (
+                    connector_error.os_error if connector_error is not None else error
+                )
+                error_details = {
+                    "host": connector_error.host if connector_error is not None else None,
+                    "port": connector_error.port if connector_error is not None else None,
+                    "reason_type": type(underlying_error).__name__,
+                    "reason": str(underlying_error)[:300],
+                    "errno": getattr(underlying_error, "errno", None),
+                    "winerror": getattr(underlying_error, "winerror", None),
+                    "error_args": str(getattr(underlying_error, "args", ()))[:300],
+                    "retrying": attempt < retries,
+                }
                 logger.warning(
-                    "Сетевая ошибка при запросе дневной истории остатков, повторяем попытку | offset=%s | limit=%s | attempt=%s/%s | wait_seconds=%s | error_type=%s",
+                    "Сетевая ошибка при запросе дневной истории остатков | host=%s | port=%s | offset=%s | limit=%s | attempt=%s/%s | wait_seconds=%s | error_type=%s | reason_type=%s | reason=%s | errno=%s | winerror=%s | error_args=%s | retrying=%s",
+                    error_details["host"],
+                    error_details["port"],
                     offset,
                     limit,
                     attempt,
                     retries,
                     wait_seconds,
                     type(error).__name__,
+                    error_details["reason_type"],
+                    error_details["reason"],
+                    error_details["errno"],
+                    error_details["winerror"],
+                    error_details["error_args"],
+                    error_details["retrying"],
                 )
                 if attempt == retries:
                     return [], None

@@ -15,6 +15,7 @@ from src_oop.jobs.sales_plan.config import (
     ACTIVE_WILD_STATUSES,
     MISSING_PLAN_PRICE_VALUES,
     QUARTER_PLAN_3Q_2026_UNITS_COLUMN,
+    QUARTER_PLAN_4Q_2026_UNITS_COLUMN,
     QUARTER_PLAN_PRICE_COLUMN,
     QUARTER_PLAN_SUBJECT_COLUMN,
     QUARTER_PLAN_WILD_COLUMN,
@@ -354,6 +355,8 @@ class SalesPlanAccountingCategoryRepository:
                 "Справочник учетной категории не может быть обновлен: после очистки во вкладке Поквартально не осталось строк с wild и предметом."
             )
 
+        self._ensure_quarter_4_column()
+
         existing_reference = self._read_existing_reference()
         payload_dataframe, inserted_rows, updated_rows = self._build_database_payload(
             prepared_dataframe=prepared_dataframe,
@@ -408,6 +411,9 @@ class SalesPlanAccountingCategoryRepository:
                 "quarter_3_units_2026": dataframe[QUARTER_PLAN_3Q_2026_UNITS_COLUMN].map(
                     self._normalize_quarter_units_value
                 ),
+                "quarter_4_units_2026": dataframe[QUARTER_PLAN_4Q_2026_UNITS_COLUMN].map(
+                    self._normalize_quarter_units_value
+                ),
                 "plan_price": dataframe[QUARTER_PLAN_PRICE_COLUMN].map(
                     self._normalize_plan_price_value
                 ),
@@ -436,6 +442,7 @@ class SalesPlanAccountingCategoryRepository:
             QUARTER_PLAN_WILD_COLUMN,
             QUARTER_PLAN_SUBJECT_COLUMN,
             QUARTER_PLAN_3Q_2026_UNITS_COLUMN,
+            QUARTER_PLAN_4Q_2026_UNITS_COLUMN,
             QUARTER_PLAN_PRICE_COLUMN,
         }
         missing_columns = sorted(required_columns - set(dataframe.columns))
@@ -443,6 +450,24 @@ class SalesPlanAccountingCategoryRepository:
             raise ValueError(
                 "Во вкладке Поквартально отсутствуют обязательные колонки для справочника учетной категории: "
                 f"{missing_columns}"
+            )
+
+    @staticmethod
+    def _ensure_quarter_4_column() -> None:
+        """Добавляет в действующую таблицу поле среднемесячного плана 4-го квартала.
+
+        Бизнес-сценарий:
+        начиная с октября отчет по продажам должен опираться на план 4-го
+        квартала. Таблица справочника уже существует, поэтому перед batch
+        upsert колонка создается через безопасный `IF NOT EXISTS`.
+        """
+
+        with Database.get_engine().begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE sales_plan_accounting_category_reference "
+                    "ADD COLUMN IF NOT EXISTS quarter_4_units_2026 NUMERIC(14, 4)"
+                )
             )
 
     @staticmethod
@@ -1108,10 +1133,22 @@ class SalesPlanReportRepository:
                 SELECT
                     sp.wild,
                     sp.subject_name,
-                    ROUND(sp.quarter_3_units_2026) AS quantity_plan,
+                    ROUND(
+                        CASE
+                            WHEN EXTRACT(MONTH FROM CAST(:report_date AS date)) >= 10
+                                THEN sp.quarter_4_units_2026
+                            ELSE sp.quarter_3_units_2026
+                        END
+                    ) AS quantity_plan,
                     sp.plan_price,
                     ROUND(
-                        sp.plan_price * ROUND(sp.quarter_3_units_2026),
+                        sp.plan_price * ROUND(
+                            CASE
+                                WHEN EXTRACT(MONTH FROM CAST(:report_date AS date)) >= 10
+                                    THEN sp.quarter_4_units_2026
+                                ELSE sp.quarter_3_units_2026
+                            END
+                        ),
                         2
                     ) AS plan_orders_rub
                 FROM sales_plan_accounting_category_reference AS sp

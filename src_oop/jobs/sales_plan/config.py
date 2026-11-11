@@ -82,12 +82,14 @@ SALES_PLAN_ACCOUNTING_CATEGORY_SCHEMA = {
     "wild": String(255),
     "subject_name": String(255),
     "quarter_3_units_2026": Numeric(14, 4),
+    "quarter_4_units_2026": Numeric(14, 4),
     "plan_price": Numeric(14, 2),
     "created_at": DateTime,
 }
 QUARTER_PLAN_SUBJECT_COLUMN = "предмет"
 QUARTER_PLAN_WILD_COLUMN = "wild"
 QUARTER_PLAN_3Q_2026_UNITS_COLUMN = "3 квартал, шт 2026"
+QUARTER_PLAN_4Q_2026_UNITS_COLUMN = "4 квартал, шт 2026"
 QUARTER_PLAN_WILD_STATUS_COLUMN = "Статус вилд"
 QUARTER_PLAN_PRICE_COLUMN = "цена продажная плановая"
 
