@@ -1,13 +1,18 @@
 const CONFIG = {
-  SOURCE_SHEET: 'октябрь 2026',
+  SALARY_DIRECTORY_SHEET: 'Справочник окладов офис',
+  SUPPLEMENTAL_ROLE_COLUMN: 12,
+  SUPPLEMENTAL_ENTITY_COLUMN: 13,
+  SUPPLEMENTAL_GROUP_COLUMN: 14,
 
   PAYROLL_SHEETS: [
     {
       name: 'Октябрь ЗП Вектор',
+      sourceSheet: 'октябрь 2026 new',
       legalEntityCell: 'B13',
     },
     {
       name: 'Октябрь ЗП Старт',
+      sourceSheet: 'октябрь 2026 new',
       legalEntityCell: 'B14',
     },
   ],
@@ -72,6 +77,7 @@ const CONFIG = {
     'округление2',
     'Итого начисленно за месяц',
     'Итого выплаченно за месяц',
+    'Зачёт аванса',
   ],
 };
 
@@ -88,9 +94,9 @@ function onOpen() {
 
 
 /**
- * Перестраивает октябрьские ведомости Вектора и Старта, восстанавливает формулы дней,
- * начислений и выплат, а также заново считает итоги групп. Для каждого юрлица берётся
- * отдельное значение из справочника; отсутствие ставки оставляет оклад пустым.
+ * Перестраивает октябрьские ведомости Вектора и Старта по актуальному листу табеля,
+ * объединяет дополнительные назначения с основной строкой сотрудника и восстанавливает
+ * формулы дней, выплат и групповых итогов. Ручные выплаты сохраняются.
  */
 function actualizePayrollSheets() {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
@@ -101,27 +107,36 @@ function actualizePayrollSheets() {
   }
 
   try {
-    const sourceSheet = spreadsheet.getSheetByName(CONFIG.SOURCE_SHEET);
     const directorySheet = spreadsheet.getSheetByName(
       CONFIG.DIRECTORY_SHEET
     );
-
-    if (!sourceSheet) {
-      throw new Error(`Не найден лист «${CONFIG.SOURCE_SHEET}».`);
-    }
+    const salaryDirectorySheet = spreadsheet.getSheetByName(
+      CONFIG.SALARY_DIRECTORY_SHEET
+    );
 
     if (!directorySheet) {
       throw new Error(`Не найден лист «${CONFIG.DIRECTORY_SHEET}».`);
     }
 
+    if (!salaryDirectorySheet) {
+      throw new Error(`Не найден лист «${CONFIG.SALARY_DIRECTORY_SHEET}».`);
+    }
+
     for (const payrollConfig of CONFIG.PAYROLL_SHEETS) {
       const payrollSheet = spreadsheet.getSheetByName(payrollConfig.name);
+      const sourceSheet = spreadsheet.getSheetByName(
+        payrollConfig.sourceSheet
+      );
 
       if (!payrollSheet) {
         console.log(
           `Лист «${payrollConfig.name}» отсутствует. Обновление пропущено.`
         );
         continue;
+      }
+
+      if (!sourceSheet) {
+        throw new Error(`Не найден лист «${payrollConfig.sourceSheet}».`);
       }
 
       const legalEntity = directorySheet
@@ -136,13 +151,22 @@ function actualizePayrollSheets() {
         );
       }
 
-      actualizePayrollSheet_(payrollSheet, sourceSheet, legalEntity);
+      const supplementalAssignments = readSupplementalAssignments_(
+        salaryDirectorySheet,
+        legalEntity
+      );
+      actualizePayrollSheet_(
+        payrollSheet,
+        sourceSheet,
+        legalEntity,
+        supplementalAssignments
+      );
     }
 
     SpreadsheetApp.flush();
     SpreadsheetApp.getUi().alert(
       'Актуализация завершена',
-      'Октябрьские ведомости, формулы и итоги групп обновлены.',
+      'Октябрьские ведомости, дополнительные назначения и итоги групп обновлены.',
       SpreadsheetApp.getUi().ButtonSet.OK
     );
   } finally {
@@ -155,12 +179,25 @@ function actualizePayrollSheets() {
  * Перестраивает одну зарплатную ведомость для выбранного юрлица, сохраняя ручные
  * выплаты и комментарии значениями, а вычисляемые поля возвращая формулами.
  */
-function actualizePayrollSheet_(sheet, sourceSheet, legalEntity) {
+function actualizePayrollSheet_(
+  sheet,
+  sourceSheet,
+  legalEntity,
+  supplementalAssignments
+) {
   const lastColumn = sheet.getLastColumn();
   const lastRow = sheet.getMaxRows();
-  const savedData = saveExistingData_(sheet, lastColumn);
+  const savedData = saveExistingData_(
+    sheet,
+    lastColumn,
+    supplementalAssignments
+  );
   const formulaTemplates = saveFormulaTemplates_(sheet, lastColumn);
-  const sourceEmployees = readSourceEmployees_(sourceSheet, legalEntity);
+  const sourceEmployees = readSourceEmployees_(
+    sourceSheet,
+    legalEntity,
+    supplementalAssignments
+  );
   const outputRows = buildOutputRows_(sourceEmployees);
   const oldRowCount = lastRow - CONFIG.DATA_START_ROW + 1;
 
@@ -175,6 +212,7 @@ function actualizePayrollSheet_(sheet, sourceSheet, legalEntity) {
   sheet
     .getRange(CONFIG.DATA_START_ROW, 2, outputRows.length, 4)
     .setValues(outputRows.map((row) => row.identity));
+  writeEmployeeNumbers_(sheet, outputRows);
 
   const employeeRows = [];
   const totalRows = [];
@@ -199,7 +237,20 @@ function actualizePayrollSheet_(sheet, sourceSheet, legalEntity) {
     employeeRows,
     formulaTemplates
   );
+  applyHourlySalaryFormulaRules_(
+    sheet,
+    sourceSheet,
+    employeeRows,
+    supplementalAssignments
+  );
   applyCalculatedFormulaRules_(sheet, employeeRows);
+  applyBaseSalaryFormulaRules_(sheet, employeeRows);
+  applySupplementalFormulaRules_(
+    sheet,
+    sourceSheet,
+    employeeRows,
+    supplementalAssignments
+  );
   writeGroupTotals_(sheet, employeeRows, totalRows);
 
   sheet
@@ -213,10 +264,39 @@ function actualizePayrollSheet_(sheet, sourceSheet, legalEntity) {
 
 
 /**
+ * Нумерует сотрудников после перестройки ведомости; разделители групп и строки
+ * итогов остаются без номера, а дополнительные назначения входят в строку сотрудника.
+ */
+function writeEmployeeNumbers_(sheet, outputRows) {
+  let employeeNumber = 0;
+  const numbers = outputRows.map((row) => {
+    if (row.type === 'employee') {
+      employeeNumber += 1;
+      return [employeeNumber];
+    }
+    return [''];
+  });
+
+  sheet
+    .getRange(
+      CONFIG.DATA_START_ROW,
+      1,
+      sheet.getMaxRows() - CONFIG.DATA_START_ROW + 1,
+      1
+    )
+    .clearContent();
+
+  sheet
+    .getRange(CONFIG.DATA_START_ROW, 1, numbers.length, 1)
+    .setValues(numbers);
+}
+
+
+/**
  * Сохраняет только значения без формул, чтобы ручные начисления и даты выплат
  * сотрудников пережили перестройку строк ведомости.
  */
-function saveExistingData_(sheet, lastColumn) {
+function saveExistingData_(sheet, lastColumn, supplementalAssignments) {
   const lastRow = sheet.getMaxRows();
   const rowCount = lastRow - CONFIG.DATA_START_ROW + 1;
   const range = sheet.getRange(
@@ -228,18 +308,46 @@ function saveExistingData_(sheet, lastColumn) {
   const values = range.getValues();
   const formulas = range.getFormulas();
   const result = new Map();
+  const employeeCounts = new Map();
+  const supplementalKeys = new Set(
+    supplementalAssignments.map((assignment) =>
+      makeEmployeeKey_(
+        assignment.fio,
+        assignment.legalEntity,
+        assignment.designation
+      )
+    )
+  );
 
-  for (let index = 0; index < values.length; index += 1) {
-    const row = values[index];
-    const formulaRow = formulas[index];
+  for (const row of values) {
     const fio = String(row[0] || '').trim();
+    const position = String(row[1] || '').trim();
     const legalEntity = String(row[2] || '').trim();
 
     if (!fio || !legalEntity || fio.startsWith(CONFIG.TOTAL_PREFIX)) {
       continue;
     }
 
-    const key = makeEmployeeKey_(fio, legalEntity);
+    if (supplementalKeys.has(makeEmployeeKey_(fio, legalEntity, position))) {
+      continue;
+    }
+
+    const legacyKey = makeLegacyEmployeeKey_(fio, legalEntity);
+    employeeCounts.set(legacyKey, (employeeCounts.get(legacyKey) || 0) + 1);
+  }
+
+  for (let index = 0; index < values.length; index += 1) {
+    const row = values[index];
+    const formulaRow = formulas[index];
+    const fio = String(row[0] || '').trim();
+    const position = String(row[1] || '').trim();
+    const legalEntity = String(row[2] || '').trim();
+
+    if (!fio || !legalEntity || fio.startsWith(CONFIG.TOTAL_PREFIX)) {
+      continue;
+    }
+
+    const key = makeEmployeeKey_(fio, legalEntity, position);
     const manualValues = {};
 
     for (
@@ -255,6 +363,14 @@ function saveExistingData_(sheet, lastColumn) {
     }
 
     result.set(key, manualValues);
+
+    const legacyKey = makeLegacyEmployeeKey_(fio, legalEntity);
+    if (
+      !supplementalKeys.has(key) &&
+      employeeCounts.get(legacyKey) === 1
+    ) {
+      result.set(legacyKey, manualValues);
+    }
   }
 
   return result;
@@ -304,10 +420,11 @@ function saveFormulaTemplates_(sheet, lastColumn) {
 
 
 /**
- * Читает сотрудников исходного табеля только для юрлица, выбранного текущей
- * зарплатной ведомостью; строки без ФИО или без группы не создают сотрудников.
+ * Читает основных сотрудников выбранного юрлица из табеля. Строки дополнительных
+ * назначений из справочника исключаются, чтобы зарплатный скрипт не создавал для
+ * совмещения вторую строку поверх уже формируемой строки назначения.
  */
-function readSourceEmployees_(sourceSheet, legalEntity) {
+function readSourceEmployees_(sourceSheet, legalEntity, supplementalAssignments) {
   const lastRow = sourceSheet.getLastRow();
 
   if (lastRow < 5) {
@@ -316,26 +433,100 @@ function readSourceEmployees_(sourceSheet, legalEntity) {
 
   const values = sourceSheet.getRange(5, 1, lastRow - 4, 4).getValues();
 
+  const supplementalKeys = new Set(
+    supplementalAssignments.map((assignment) =>
+      makeEmployeeKey_(
+        assignment.fio,
+        assignment.legalEntity,
+        assignment.designation
+      )
+    )
+  );
+
   return values
     .filter((row) => {
       const fio = String(row[0] || '').trim();
+      const group = String(row[1] || '').trim();
       const rowLegalEntity = String(row[2] || '').trim();
-      const group = String(row[3] || '').trim();
+      const designation = String(row[3] || '').trim();
 
-      return fio && rowLegalEntity === legalEntity && group;
+      return (
+        fio &&
+        rowLegalEntity === legalEntity &&
+        group &&
+        !supplementalKeys.has(
+          makeEmployeeKey_(fio, rowLegalEntity, designation)
+        )
+      );
     })
     .map((row) => ({
       fio: String(row[0] || '').trim(),
-      position: row[1],
+      position: row[3],
       legalEntity: String(row[2] || '').trim(),
-      group: String(row[3] || '').trim(),
+      group: String(row[1] || '').trim(),
     }));
 }
 
 
 /**
- * Формирует для каждой заданной группы её заголовок, сотрудников и отдельную
- * строку итогов; состав сотрудников определяется текущими данными исходного листа.
+ * Читает дополнительные должности из справочника окладов только для текущего
+ * юрлица. Запись считается отдельной работой, когда заполнены назначение,
+ * ФИО, месячный оклад и группа; даты действия проверяются формулами ведомости.
+ */
+function readSupplementalAssignments_(salarySheet, legalEntity) {
+  const lastRow = salarySheet.getLastRow();
+
+  if (lastRow < 3) {
+    return [];
+  }
+
+  const rows = salarySheet.getRange(3, 1, lastRow - 2, 14).getValues();
+  const assignmentsByKey = new Map();
+
+  for (const row of rows) {
+    const fio = String(row[0] || '').trim();
+    const monthlySalary = Number(row[1]);
+    const designation = String(
+      row[CONFIG.SUPPLEMENTAL_ROLE_COLUMN - 1] || ''
+    ).trim();
+    const assignmentEntity = String(
+      row[CONFIG.SUPPLEMENTAL_ENTITY_COLUMN - 1] || ''
+    ).trim();
+    const group = String(
+      row[CONFIG.SUPPLEMENTAL_GROUP_COLUMN - 1] || ''
+    ).trim();
+
+    if (
+      !fio ||
+      !designation ||
+      !group ||
+      assignmentEntity !== legalEntity ||
+      !Number.isFinite(monthlySalary) ||
+      monthlySalary <= 0
+    ) {
+      continue;
+    }
+
+    const key = makeEmployeeKey_(fio, assignmentEntity, designation);
+    assignmentsByKey.set(key, {
+      fio,
+      monthlySalary,
+      startDate: row[2],
+      endDate: row[3],
+      designation,
+      legalEntity: assignmentEntity,
+      group,
+    });
+  }
+
+  return [...assignmentsByKey.values()];
+}
+
+
+/**
+ * Формирует для каждой заданной группы заголовок, основных сотрудников и итоги.
+ * Дополнительные назначения не создают строк: их начисления прибавляются к строке
+ * основного сотрудника, чтобы бухгалтерия видела одну итоговую выплату.
  */
 function buildOutputRows_(employees) {
   const rows = [];
@@ -353,17 +544,34 @@ function buildOutputRows_(employees) {
       identity: [group.title, '', '', ''],
     });
 
-    for (const employee of groupEmployees) {
-      rows.push({
+    const groupRows = [
+      ...groupEmployees.map((employee) => ({
         type: 'employee',
-        key: makeEmployeeKey_(employee.fio, employee.legalEntity),
+        key: makeEmployeeKey_(
+          employee.fio,
+          employee.legalEntity,
+          employee.position
+        ),
         identity: [
           employee.fio,
           employee.position,
           employee.legalEntity,
           employee.group,
         ],
-      });
+      })),
+    ].sort((first, second) => {
+      const fioOrder = first.identity[0].localeCompare(
+        second.identity[0],
+        'ru'
+      );
+      return fioOrder || String(first.identity[1] || '').localeCompare(
+        String(second.identity[1] || ''),
+        'ru'
+      );
+    });
+
+    for (const row of groupRows) {
+      rows.push(row);
     }
 
     rows.push({
@@ -388,7 +596,13 @@ function restoreManualData_(sheet, outputRows, savedData) {
       continue;
     }
 
-    const manualValues = savedData.get(row.key);
+    const manualValues =
+      savedData.get(row.key) ||
+      (row.type === 'employee'
+        ? savedData.get(
+          makeLegacyEmployeeKey_(row.identity[0], row.identity[2])
+        )
+        : null);
 
     if (!manualValues) {
       continue;
@@ -525,41 +739,33 @@ function dayNumberFromHeader_(value) {
 
 
 /**
- * Восстанавливает расчётные поля по названиям заголовков. Все формулы начислений
- * проверяют оклад: если ставка не найдена, связанные суммы остаются пустыми.
+ * Восстанавливает денежные поля основной строки: офисные начисления требуют
+ * оклад из справочника, а складские — суммы за половины месяца из исходного табеля.
  */
 function applyCalculatedFormulaRules_(sheet, employeeRows) {
-  const lastColumn = sheet.getLastColumn();
-  const headers = sheet
-    .getRange(CONFIG.HEADER_ROW, 1, 1, lastColumn)
-    .getDisplayValues()[0];
-  const columnByHeader = new Map();
-
-  headers.forEach((header, index) => {
-    const normalized = normalizeHeader_(header);
-
-    if (normalized && !columnByHeader.has(normalized)) {
-      columnByHeader.set(normalized, index + 1);
-    }
-  });
-
+  const columnByHeader = getColumnMap_(sheet);
   const formulaRules = [
     {
       header: 'Начислено 1 половина месяца',
-      build: (row) =>
-        `=IF(${cellRef_(columnByHeader, 'ОКЛАД', row)}="";"";` +
-        `${cellRef_(columnByHeader, 'Аванс', row)}+` +
-        `${cellRef_(columnByHeader, 'Компенсация1', row)}+` +
-        `${cellRef_(columnByHeader, 'Отпуск/больничный1', row)}+` +
-        `${cellRef_(columnByHeader, 'Премия1', row)}-` +
-        `${cellRef_(columnByHeader, 'Удержания/штраф1', row)})`,
+      build: (row) => {
+        const hourlyGroup = hourlyGroupCondition_(row, columnByHeader);
+        const hasPayrollBasis = payrollBasisCondition_(row, columnByHeader);
+        const amount =
+          `${cellRef_(columnByHeader, 'Аванс', row)}+` +
+          `${cellRef_(columnByHeader, 'Компенсация1', row)}+` +
+          `${cellRef_(columnByHeader, 'Отпуск/больничный1', row)}+` +
+          `${cellRef_(columnByHeader, 'Премия1', row)}-` +
+          `${cellRef_(columnByHeader, 'Удержания/штраф1', row)}`;
+
+        return `=IF($B${row}="";"";IF(${hasPayrollBasis};${amount};""))`;
+      },
     },
     {
       header: 'На руки первая половина мес',
       build: (row) =>
-        `=IF(${cellRef_(columnByHeader, 'ОКЛАД', row)}="";"";` +
+        `=IF(${payrollBasisCondition_(row, columnByHeader)};` +
         `${cellRef_(columnByHeader, 'Начислено 1 половина месяца', row)}-` +
-        `${cellRef_(columnByHeader, 'На карту первая половина мес', row)})`,
+        `${cellRef_(columnByHeader, 'На карту первая половина мес', row)};"")`,
     },
     {
       header: 'округление1',
@@ -569,20 +775,24 @@ function applyCalculatedFormulaRules_(sheet, employeeRows) {
     },
     {
       header: 'Начислено 2 половина месяца',
-      build: (row) =>
-        `=IF(${cellRef_(columnByHeader, 'ОКЛАД', row)}="";"";` +
-        `${cellRef_(columnByHeader, 'Зарплата', row)}+` +
-        `${cellRef_(columnByHeader, 'Компенсация2', row)}+` +
-        `${cellRef_(columnByHeader, 'Отпуск/больничный2', row)}+` +
-        `${cellRef_(columnByHeader, 'Премия2', row)}-` +
-        `${cellRef_(columnByHeader, 'Удержания/штраф2', row)})`,
+      build: (row) => {
+        const amount =
+          `${cellRef_(columnByHeader, 'Зарплата', row)}+` +
+          `${cellRef_(columnByHeader, 'Компенсация2', row)}+` +
+          `${cellRef_(columnByHeader, 'Отпуск/больничный2', row)}+` +
+          `${cellRef_(columnByHeader, 'Премия2', row)}-` +
+          `${cellRef_(columnByHeader, 'Удержания/штраф2', row)}`;
+
+        return `=IF(${payrollBasisCondition_(row, columnByHeader)};${amount};"")`;
+      },
     },
     {
       header: 'На руки вторая половина мес',
       build: (row) =>
-        `=IF(${cellRef_(columnByHeader, 'ОКЛАД', row)}="";"";` +
+        `=IF(${payrollBasisCondition_(row, columnByHeader)};` +
         `${cellRef_(columnByHeader, 'Начислено 2 половина месяца', row)}-` +
-        `${cellRef_(columnByHeader, 'На карту вторая половина мес', row)})`,
+        `${cellRef_(columnByHeader, 'На карту вторая половина мес', row)}-` +
+        `N(${cellRef_(columnByHeader, 'Зачёт аванса', row)});"")`,
     },
     {
       header: 'округление2',
@@ -593,39 +803,383 @@ function applyCalculatedFormulaRules_(sheet, employeeRows) {
     {
       header: 'Итого начисленно за месяц',
       build: (row) =>
-        `=IF(${cellRef_(columnByHeader, 'ОКЛАД', row)}="";"";` +
+        `=IF(${payrollBasisCondition_(row, columnByHeader)};` +
         `${cellRef_(columnByHeader, 'Начислено 1 половина месяца', row)}+` +
-        `${cellRef_(columnByHeader, 'Начислено 2 половина месяца', row)})`,
+        `${cellRef_(columnByHeader, 'Начислено 2 половина месяца', row)};"")`,
     },
     {
       header: 'Итого выплаченно за месяц',
       build: (row) =>
-        `=IF(${cellRef_(columnByHeader, 'ОКЛАД', row)}="";"";` +
+        `=IF(${payrollBasisCondition_(row, columnByHeader)};` +
         `${cellRef_(columnByHeader, 'На карту первая половина мес', row)}+` +
         `${cellRef_(columnByHeader, 'округление1', row)}+` +
         `${cellRef_(columnByHeader, 'На карту вторая половина мес', row)}+` +
-        `${cellRef_(columnByHeader, 'округление2', row)})`,
+        `${cellRef_(columnByHeader, 'округление2', row)};"")`,
     },
     {
       header: 'Сверка',
       build: (row) =>
-        `=IF(${cellRef_(columnByHeader, 'ОКЛАД', row)}="";"";` +
+        `=IF(${payrollBasisCondition_(row, columnByHeader)};` +
         `${cellRef_(columnByHeader, 'Итого начисленно за месяц', row)}-` +
-        `${cellRef_(columnByHeader, 'Итого выплаченно за месяц', row)})`,
+        `${cellRef_(columnByHeader, 'Итого выплаченно за месяц', row)};"")`,
     },
   ];
 
   for (const rule of formulaRules) {
-    const column = columnByHeader.get(normalizeHeader_(rule.header));
+    for (const row of employeeRows) {
+      setFormulaByHeader_(sheet, columnByHeader, rule.header, row, rule.build(row));
+    }
+  }
+}
 
-    if (!column) {
+
+/**
+ * Подключает начисления складских групп из итогов табеля: офис склада получает
+ * базовые суммы двух периодов по ФИО, юрлицу и группе, а персонал и водители —
+ * почасовые суммы с учётом дополнительных назначений.
+ */
+function applyHourlySalaryFormulaRules_(
+  sheet,
+  sourceSheet,
+  employeeRows,
+  supplementalAssignments
+) {
+  if (!employeeRows.length) {
+    return;
+  }
+
+  const columnByHeader = getColumnMap_(sheet);
+  const sourceLastColumn = sourceSheet.getLastColumn();
+  const sourceHeaders = sourceSheet
+    .getRange(CONFIG.SOURCE_HEADER_ROW, 1, 1, sourceLastColumn)
+    .getDisplayValues()[0];
+  const firstHalfIndex = sourceHeaders.indexOf('Начислено 15Д') + 1;
+  const secondHalfIndex = sourceHeaders.indexOf('Начислено 2-я половина') + 1;
+
+  if (!firstHalfIndex || !secondHalfIndex) {
+    throw new Error('В исходном табеле не найдены итоговые начисления двух половин месяца.');
+  }
+
+  const sourceName = sourceSheet.getName().replace(/'/g, "''");
+  const lastSourceColumn = columnToLetter_(sourceLastColumn);
+  const sourceRange = `'${sourceName}'!$A:$${lastSourceColumn}`;
+  const sourceFio = `'${sourceName}'!$A:$A`;
+  const sourceLegalEntity = `'${sourceName}'!$C:$C`;
+  const sourceHeadersRange = `'${sourceName}'!$${CONFIG.SOURCE_HEADER_ROW}:$${CONFIG.SOURCE_HEADER_ROW}`;
+  const salarySheet = `'${CONFIG.SALARY_DIRECTORY_SHEET.replace(/'/g, "''")}'`;
+  const salaryFields = {
+    fio: `${salarySheet}!$A$3:$A`,
+    amount: `${salarySheet}!$B$3:$B`,
+    start: `${salarySheet}!$C$3:$C`,
+    end: `${salarySheet}!$D$3:$D`,
+    designation: `${salarySheet}!$L$3:$L`,
+    legalEntity: `${salarySheet}!$M$3:$M`,
+    group: `${salarySheet}!$N$3:$N`,
+  };
+  const groupColumn = columnByHeader.get(normalizeHeader_('Группа'));
+  const firstEmployeeRow = Math.min(...employeeRows);
+  const lastEmployeeRow = Math.max(...employeeRows);
+  const groupValues = sheet
+    .getRange(firstEmployeeRow, groupColumn, lastEmployeeRow - firstEmployeeRow + 1, 1)
+    .getDisplayValues()
+    .flat();
+
+  for (const row of employeeRows) {
+    const group = normalizeHeader_(groupValues[row - firstEmployeeRow]);
+    if (group === normalizeHeader_('Склад. Офис')) {
+      const rowMatch =
+        `MATCH(1;(${sourceFio}=$B${row})*` +
+        `(${sourceLegalEntity}=$D${row})*` +
+        `('${sourceName}'!$B:$B=$E${row});0)`;
+      const firstHalfFormula =
+        `=IFERROR(INDEX(${sourceRange};${rowMatch};` +
+        `MATCH("Начислено 15Д";${sourceHeadersRange};0));0)`;
+      const secondHalfFormula =
+        `=IFERROR(INDEX(${sourceRange};${rowMatch};` +
+        `MATCH("Начислено 2-я половина";${sourceHeadersRange};0));0)`;
+
+      setFormulaByHeader_(sheet, columnByHeader, 'Аванс', row, firstHalfFormula);
+      setFormulaByHeader_(sheet, columnByHeader, 'Зарплата', row, secondHalfFormula);
       continue;
     }
 
-    for (const row of employeeRows) {
-      sheet.getRange(row, column).setFormula(rule.build(row));
+    if (
+      group !== normalizeHeader_('СКЛАД. Персонал') &&
+      group !== normalizeHeader_('Склад. Водитель')
+    ) {
+      continue;
     }
+
+    const rowMatch =
+      `MATCH(1;(${sourceFio}=$B${row})*` +
+      `(${sourceLegalEntity}=$D${row});0)`;
+    const firstHalfFormula =
+      `=IFERROR(INDEX(${sourceRange};${rowMatch};` +
+      `MATCH("Начислено 15Д";${sourceHeadersRange};0));0)`;
+    const secondHalfFormula =
+      `=IFERROR(INDEX(${sourceRange};${rowMatch};` +
+      `MATCH("Начислено 2-я половина";${sourceHeadersRange};0));0)`;
+
+    const rowIdentity = sheet.getRange(row, 2, 1, 4).getDisplayValues()[0];
+    const matchingAssignments = supplementalAssignments.filter(
+      (assignment) =>
+        normalizeHeader_(assignment.fio) === normalizeHeader_(rowIdentity[0]) &&
+        normalizeHeader_(assignment.legalEntity) === normalizeHeader_(rowIdentity[2])
+    );
+    const assignmentCriteria =
+      `(${salaryFields.fio}=$B${row})*` +
+      `(${salaryFields.designation}<>"")*` +
+      `(${salaryFields.legalEntity}=$D${row})*` +
+      `(${salaryFields.group}=$E${row})`;
+
+    let combinedFirstHalfFormula = firstHalfFormula;
+    let combinedSecondHalfFormula = secondHalfFormula;
+
+    if (matchingAssignments.length) {
+      const fixedAdvance =
+        `SUMPRODUCT(${assignmentCriteria}*` +
+        `(${salaryFields.start}<=EOMONTH($F$1;0))*` +
+        `((${salaryFields.end}="")+(${salaryFields.end}>=$F$1))*` +
+        `${salaryFields.amount}/2)`;
+      const secondHalfSupplement = buildCalendarAccrualFormula_(
+        salaryFields,
+        assignmentCriteria,
+        `$AN${row}`,
+        '$V$1',
+        '$AK$1'
+      ).slice(1);
+
+      combinedFirstHalfFormula =
+        `=IFERROR(INDEX(${sourceRange};${rowMatch};` +
+        `MATCH("Начислено 15Д";${sourceHeadersRange};0));0)+` +
+        `IFERROR(${fixedAdvance};0)`;
+      combinedSecondHalfFormula =
+        `=IFERROR(INDEX(${sourceRange};${rowMatch};` +
+        `MATCH("Начислено 2-я половина";${sourceHeadersRange};0));0)+` +
+        `IFERROR(${secondHalfSupplement};0)`;
+    }
+
+    setFormulaByHeader_(
+      sheet,
+      columnByHeader,
+      'Аванс',
+      row,
+      combinedFirstHalfFormula
+    );
+    setFormulaByHeader_(
+      sheet,
+      columnByHeader,
+      'Зарплата',
+      row,
+      combinedSecondHalfFormula
+    );
   }
+}
+
+
+/**
+ * Проверяет, относится ли строка к складу, где дневные начисления рассчитываются
+ * по почасовой ставке и уже собраны отдельно в исходном табеле.
+ */
+function hourlyGroupCondition_(row, columnByHeader) {
+  const group = cellRef_(columnByHeader, 'Группа', row);
+  return `OR(${group}="СКЛАД. Персонал";${group}="Склад. Водитель")`;
+}
+
+
+/**
+ * Разрешает денежные итоги строки, если найден офисный оклад либо сотрудник
+ * относится к одной из складских групп с начислением по часовой ставке.
+ */
+function payrollBasisCondition_(row, columnByHeader) {
+  const salary = cellRef_(columnByHeader, 'ОКЛАД', row);
+  const hourlyGroup = hourlyGroupCondition_(row, columnByHeader);
+  return `OR(${salary}<>"";${hourlyGroup})`;
+}
+
+
+/**
+ * Считает месячный оклад основной должности и активных дополнительных назначений
+ * одной суммой в строке сотрудника, чтобы итоговая ведомость содержала одну выплату.
+ */
+function applyBaseSalaryFormulaRules_(sheet, employeeRows) {
+  const salarySheetName = CONFIG.SALARY_DIRECTORY_SHEET.replace(/'/g, "''");
+  const salaryRange = `'${salarySheetName}'`;
+  const columnByHeader = getColumnMap_(sheet);
+
+  for (const row of employeeRows) {
+    const formula =
+      `=IF($B${row}="";"";LET(` +
+      `фио;$B${row};` +
+      `юрлицо;$D${row};` +
+      `группа;$E${row};` +
+      `начало_месяца;$F$1;` +
+      `конец_месяца;EOMONTH($F$1;0);` +
+      `основная_ставка;SUMPRODUCT(` +
+      `(${salaryRange}!$A$3:$A=фио)*` +
+      `(${salaryRange}!$C$3:$C<=конец_месяца)*` +
+      `((${salaryRange}!$D$3:$D="")+(${salaryRange}!$D$3:$D>=начало_месяца))*` +
+      `(${salaryRange}!$L$3:$L="")*` +
+      `${salaryRange}!$B$3:$B` +
+      `);` +
+      `дополнительные_ставки;SUMPRODUCT(` +
+      `(${salaryRange}!$A$3:$A=фио)*` +
+      `(${salaryRange}!$M$3:$M=юрлицо)*` +
+      `(${salaryRange}!$N$3:$N=группа)*` +
+      `(${salaryRange}!$L$3:$L<>"")*` +
+      `(${salaryRange}!$C$3:$C<=конец_месяца)*` +
+      `((${salaryRange}!$D$3:$D="")+(${salaryRange}!$D$3:$D>=начало_месяца))*` +
+      `${salaryRange}!$B$3:$B` +
+      `);` +
+      `итоговый_оклад;основная_ставка+дополнительные_ставки;` +
+      `IF(итоговый_оклад=0;"";итоговый_оклад)))`;
+
+    setFormulaByHeader_(sheet, columnByHeader, 'ОКЛАД', row, formula);
+  }
+}
+
+
+/**
+ * Добавляет начисления дополнительных должностей к основной зарплатной строке:
+ * фиксированный аванс равен половине месячной ставки, начисления делятся по
+ * календарным дням, а разница аванса зачитывается во второй половине месяца.
+ */
+function applySupplementalFormulaRules_(
+  sheet,
+  sourceSheet,
+  employeeRows,
+  supplementalAssignments
+) {
+  if (!employeeRows.length || !supplementalAssignments.length) {
+    return;
+  }
+
+  const columnByHeader = getColumnMap_(sheet);
+  const salarySheet = `'${CONFIG.SALARY_DIRECTORY_SHEET.replace(/'/g, "''")}'`;
+  const salaryFields = {
+    fio: `${salarySheet}!$A$3:$A`,
+    amount: `${salarySheet}!$B$3:$B`,
+    start: `${salarySheet}!$C$3:$C`,
+    end: `${salarySheet}!$D$3:$D`,
+    designation: `${salarySheet}!$L$3:$L`,
+    legalEntity: `${salarySheet}!$M$3:$M`,
+    group: `${salarySheet}!$N$3:$N`,
+  };
+  const sourceName = sourceSheet.getName().replace(/'/g, "''");
+  const sourceLastColumn = columnToLetter_(sourceSheet.getLastColumn());
+  const sourceRange = `'${sourceName}'!$A:$${sourceLastColumn}`;
+  const sourceFio = `'${sourceName}'!$A:$A`;
+  const sourceLegalEntity = `'${sourceName}'!$C:$C`;
+  const sourceHeadersRange = `'${sourceName}'!$${CONFIG.SOURCE_HEADER_ROW}:$${CONFIG.SOURCE_HEADER_ROW}`;
+
+  for (const row of employeeRows) {
+    const [fioValue, , legalEntityValue, groupValue] = sheet
+      .getRange(row, 2, 1, 4)
+      .getDisplayValues()[0];
+    const hasSupplement = supplementalAssignments.some((assignment) =>
+      normalizeHeader_(assignment.fio) === normalizeHeader_(fioValue) &&
+      normalizeHeader_(assignment.legalEntity) === normalizeHeader_(legalEntityValue) &&
+      normalizeHeader_(assignment.group) === normalizeHeader_(groupValue)
+    );
+
+    if (!hasSupplement) {
+      continue;
+    }
+
+    const sourceMatch =
+      `MATCH(1;(${sourceFio}=$B${row})*` +
+      `(${sourceLegalEntity}=$D${row});0)`;
+    const baseFirstHalf =
+      `IFERROR(INDEX(${sourceRange};${sourceMatch};` +
+      `MATCH("Начислено 15Д";${sourceHeadersRange};0));0)`;
+    const assignmentCriteria =
+      `(${salaryFields.fio}=$B${row})*` +
+      `(${salaryFields.designation}<>"")*` +
+      `(${salaryFields.legalEntity}=$D${row})*` +
+      `(${salaryFields.group}=$E${row})`;
+    const supplementalAccrual = buildCalendarAccrualFormula_(
+      salaryFields,
+      assignmentCriteria,
+      `$AN${row}`,
+      '$F$1',
+      '$T$1'
+    ).slice(1);
+    const fixedAdvance =
+      `SUMPRODUCT(${assignmentCriteria}*` +
+      `(${salaryFields.start}<=EOMONTH($F$1;0))*` +
+      `((${salaryFields.end}="")+(${salaryFields.end}>=$F$1))*` +
+      `${salaryFields.amount}/2)`;
+    const advance = cellRef_(columnByHeader, 'Аванс', row);
+    const compensation = cellRef_(columnByHeader, 'Компенсация1', row);
+    const leave = cellRef_(columnByHeader, 'Отпуск/больничный1', row);
+    const bonus = cellRef_(columnByHeader, 'Премия1', row);
+    const deduction = cellRef_(columnByHeader, 'Удержания/штраф1', row);
+    const card = cellRef_(columnByHeader, 'На карту первая половина мес', row);
+    const firstHalfAccrual = cellRef_(
+      columnByHeader,
+      'Начислено 1 половина месяца',
+      row
+    );
+    const firstHalfCash = cellRef_(
+      columnByHeader,
+      'На руки первая половина мес',
+      row
+    );
+    const advanceOffset = cellRef_(columnByHeader, 'Зачёт аванса', row);
+
+    setFormulaByHeader_(
+      sheet,
+      columnByHeader,
+      'Начислено 1 половина месяца',
+      row,
+      `=IF($B${row}="";"";${baseFirstHalf}+` +
+      `IFERROR(${supplementalAccrual};0)+N(${compensation})+N(${leave})+` +
+      `N(${bonus})-N(${deduction}))`
+    );
+    setFormulaByHeader_(
+      sheet,
+      columnByHeader,
+      'На руки первая половина мес',
+      row,
+      `=IF($B${row}="";"";${advance}+N(${compensation})+N(${leave})+` +
+      `N(${bonus})-N(${deduction})-N(${card}))`
+    );
+    setFormulaByHeader_(
+      sheet,
+      columnByHeader,
+      'Зачёт аванса',
+      row,
+      `=IF($B${row}="";"";IFERROR(${fixedAdvance};0)-` +
+      `IFERROR(${supplementalAccrual};0))`
+    );
+  }
+}
+
+
+/**
+ * Строит формулу календарного начисления за выбранный полуинтервал месяца,
+ * учитывая даты действия каждого оклада дополнительной должности.
+ */
+function buildCalendarAccrualFormula_(
+  salaryFields,
+  assignmentCriteria,
+  monthlySalaryCell,
+  periodStart,
+  periodEnd
+) {
+  const overlapDays =
+    `IF(${salaryFields.end}="";${periodEnd};` +
+    `IF(${salaryFields.end}<${periodEnd};${salaryFields.end};${periodEnd}))-` +
+    `IF(${salaryFields.start}>${periodStart};${salaryFields.start};${periodStart})+1`;
+
+  return (
+    `=IF(${monthlySalaryCell}="";"";` +
+    `SUMPRODUCT(${assignmentCriteria}*` +
+    `(${salaryFields.start}<=${periodEnd})*` +
+    `((${salaryFields.end}="")+(${salaryFields.end}>=${periodStart}))*` +
+    `${salaryFields.amount}*IF(${overlapDays}>0;${overlapDays};0)/` +
+    `DAY(EOMONTH($F$1;0))))`
+  );
 }
 
 
@@ -641,6 +1195,42 @@ function cellRef_(columnByHeader, header, row) {
   }
 
   return `${columnToLetter_(column)}${row}`;
+}
+
+
+/**
+ * Читает заголовки ведомости в карту «название → номер столбца», чтобы формулы
+ * дополнительных назначений не зависели от фиксированных букв столбцов.
+ */
+function getColumnMap_(sheet) {
+  const headers = sheet
+    .getRange(CONFIG.HEADER_ROW, 1, 1, sheet.getLastColumn())
+    .getDisplayValues()[0];
+  const columnByHeader = new Map();
+
+  headers.forEach((header, index) => {
+    const normalized = normalizeHeader_(header);
+    if (normalized && !columnByHeader.has(normalized)) {
+      columnByHeader.set(normalized, index + 1);
+    }
+  });
+
+  return columnByHeader;
+}
+
+
+/**
+ * Записывает формулу в поле по его заголовку и останавливает актуализацию при
+ * отсутствии обязательного поля, чтобы денежный расчёт не попал в соседнюю колонку.
+ */
+function setFormulaByHeader_(sheet, columnByHeader, header, row, formula) {
+  const column = columnByHeader.get(normalizeHeader_(header));
+
+  if (!column) {
+    throw new Error(`Не найден обязательный заголовок «${header}».`);
+  }
+
+  sheet.getRange(row, column).setFormula(formula);
 }
 
 
@@ -707,8 +1297,19 @@ function findTotalColumns_(sheet) {
  * Формирует уникальный ключ сотрудника из нормализованных ФИО и юрлица, чтобы
  * ручные значения не переходили сотруднику с совпадающим именем из другой компании.
  */
-function makeEmployeeKey_(fio, legalEntity) {
-  return `${normalizeHeader_(fio)}|${normalizeHeader_(legalEntity)}`;
+function makeEmployeeKey_(fio, legalEntity, designation = '') {
+  return [fio, legalEntity, designation]
+    .map(normalizeHeader_)
+    .join('|');
+}
+
+
+/**
+ * Создаёт ключ прежнего формата только для безопасного переноса ручных значений
+ * при первом обновлении строк, до появления отдельных должностей совмещения.
+ */
+function makeLegacyEmployeeKey_(fio, legalEntity) {
+  return `${normalizeHeader_(fio)}|${normalizeHeader_(legalEntity)}|`;
 }
 
 
