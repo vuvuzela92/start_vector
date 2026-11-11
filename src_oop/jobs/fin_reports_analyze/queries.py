@@ -82,16 +82,22 @@ query_stock_analyze = """
     ORDER BY o."date" DESC;
             """
 
-# Остатки WB и цены по артикулам за вчера без складов, признанных сгоревшими.
+# Остатки WB и цены по артикулам на последний доступный снимок без сгоревших складов.
 query_wb_stock_financial_report = """
-WITH stock_by_article AS (
+WITH latest_stock_snapshot AS (
+    SELECT MAX(w.snapshot_date) AS snapshot_date
+    FROM wb_stock_2 AS w
+    WHERE w.snapshot_date <= CURRENT_DATE
+),
+stock_by_article AS (
     SELECT
         w.nm_id,
         SUM(w.quantity) AS quantity,
         SUM(w.in_way_to_client) AS in_way_to_client,
         SUM(w.in_way_from_client) AS in_way_from_client
     FROM wb_stock_2 AS w
-    WHERE w.snapshot_date = CURRENT_DATE - INTERVAL '1 day'
+    CROSS JOIN latest_stock_snapshot AS snapshot
+    WHERE w.snapshot_date = snapshot.snapshot_date
       AND NOT EXISTS (
           SELECT 1
           FROM unnest(ARRAY[
@@ -108,7 +114,7 @@ price_by_article AS (
         p.article_id,
         p.discounted_price
     FROM prices_data AS p
-    WHERE p.date = CURRENT_DATE - INTERVAL '1 day'
+    WHERE p.date = (SELECT snapshot_date FROM latest_stock_snapshot)
     ORDER BY p.article_id, p.date DESC
 ),
 stock_by_nm_id AS (
@@ -129,10 +135,11 @@ purchase_price_by_product AS (
         cp.local_vendor_code,
         AVG(cp.purchase_price) AS average_purchase_price
     FROM cost_price AS cp
-    WHERE cp."date" = CURRENT_DATE - INTERVAL '1 day'
+    WHERE cp."date" = (SELECT snapshot_date FROM latest_stock_snapshot)
     GROUP BY cp.local_vendor_code
 )
 SELECT
+    (SELECT snapshot_date FROM latest_stock_snapshot) AS snapshot_date,
     s.local_vendor_code,
     s.total_quantity,
     COALESCE(c.average_purchase_price, 0) AS average_purchase_price,
