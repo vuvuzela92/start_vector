@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
@@ -18,6 +19,7 @@ from src_oop.jobs.advert.client import (
 )
 from src_oop.jobs.advert.config import (
     MAX_CONCURRENT_ACCOUNTS,
+    MAX_CONCURRENT_DB_WRITES,
     MAX_FULLSTATS_RANGE_DAYS,
     PLATFORM_COLUMN_MAPPING,
 )
@@ -49,16 +51,24 @@ class AdvertStatsRunSummary:
     partial_accounts: list[str] = field(default_factory=list)
     failed_accounts: list[str] = field(default_factory=list)
     failed_batches: list[dict[str, object]] = field(default_factory=list)
+    account_timings: dict[str, dict[str, float]] = field(default_factory=dict)
     campaign_count_total: int = 0
     raw_rows: int = 0
     normalized_rows: int = 0
     written_rows: int = 0
+    planned_batches: int = 0
+    http_attempts: int = 0
+    responses_429: int = 0
+    api_errors: int = 0
+    database_errors: int = 0
+    normalization_errors: int = 0
     dropped_missing_key_rows: int = 0
     collapsed_duplicate_rows: int = 0
     total_retry_count: int = 0
     started_at: datetime = field(default_factory=datetime.now)
     finished_at: datetime | None = None
     warnings: list[str] = field(default_factory=list)
+    duration_seconds: float = 0.0
 
 
 @dataclass(slots=True)
@@ -74,6 +84,18 @@ class AccountProcessingResult:
     retry_count: int = 0
     failed_batches: list[FailedAdvertBatch] = field(default_factory=list)
     error_message: str | None = None
+    planned_batches: int = 0
+    http_attempts: int = 0
+    responses_429: int = 0
+    api_errors: int = 0
+    database_errors: int = 0
+    normalization_errors: int = 0
+    campaign_http_seconds: float = 0.0
+    queue_wait_seconds: float = 0.0
+    http_seconds: float = 0.0
+    normalization_seconds: float = 0.0
+    database_seconds: float = 0.0
+    duration_seconds: float = 0.0
 
 
 class AdvertStatsService:
@@ -86,10 +108,12 @@ class AdvertStatsService:
         repository: AdvertStatsRepository | None = None,
         tokens_loader: Callable[[], Mapping[str, str]] | None = None,
     ) -> None:
+        """Подготавливает зависимости сценария загрузки рекламы и его конкурентных ограничителей."""
         self.client = client or WBAdvertStatsClient()
         self.normalizer = normalizer or AdvertStatsNormalizer()
         self.repository = repository or AdvertStatsRepository()
         self.tokens_loader = tokens_loader or load_api_tokens
+        self._database_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DB_WRITES)
 
     async def run(
         self,
@@ -97,6 +121,8 @@ class AdvertStatsService:
         date_to: date,
         account: str | None = None,
     ) -> AdvertStatsRunSummary:
+        """Загружает рекламную статистику по аккаунтам, записывая каждый date chunk отдельно."""
+        run_started = time.monotonic()
         tokens_by_account = self._resolve_tokens(account=account)
         summary = AdvertStatsRunSummary(accounts_total=len(tokens_by_account))
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_ACCOUNTS)
@@ -123,14 +149,16 @@ class AdvertStatsService:
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        for result in results:
+        for (account_name, _), result in zip(tokens_by_account.items(), results, strict=True):
             if isinstance(result, Exception):
                 logger.error(
-                    "Ошибка обработки аккаунта advert_stat | error_type=%s | error=%s",
+                    "Ошибка обработки аккаунта advert_stat, остальные аккаунты обработаны | account=%s | тип=%s",
+                    account_name,
                     type(result).__name__,
-                    result,
                 )
-                summary.warnings.append(str(result))
+                summary.failed_accounts.append(account_name)
+                summary.accounts_processed += 1
+                summary.warnings.append(f"Ошибка обработки аккаунта {account_name} ({type(result).__name__})")
                 continue
 
             summary.accounts_processed += 1
@@ -141,6 +169,19 @@ class AdvertStatsService:
             summary.dropped_missing_key_rows += result.dropped_missing_key_rows
             summary.collapsed_duplicate_rows += result.collapsed_duplicate_rows
             summary.total_retry_count += result.retry_count
+            summary.planned_batches += result.planned_batches
+            summary.http_attempts += result.http_attempts
+            summary.responses_429 += result.responses_429
+            summary.api_errors += result.api_errors
+            summary.database_errors += result.database_errors
+            summary.normalization_errors += result.normalization_errors
+            summary.account_timings[result.account] = {
+                "queue_wait_seconds": result.queue_wait_seconds,
+                "http_seconds": result.http_seconds + result.campaign_http_seconds,
+                "normalization_seconds": result.normalization_seconds,
+                "database_seconds": result.database_seconds,
+                "duration_seconds": result.duration_seconds,
+            }
             summary.failed_batches.extend(
                 [asdict(failed_batch) for failed_batch in result.failed_batches]
             )
@@ -156,8 +197,9 @@ class AdvertStatsService:
                     summary.warnings.append(result.error_message)
 
         summary.finished_at = datetime.now()
+        summary.duration_seconds = time.monotonic() - run_started
         logger.info(
-            "Завершён AdvertStatsService.run | accounts_processed=%s | succeeded_accounts=%s | partial_accounts=%s | failed_accounts=%s | raw_rows=%s | normalized_rows=%s | written_rows=%s | dropped_missing_key_rows=%s | collapsed_duplicate_rows=%s | failed_batches=%s | total_retry_count=%s | started_at=%s | finished_at=%s",
+            "Завершён AdvertStatsService.run | accounts_processed=%s | succeeded_accounts=%s | partial_accounts=%s | failed_accounts=%s | raw_rows=%s | normalized_rows=%s | written_rows=%s | dropped_missing_key_rows=%s | collapsed_duplicate_rows=%s | planned_batches=%s | http_attempts=%s | responses_429=%s | api_errors=%s | normalization_errors=%s | database_errors=%s | total_retry_count=%s | queue_wait_seconds=%.2f | http_seconds=%.2f | normalization_seconds=%.2f | database_seconds=%.2f | duration_seconds=%.2f | started_at=%s | finished_at=%s",
             summary.accounts_processed,
             summary.succeeded_accounts,
             summary.partial_accounts,
@@ -168,7 +210,18 @@ class AdvertStatsService:
             summary.dropped_missing_key_rows,
             summary.collapsed_duplicate_rows,
             len(summary.failed_batches),
+            summary.planned_batches,
+            summary.http_attempts,
+            summary.responses_429,
+            summary.api_errors,
+            summary.normalization_errors,
+            summary.database_errors,
             summary.total_retry_count,
+            sum(item["queue_wait_seconds"] for item in summary.account_timings.values()),
+            sum(item["http_seconds"] for item in summary.account_timings.values()),
+            sum(item["normalization_seconds"] for item in summary.account_timings.values()),
+            sum(item["database_seconds"] for item in summary.account_timings.values()),
+            summary.duration_seconds,
             summary.started_at.isoformat(timespec="seconds"),
             summary.finished_at.isoformat(timespec="seconds")
             if summary.finished_at is not None
@@ -185,7 +238,11 @@ class AdvertStatsService:
         date_from: date,
         date_to: date,
     ) -> AccountProcessingResult:
+        """Обрабатывает аккаунт целиком, сохраняя успешные chunks даже при частичных ошибках."""
+        account_started = time.monotonic()
+        queue_started = time.monotonic()
         async with semaphore:
+            queue_wait_seconds = time.monotonic() - queue_started
             logger.info(
                 "Старт обработки advert_stat аккаунта | account=%s | date_from=%s | date_to=%s",
                 account_name,
@@ -193,21 +250,27 @@ class AdvertStatsService:
                 date_to.isoformat(),
             )
             try:
+                campaign_http_started = time.monotonic()
                 campaign_result = await self.client.fetch_campaign_ids(
                     session=session,
                     account=account_name,
                     token=token,
                 )
+                campaign_http_seconds = time.monotonic() - campaign_http_started
             except Exception as error:
-                logger.exception(
-                    "Не удалось получить список кампаний WB | account=%s | error=%s",
+                logger.error(
+                    "Не удалось получить список кампаний WB; аккаунт пропущен | account=%s | тип=%s",
                     account_name,
-                    error,
+                    type(error).__name__,
                 )
                 return AccountProcessingResult(
                     account=account_name,
                     status="failed",
-                    error_message=f"account={account_name} campaign_list_error={error}",
+                    error_message=f"Ошибка списка кампаний аккаунта {account_name} ({type(error).__name__})",
+                    http_attempts=1,
+                    api_errors=1,
+                    queue_wait_seconds=queue_wait_seconds,
+                    duration_seconds=time.monotonic() - account_started,
                 )
 
             if not isinstance(campaign_result, CampaignIdsFetchResult):
@@ -218,6 +281,10 @@ class AdvertStatsService:
                 status="success",
                 campaign_count=len(campaign_result.campaign_ids),
                 retry_count=campaign_result.retries_used,
+                http_attempts=campaign_result.attempts_made,
+                responses_429=campaign_result.responses_429,
+                queue_wait_seconds=queue_wait_seconds,
+                campaign_http_seconds=campaign_http_seconds,
             )
 
             date_chunks = chunk_date_range(
@@ -226,6 +293,7 @@ class AdvertStatsService:
                 max_days=MAX_FULLSTATS_RANGE_DAYS,
             )
             for chunk_date_from, chunk_date_to in date_chunks:
+                http_started = time.monotonic()
                 fetch_result = await self.client.fetch_fullstats_chunk(
                     session=session,
                     account=account_name,
@@ -234,6 +302,11 @@ class AdvertStatsService:
                     date_from=chunk_date_from,
                     date_to=chunk_date_to,
                 )
+                account_result.http_seconds += time.monotonic() - http_started
+                account_result.planned_batches += fetch_result.requests_total
+                account_result.http_attempts += fetch_result.attempts_total
+                account_result.responses_429 += fetch_result.responses_429
+                account_result.api_errors += fetch_result.api_errors
                 account_result.retry_count += fetch_result.retries_used
                 account_result.failed_batches.extend(fetch_result.failed_batches)
 
@@ -250,7 +323,9 @@ class AdvertStatsService:
                     )
                     continue
 
+                stage = "normalization"
                 try:
+                    normalize_started = time.monotonic()
                     dataframe = self._build_dataframe_from_payload(fetch_result.payload)
                     self._log_dataframe_date_diagnostics(
                         dataframe=dataframe,
@@ -265,18 +340,27 @@ class AdvertStatsService:
                         date_to=chunk_date_to,
                     )
                     normalized_df = self.normalizer.normalize(dataframe)
-                    save_result = self.repository.save(normalized_df)
+                    account_result.normalization_seconds += time.monotonic() - normalize_started
+                    db_started = time.monotonic()
+                    async with self._database_semaphore:
+                        stage = "database"
+                        save_result = await asyncio.to_thread(self.repository.save, normalized_df)
+                    account_result.database_seconds += time.monotonic() - db_started
                 except Exception as error:
-                    logger.exception(
-                        "Ошибка обработки/записи date chunk advert_stat | account=%s | date_from=%s | date_to=%s | error=%s",
+                    logger.error(
+                        "Ошибка преобразования или записи date chunk advert_stat; предыдущие chunks сохранены | account=%s | date_from=%s | date_to=%s | тип=%s",
                         account_name,
                         chunk_date_from.isoformat(),
                         chunk_date_to.isoformat(),
-                        error,
+                        type(error).__name__,
                     )
                     account_result.status = "partial"
+                    if stage == "database":
+                        account_result.database_errors += 1
+                    else:
+                        account_result.normalization_errors += 1
                     account_result.error_message = (
-                        f"account={account_name} chunk={chunk_date_from.isoformat()}..{chunk_date_to.isoformat()} error={error}"
+                        f"Ошибка обработки/записи chunk аккаунта {account_name} ({type(error).__name__})"
                     )
                     continue
 
@@ -307,7 +391,7 @@ class AdvertStatsService:
                     )
 
             logger.info(
-                "Аккаунт advert_stat обработан | account=%s | status=%s | campaign_count=%s | raw_rows=%s | normalized_rows=%s | written_rows=%s | failed_batches=%s | retry_count=%s",
+                "Аккаунт advert_stat обработан | account=%s | status=%s | campaign_count=%s | raw_rows=%s | normalized_rows=%s | written_rows=%s | failed_batches=%s | retry_count=%s | queue_wait_seconds=%.2f | http_seconds=%.2f | normalization_seconds=%.2f | database_seconds=%.2f | duration_seconds=%.2f",
                 account_name,
                 account_result.status,
                 account_result.campaign_count,
@@ -316,7 +400,13 @@ class AdvertStatsService:
                 account_result.written_rows,
                 len(account_result.failed_batches),
                 account_result.retry_count,
+                account_result.queue_wait_seconds,
+                account_result.campaign_http_seconds + account_result.http_seconds,
+                account_result.normalization_seconds,
+                account_result.database_seconds,
+                time.monotonic() - account_started,
             )
+            account_result.duration_seconds = time.monotonic() - account_started
             return account_result
 
     def _build_dataframe_from_payload(self, payload: list[dict]) -> pd.DataFrame:

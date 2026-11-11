@@ -4,7 +4,9 @@ import asyncio
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
+import math
 import time
 
 import aiohttp
@@ -21,6 +23,7 @@ from src_oop.jobs.advert.config import (
     RETRY_BASE_SLEEP_SECONDS,
     RETRY_MAX_SLEEP_SECONDS,
     SUPPORTED_BID_TYPES,
+    validate_advert_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,17 +67,20 @@ def chunk_date_range(
 class _AccountRateLimiter:
     """Ограничивает частоту fullstats-запросов внутри одного seller account."""
 
-    min_interval_seconds: int
+    min_interval_seconds: float
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _next_allowed_at: float = 0.0
 
-    async def wait_turn(self) -> None:
+    async def wait_turn(self, minimum_delay: float = 0) -> float:
+        """Резервирует следующий безопасный старт fullstats с учётом серверного retry-after."""
         async with self._lock:
             now = time.monotonic()
-            if now < self._next_allowed_at:
-                await asyncio.sleep(self._next_allowed_at - now)
+            wait_seconds = max(self._next_allowed_at - now, minimum_delay, 0)
+            if wait_seconds:
+                await asyncio.sleep(wait_seconds)
                 now = time.monotonic()
             self._next_allowed_at = now + self.min_interval_seconds
+            return wait_seconds
 
 
 @dataclass(slots=True)
@@ -84,6 +90,7 @@ class RequestExecutionResult:
     attempts_made: int
     failed: bool = False
     error_message: str | None = None
+    responses_429: int = 0
 
 
 @dataclass(slots=True)
@@ -104,12 +111,17 @@ class FullstatsFetchResult:
     retries_used: int = 0
     requests_total: int = 0
     requests_failed: int = 0
+    attempts_total: int = 0
+    responses_429: int = 0
+    api_errors: int = 0
 
 
 @dataclass(slots=True)
 class CampaignIdsFetchResult:
     campaign_ids: list[int]
     retries_used: int = 0
+    attempts_made: int = 1
+    responses_429: int = 0
 
 
 class WBAdvertStatsClient:
@@ -125,6 +137,14 @@ class WBAdvertStatsClient:
         campaign_batch_size: int = CAMPAIGN_BATCH_SIZE,
         max_fullstats_range_days: int = MAX_FULLSTATS_RANGE_DAYS,
     ) -> None:
+        """Настраивает HTTP-повторы и лимиты, защищая WB от превышения допустимой нагрузки."""
+        validate_advert_config()
+        if request_timeout_seconds <= 0 or max_retries <= 0:
+            raise ValueError("Таймаут и число HTTP-попыток должны быть положительными.")
+        if not 1 <= campaign_batch_size <= 50:
+            raise ValueError("Размер пачки кампаний должен быть от 1 до 50.")
+        if not 1 <= max_fullstats_range_days <= 31 or fullstats_interval_seconds <= 0:
+            raise ValueError("Интервал fullstats и диапазон дат заданы некорректно.")
         self.request_timeout_seconds = request_timeout_seconds
         self.max_retries = max_retries
         self.retry_base_sleep_seconds = retry_base_sleep_seconds
@@ -144,7 +164,7 @@ class WBAdvertStatsClient:
         headers = {"Authorization": token}
         campaign_ids: set[int] = set()
 
-        result = await self._request_json(
+        request_result = await self._request_json(
             session=session,
             method="GET",
             url=ADVERTS_URL,
@@ -153,28 +173,34 @@ class WBAdvertStatsClient:
             account=account,
             request_name="campaign_list",
         )
-        if result.failed or not isinstance(result.payload, dict):
+        if request_result.failed or not isinstance(request_result.payload, dict):
             raise RuntimeError(
-                f"Не удалось получить список кампаний WB для account={account}: {result.error_message}"
+                f"Не удалось получить список кампаний WB для account={account}: {request_result.error_message}"
             )
 
-        adverts = result.payload.get("adverts", [])
+        adverts = request_result.payload.get("adverts")
+        if not isinstance(adverts, list):
+            raise RuntimeError(f"Ответ списка кампаний WB имеет неверную структуру | account={account}")
         for advert in adverts:
+            if not isinstance(advert, dict):
+                continue
             if advert.get("bid_type") not in SUPPORTED_BID_TYPES:
                 continue
             advert_id = advert.get("id")
             if isinstance(advert_id, int):
                 campaign_ids.add(advert_id)
 
-        result = sorted(campaign_ids)
+        sorted_campaign_ids = sorted(campaign_ids)
         logger.info(
             "Получен список кампаний WB | account=%s | campaign_ids=%s",
             account,
-            len(result),
+            len(sorted_campaign_ids),
         )
         return CampaignIdsFetchResult(
-            campaign_ids=result,
-            retries_used=result.retries_used if isinstance(result, RequestExecutionResult) else 0,
+            campaign_ids=sorted_campaign_ids,
+            retries_used=request_result.retries_used,
+            attempts_made=request_result.attempts_made,
+            responses_429=request_result.responses_429,
         )
 
     async def fetch_fullstats_chunk(
@@ -214,7 +240,6 @@ class WBAdvertStatsClient:
         )
 
         for campaign_chunk in campaign_chunks:
-            await self._wait_fullstats_turn(account)
             batch_context = {
                 "date_from": date_from.isoformat(),
                 "date_to": date_to.isoformat(),
@@ -238,6 +263,9 @@ class WBAdvertStatsClient:
                 allow_failure=True,
             )
             fetch_result.retries_used += result.retries_used
+            fetch_result.attempts_total += result.attempts_made
+            fetch_result.responses_429 += result.responses_429
+            fetch_result.api_errors += int(result.failed)
 
             if result.failed:
                 fetch_result.requests_failed += 1
@@ -295,12 +323,17 @@ class WBAdvertStatsClient:
         batch_context: dict[str, object] | None = None,
         allow_failure: bool = False,
     ) -> RequestExecutionResult:
-        """Выполняет HTTP-запрос с retry/backoff и JSON-ответом."""
+        """Выполняет HTTP-запросы WB с ограничением частоты и retry без утечки секретов."""
         timeout = aiohttp.ClientTimeout(total=self.request_timeout_seconds)
 
         last_error_message: str | None = None
+        responses_429 = 0
+        retry_after_delay = 0.0
 
         for attempt in range(1, self.max_retries + 1):
+            if request_name == "fullstats":
+                await self._wait_fullstats_turn(account, minimum_delay=retry_after_delay)
+                retry_after_delay = 0.0
             try:
                 async with session.request(
                     method=method,
@@ -309,54 +342,62 @@ class WBAdvertStatsClient:
                     params=params,
                     timeout=timeout,
                 ) as response:
-                    payload = await self._read_json_payload(response)
+                    status = response.status
+                    retry_after = self._parse_retry_after(response.headers.get("Retry-After"))
+                    payload = await self._read_json_payload(response) if status < 400 else None
+                    response_content_type = response.headers.get("Content-Type", "не указан")
+                    response_content_length = response.content_length
 
-                    if response.status == 429:
-                        await self._sleep_for_retry(
-                            account=account,
-                            request_name=request_name,
-                            attempt=attempt,
-                            status=response.status,
-                            batch_context=batch_context,
-                        )
-                        continue
-
-                    if response.status in {500, 502, 503, 504}:
-                        await self._sleep_for_retry(
-                            account=account,
-                            request_name=request_name,
-                            attempt=attempt,
-                            status=response.status,
-                            batch_context=batch_context,
-                        )
-                        continue
-
-                    if response.status == 400:
-                        logger.warning(
-                            "WB вернул 400, повторов не будет | account=%s | request=%s | params=%s | payload=%s | batch_context=%s",
+                if status in {401, 403}:
+                    raise PermissionError(f"Доступ WB запрещён | account={account} | request={request_name} | HTTP {status}")
+                if status == 400:
+                    message = f"WB отклонил запрос | HTTP 400 | request={request_name}"
+                    logger.warning("%s | account=%s | batch=%s; обработка продолжается с остальными пачками", message, account, batch_context)
+                    return RequestExecutionResult(None, attempt - 1, attempt, failed=True, error_message=message, responses_429=responses_429)
+                if status == 429:
+                    responses_429 += 1
+                elif status in {500, 502, 503, 504}:
+                    pass
+                elif status >= 400:
+                    message = f"Ошибка API WB | HTTP {status} | request={request_name}"
+                    return RequestExecutionResult(None, attempt - 1, attempt, failed=True, error_message=message, responses_429=responses_429)
+                else:
+                    expected_payload = isinstance(payload, list) if request_name == "fullstats" else isinstance(payload, dict)
+                    if not expected_payload:
+                        message = f"Ответ API WB имеет неверную JSON-структуру | request={request_name} | тип={type(payload).__name__}"
+                        logger.error(
+                            "Нестандартный формат ответа WB; batch не будет считаться успешным | account=%s | request=%s | HTTP=%s | content_type=%s | payload_type=%s | batch=%s",
                             account,
                             request_name,
-                            params,
-                            payload,
+                            status,
+                            response_content_type,
+                            type(payload).__name__,
                             batch_context,
                         )
-                        return RequestExecutionResult(
-                            payload={} if request_name == "campaign_list" else [],
-                            retries_used=attempt - 1,
-                            attempts_made=attempt,
-                        )
+                        if payload is None:
+                            logger.error(
+                                "Ответ WB декодирован как JSON null | account=%s | request=%s | HTTP=%s | content_type=%s | content_length=%s",
+                                account,
+                                request_name,
+                                status,
+                                response_content_type,
+                                response_content_length,
+                            )
+                        return RequestExecutionResult(None, attempt - 1, attempt, failed=True, error_message=message, responses_429=responses_429)
+                    if request_name == "campaign_list" and not isinstance(payload.get("adverts"), list):
+                        message = "Ответ списка кампаний WB не содержит массив adverts"
+                        return RequestExecutionResult(None, attempt - 1, attempt, failed=True, error_message=message, responses_429=responses_429)
+                    return RequestExecutionResult(payload, attempt - 1, attempt, responses_429=responses_429)
 
-                    if response.status == 401:
-                        raise PermissionError(
-                            f"WB token rejected for account={account} request={request_name}"
-                        )
-
-                    response.raise_for_status()
-                    return RequestExecutionResult(
-                        payload=payload,
-                        retries_used=attempt - 1,
-                        attempts_made=attempt,
-                    )
+                if attempt >= self.max_retries:
+                    break
+                backoff = self._calculate_retry_sleep_seconds(attempt, request_name, status)
+                delay = max(backoff, retry_after or 0)
+                if request_name != "fullstats":
+                    logger.warning("Повтор запроса WB | account=%s | request=%s | HTTP %s | задержка=%s сек.", account, request_name, status, delay)
+                    await asyncio.sleep(delay)
+                else:
+                    retry_after_delay = delay
             except PermissionError:
                 raise
             except (
@@ -367,27 +408,17 @@ class WBAdvertStatsClient:
                 aiohttp.ClientError,
                 OSError,
             ) as error:
-                last_error_message = f"{type(error).__name__}: {error}"
+                last_error_message = f"Сетевая ошибка WB ({type(error).__name__})"
                 if attempt >= self.max_retries:
                     if allow_failure:
-                        return RequestExecutionResult(
-                            payload=None,
-                            retries_used=attempt - 1,
-                            attempts_made=attempt,
-                            failed=True,
-                            error_message=last_error_message,
-                    )
-                    raise RuntimeError(
-                        f"Запрос WB завершился ошибкой после всех повторов: "
-                        f"account={account} request={request_name} error={last_error_message}"
-                    ) from error
-                await self._sleep_for_retry(
-                    account=account,
-                    request_name=request_name,
-                    attempt=attempt,
-                    error=error,
-                    batch_context=batch_context,
-                )
+                        return RequestExecutionResult(None, attempt - 1, attempt, failed=True, error_message=last_error_message, responses_429=responses_429)
+                    raise RuntimeError(f"Запрос WB завершился ошибкой после повторов | account={account} | request={request_name} | тип={type(error).__name__}") from None
+                delay = self._calculate_retry_sleep_seconds(attempt, request_name, None)
+                if request_name != "fullstats":
+                    logger.warning("Повтор запроса WB после сетевой ошибки | account=%s | request=%s | тип=%s | задержка=%s сек.", account, request_name, type(error).__name__, delay)
+                    await asyncio.sleep(delay)
+                else:
+                    retry_after_delay = delay
 
         exhausted_message = (
             f"Запрос WB неожиданно исчерпал все попытки повтора: "
@@ -400,53 +431,66 @@ class WBAdvertStatsClient:
                 attempts_made=self.max_retries,
                 failed=True,
                 error_message=last_error_message or exhausted_message,
+                responses_429=responses_429,
             )
         raise RuntimeError(exhausted_message)
 
-    async def _read_json_payload(self, response: aiohttp.ClientResponse) -> dict | list:
+    async def _read_json_payload(self, response: aiohttp.ClientResponse) -> dict | list | None:
+        """Читает JSON, если он объявлен типом содержимого или распознаётся по первому байту."""
         content_type = response.headers.get("Content-Type", "")
-        if "application/json" in content_type.lower():
-            return await response.json()
+        media_type = content_type.split(";", maxsplit=1)[0].strip().lower()
+        if media_type == "application/json" or media_type.endswith("+json"):
+            payload = await response.json(content_type=None)
+            if payload is None:
+                logger.warning(
+                    "JSON-ответ WB декодирован в null | HTTP=%s | content_type=%s | content_length=%s",
+                    response.status,
+                    media_type,
+                    response.content_length,
+                )
+            return payload
 
-        text_payload = await response.text()
-        return {"text": text_payload}
+        body = await response.read()
+        if body.lstrip().startswith((b"[", b"{")):
+            try:
+                return await response.json(content_type=None)
+            except (aiohttp.ContentTypeError, ValueError):
+                logger.warning(
+                    "Тело ответа WB похоже на JSON, но не разбирается | HTTP=%s | content_type=%s | bytes=%s",
+                    response.status,
+                    media_type or "не указан",
+                    len(body),
+                )
+        return None
 
-    async def _sleep_for_retry(
-        self,
-        account: str,
-        request_name: str,
-        attempt: int,
-        status: int | None = None,
-        error: Exception | None = None,
-        batch_context: dict[str, object] | None = None,
-    ) -> None:
-        sleep_seconds = self._calculate_retry_sleep_seconds(
-            attempt=attempt,
-            request_name=request_name,
-            status=status,
-        )
-
-        logger.warning(
-            "Повтор WB запроса | account=%s | request=%s | attempt=%s/%s | status=%s | error=%s | sleep_seconds=%s | batch_context=%s",
-            account,
-            request_name,
-            attempt,
-            self.max_retries,
-            status,
-            repr(error) if error else None,
-            sleep_seconds,
-            batch_context,
-        )
-        await asyncio.sleep(sleep_seconds)
-
-    async def _wait_fullstats_turn(self, account: str) -> None:
+    async def _wait_fullstats_turn(self, account: str, minimum_delay: float = 0) -> float:
+        """Ожидает индивидуальный слот аккаунта перед каждой HTTP-попыткой fullstats."""
         limiter = self._fullstats_limiters_by_account.get(account)
         if limiter is None:
             limiter = _AccountRateLimiter(
                 min_interval_seconds=self.fullstats_interval_seconds
             )
             self._fullstats_limiters_by_account[account] = limiter
-        await limiter.wait_turn()
+        return await limiter.wait_turn(minimum_delay=minimum_delay)
+
+    @staticmethod
+    def _parse_retry_after(value: str | None) -> float | None:
+        """Преобразует Retry-After в задержку секунд, поддерживая секунды и HTTP-date."""
+        if not value:
+            return None
+        try:
+            seconds = float(value)
+            if not math.isfinite(seconds):
+                return None
+            return max(seconds, 0)
+        except ValueError:
+            try:
+                retry_at = parsedate_to_datetime(value)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=timezone.utc)
+                return max((retry_at - datetime.now(timezone.utc)).total_seconds(), 0)
+            except (TypeError, ValueError, OverflowError):
+                return None
 
     def _calculate_retry_sleep_seconds(
         self,
@@ -454,6 +498,7 @@ class WBAdvertStatsClient:
         request_name: str,
         status: int | None,
     ) -> int:
+        """Рассчитывает экспоненциальный backoff, соблюдая минимальный интервал fullstats."""
         backoff_steps = (5, 15, 30, 60, 120)
         index = min(max(attempt - 1, 0), len(backoff_steps) - 1)
         sleep_seconds = min(backoff_steps[index], self.retry_max_sleep_seconds)

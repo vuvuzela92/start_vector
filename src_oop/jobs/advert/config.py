@@ -127,10 +127,23 @@ MAX_RETRIES = 5
 RETRY_ATTEMPTS = MAX_RETRIES
 RETRY_BASE_SLEEP_SECONDS = 5
 RETRY_MAX_SLEEP_SECONDS = 120
-FULLSTATS_INTERVAL_SECONDS = 20
+FULLSTATS_INTERVAL_SECONDS = 21
 CAMPAIGN_BATCH_SIZE = 50
 MAX_FULLSTATS_RANGE_DAYS = 31
-MAX_CONCURRENT_ACCOUNTS = 4
+MAX_CONCURRENT_ACCOUNTS = 8
+MAX_CONCURRENT_DB_WRITES = 1
+
+
+def validate_advert_config() -> None:
+    """Проверяет ограничения конфигурации, от которых зависят полнота данных WB и нагрузка."""
+    if REQUEST_TIMEOUT_SECONDS <= 0 or MAX_RETRIES <= 0:
+        raise ValueError("Таймаут и число HTTP-попыток advert_stat должны быть положительными.")
+    if not 1 <= CAMPAIGN_BATCH_SIZE <= 50:
+        raise ValueError("Размер пачки кампаний advert_stat должен быть от 1 до 50.")
+    if not 1 <= MAX_FULLSTATS_RANGE_DAYS <= 31:
+        raise ValueError("Период одного запроса fullstats должен быть от 1 до 31 дня.")
+    if MAX_CONCURRENT_ACCOUNTS <= 0 or MAX_CONCURRENT_DB_WRITES != 1:
+        raise ValueError("Параллельность advert_stat задана некорректно.")
 
 PLATFORM_COLUMN_MAPPING: dict[int, dict[str, str]] = {
     1: {
