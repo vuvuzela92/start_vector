@@ -484,18 +484,37 @@ def test_unit_reads_shifted_columns_in_two_requests():
         "Скидка ВБ факт",
         "Артикул",
         "Свободный остаток\n(сервис)1",
+        "Цена для клиента",
     ]
     tabs.sheet_title.batch_get.return_value = [
         [["123"], ["456"]],
         [["6\u00a0772"], [""]],
         [["32%"], ["0"]],
+        [["1250,50"], ["0"]],
     ]
-    remains, discounts = AutopilotHourlyService._load_unit_metrics(tabs)
+    remains, discounts, client_prices = AutopilotHourlyService._load_unit_metrics(tabs)
     assert remains == {123: 6772}
     assert discounts == {123: 0.32, 456: 0}
+    assert client_prices == {123: 1250.5, 456: 0}
     tabs.sheet_title.row_values.assert_called_once_with(1)
     tabs.sheet_title.batch_get.assert_called_once()
-    assert tabs.sheet_title.batch_get.call_args.args[0] == ["B2:B20", "C2:C20", "A2:A20"]
+    assert tabs.sheet_title.batch_get.call_args.args[0] == [
+        "B2:B20", "C2:C20", "A2:A20", "D2:D20"
+    ]
+
+
+def test_price_sources_respect_priority_and_skip_zero_values():
+    """Положительная цена приоритетного источника главнее, ноль разрешает резерв."""
+    unit_first = AutopilotHourlyService._prefer_positive_prices(
+        {1: 200.0, 2: 0.0},
+        {1: 100.0, 2: 250.0, 3: 300.0},
+    )
+    assert unit_first == {1: 200.0, 2: 250.0, 3: 300.0}
+    api_fallback = AutopilotHourlyService._prefer_positive_prices(
+        unit_first,
+        {1: 500.0, 4: 400.0},
+    )
+    assert api_fallback == {1: 200.0, 2: 250.0, 3: 300.0, 4: 400.0}
 
 
 def test_hourly_saves_despite_pu_and_unit_failures(monkeypatch, archive):

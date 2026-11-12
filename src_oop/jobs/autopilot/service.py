@@ -19,6 +19,7 @@ from src_oop.jobs.autopilot.config import (
     ENABLE_WB_ONLINE_PRICE_PARSING,
     MAX_CONCURRENT_ACCOUNTS,
     UNIT_ARTICLE_COLUMN_NAME,
+    UNIT_CLIENT_PRICE_HEADER,
     UNIT_EXPECTED_REMAINS_HEADER,
     UNIT_MARGIN_COLUMN_NAME,
     UNIT_WB_DISCOUNT_HEADER,
@@ -222,11 +223,12 @@ class AutopilotHourlyService:
 
         unit_remains: MetricValues = {}
         unit_wb_discount: MetricValues = {}
+        unit_client_prices: MetricValues = {}
         try:
             unit_connector = GoogleTabs(
                 table_title=unit_gs["title"], sheet_title=unit_gs["unit_sheet"],
             )
-            unit_remains, unit_wb_discount = self._load_unit_metrics(unit_connector)
+            unit_remains, unit_wb_discount, unit_client_prices = self._load_unit_metrics(unit_connector)
         except Exception as error:
             logger.warning(
                 "Данные UNIT не получены после повторов; остаток и скидка пропущены, "
@@ -249,9 +251,14 @@ class AutopilotHourlyService:
         remaining_metrics.update(advert_metrics)
         remaining_metrics["organic"] = organic
 
-        # Цена заказа из wb_order_feed приоритетна: она согласована с суммой
-        # заказов и количеством заказов, по которым считается прибыль.
-        fallback_articles = set(articles).difference(order_prices)
+        # Цена UNIT приоритетна; далее средняя цена заказов и API цен WB.
+        order_prices = self._prefer_positive_prices(unit_client_prices, order_prices)
+        fallback_articles = {
+            article_id
+            for article_id in articles
+            if article_id not in order_prices
+            or not self._is_positive_price(order_prices[article_id])
+        }
         if fallback_articles:
             try:
                 fallback_prices = await self._collect_full_prices(
@@ -265,7 +272,7 @@ class AutopilotHourlyService:
                     "Дополнительные цены WB недоступны; продолжаем запись метрик: error_type=%s",
                     type(error).__name__,
                 )
-            order_prices = {**fallback_prices, **order_prices}
+            order_prices = self._prefer_positive_prices(order_prices, fallback_prices)
             logger.info(
                 "Для артикула без заказов использована резервная цена WB API: rows=%s",
                 len(fallback_prices),
@@ -551,25 +558,34 @@ class AutopilotHourlyService:
         return dict(result)
 
     @staticmethod
-    def _load_unit_metrics(connector: GoogleTabs) -> tuple[MetricValues, MetricValues]:
-        """Читает остатки и скидку UNIT двумя запросами с ограниченными повторами.
+    def _load_unit_metrics(
+        connector: GoogleTabs,
+    ) -> tuple[MetricValues, MetricValues, MetricValues]:
+        """Читает остатки, скидку и клиентскую цену UNIT с ограниченными повторами.
 
         Заголовки определяют смещаемые колонки. Общая колонка артикулов читается
-        вместе с обеими метриками. Пустые значения пропускаются, скидка переводится
-        в долю. Отсутствие одного заголовка не блокирует другую метрику.
+        вместе с метриками. Пустые значения пропускаются, скидка переводится
+        в долю. Клиентская цена служит резервом для текущего дня, когда WB
+        источники не дали положительную цену. Отсутствие заголовка не блокирует
+        остальные метрики.
         """
         worksheet = connector.sheet_title
         headers = connector.execute_with_retry(
             "чтение заголовков UNIT", worksheet.row_values, 1,
         )
-        names = (UNIT_ARTICLE_COLUMN_NAME, UNIT_EXPECTED_REMAINS_HEADER, UNIT_WB_DISCOUNT_HEADER)
+        names = (
+            UNIT_ARTICLE_COLUMN_NAME,
+            UNIT_EXPECTED_REMAINS_HEADER,
+            UNIT_WB_DISCOUNT_HEADER,
+            UNIT_CLIENT_PRICE_HEADER,
+        )
         indexes = {
             name: AutopilotHourlyService._find_unit_column_index(headers, name)
             for name in names
         }
         if indexes[UNIT_ARTICLE_COLUMN_NAME] is None:
             logger.warning("В UNIT отсутствует колонка артикулов; остаток и скидка пропущены.")
-            return {}, {}
+            return {}, {}, {}
         available = [name for name in names if indexes[name] is not None]
         for name in names:
             if indexes[name] is None:
@@ -588,6 +604,7 @@ class AutopilotHourlyService:
         }
         remains: MetricValues = {}
         discounts: MetricValues = {}
+        client_prices: MetricValues = {}
         for position, sku in enumerate(columns[UNIT_ARTICLE_COLUMN_NAME]):
             sku_text = str(sku).strip()
             if not sku_text.isdigit():
@@ -595,6 +612,7 @@ class AutopilotHourlyService:
             for name, output in (
                 (UNIT_EXPECTED_REMAINS_HEADER, remains),
                 (UNIT_WB_DISCOUNT_HEADER, discounts),
+                (UNIT_CLIENT_PRICE_HEADER, client_prices),
             ):
                 column = columns.get(name, [])
                 if position >= len(column):
@@ -610,11 +628,45 @@ class AutopilotHourlyService:
                     if not number.is_finite():
                         continue
                     output[int(sku_text)] = (
-                        int(number) if name == UNIT_EXPECTED_REMAINS_HEADER else float(number / 100)
+                        int(number)
+                        if name == UNIT_EXPECTED_REMAINS_HEADER
+                        else float(number / 100)
+                        if name == UNIT_WB_DISCOUNT_HEADER
+                        else float(number)
                     )
                 except (ValueError, ArithmeticError):
                     continue
-        return remains, discounts
+        return remains, discounts, client_prices
+
+    @staticmethod
+    def _prefer_positive_prices(
+        primary_prices: MetricValues,
+        secondary_prices: MetricValues,
+    ) -> MetricValues:
+        """Объединяет цены, сохраняя приоритет первого положительного источника.
+
+        Бизнес-правило текущего дня: положительная цена из UNIT имеет приоритет,
+        затем используется средняя цена созданных заказов из `wb_order_feed`,
+        затем резервная цена WB API. Пустые, нулевые и некорректные значения
+        первого источника не блокируют следующий источник; история не меняется.
+        """
+        result: MetricValues = {}
+        for article_id in set(primary_prices) | set(secondary_prices):
+            primary = primary_prices.get(article_id)
+            secondary = secondary_prices.get(article_id)
+            if AutopilotHourlyService._is_positive_price(primary):
+                result[article_id] = float(primary)
+            elif AutopilotHourlyService._is_positive_price(secondary):
+                result[article_id] = float(secondary)
+        return result
+
+    @staticmethod
+    def _is_positive_price(value: object) -> bool:
+        """Проверяет положительность цены, чтобы ноль разрешал переход к резерву."""
+        try:
+            return value is not None and float(value) > 0
+        except (TypeError, ValueError, ArithmeticError):
+            return False
 
     @staticmethod
     def _find_unit_column_index(headers: list[str], expected_header: str) -> int | None:

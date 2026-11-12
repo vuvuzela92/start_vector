@@ -39,6 +39,9 @@ class AutopilotDailyRepository:
         выполняется средствами Google Sheets. Историческая скидка WB (`spp`)
         берется напрямую из `orders`: значения агрегируются по дате и артикулу,
         чтобы несколько заказов одного артикула не дублировали дневную метрику.
+        Если `price_with_disc` отсутствует или равен нулю, цена берется из
+        `prices_data.discounted_price`, предварительно усредненной по дате и
+        артикулу.
         """
         report_date = report_date or date.today()
         query = text(
@@ -52,6 +55,16 @@ class AutopilotDailyRepository:
                 WHERE date BETWEEN CAST(:report_date AS DATE) - INTERVAL '6 days'
                     AND CAST(:report_date AS DATE) - INTERVAL '1 days'
                 GROUP BY date, article_id
+            ),
+            daily_prices AS (
+                SELECT
+                    date,
+                    article_id,
+                    AVG(discounted_price) AS avg_discounted_price
+                FROM prices_data
+                WHERE date BETWEEN CAST(:report_date AS DATE) - INTERVAL '6 days'
+                    AND CAST(:report_date AS DATE) - INTERVAL '1 days'
+                GROUP BY date, article_id
             )
             SELECT
                 metrics.date,
@@ -62,7 +75,10 @@ class AutopilotDailyRepository:
                 metrics.orders_sum_rub,
                 metrics.orders_count,
                 metrics.adv_spend,
-                metrics.price_with_disc,
+                COALESCE(
+                    NULLIF(metrics.price_with_disc, 0),
+                    daily_prices.avg_discounted_price
+                ) AS price_with_disc,
                 ROUND(daily_spp.spp / 100, 5) AS spp,
                 metrics.total_quantity,
                 metrics.profit_by_cond_orders,
@@ -94,6 +110,9 @@ class AutopilotDailyRepository:
             LEFT JOIN daily_spp
                 ON daily_spp.date = metrics.date
                 AND daily_spp.article_id = metrics.article_id
+            LEFT JOIN daily_prices
+                ON daily_prices.date = metrics.date
+                AND daily_prices.article_id = metrics.article_id
             WHERE metrics.date BETWEEN CAST(:report_date AS DATE) - INTERVAL '6 days'
                 AND CAST(:report_date AS DATE) - INTERVAL '1 days'
             """
