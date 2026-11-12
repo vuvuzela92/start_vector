@@ -8,6 +8,10 @@ from src_oop.core.database import Database
 
 logger = logging.getLogger(__name__)
 
+# Ставки, применяемые в расчётной прибыли по заказам и продажам.
+TAX_PERCENT = 5
+ACQUIRING_PERCENT = 3
+
 
 class ArticleAnalyzeRepository:
     """Содержит SQL-запросы для формирования артикульного анализа."""
@@ -204,7 +208,7 @@ class ArticleAnalyzeRepository:
 
                 COALESCE(o.order_count, 0) * (
                     COALESCE(wbf.avg_price, o.avg_price, pd.avg_price, 0) - (
-                        (COALESCE(wbf.avg_price, o.avg_price, pd.avg_price, 0) / 100.0 * (8 + 3 +
+                        (COALESCE(wbf.avg_price, o.avg_price, pd.avg_price, 0) / 100.0 * ({TAX_PERCENT} + {ACQUIRING_PERCENT} +
                             CASE
                                 WHEN b.date >= '2026-01-01' THEN ic_2026.fbo_individual_conditions
                                 WHEN b.date BETWEEN '2025-01-01' AND '2025-12-31' THEN ic_2025.fbo_individual_conditions
@@ -228,7 +232,7 @@ class ArticleAnalyzeRepository:
                                 COALESCE(fin_sales.sales_sum, s.sales_sum, orders_sales.sales_sum)
                                 / NULLIF(COALESCE(fin_sales.sales_count, s.sales_count, orders_sales.sales_count), 0),
                                 0
-                            ) / 100.0 * (8 + 3 +
+                            ) / 100.0 * ({TAX_PERCENT} + {ACQUIRING_PERCENT} +
                                 CASE
                                     WHEN b.date >= '2026-01-01' THEN ic_2026.fbo_individual_conditions
                                     WHEN b.date BETWEEN '2025-01-01' AND '2025-12-31' THEN ic_2025.fbo_individual_conditions

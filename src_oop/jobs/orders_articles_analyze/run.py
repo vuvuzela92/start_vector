@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +16,7 @@ from src_oop.jobs.orders_articles_analyze.tables_scheme import (
 
 
 logger = logging.getLogger(__name__)
+INVALID_ARTICLE_ID_DIAGNOSTICS_RETENTION = timedelta(hours=24)
 
 POSTGRES_INTEGER_RANGES: dict[str, tuple[int, int]] = {
     # Диапазоны нужны для ранней диагностики перед batch upsert в PostgreSQL.
@@ -48,6 +49,40 @@ def _safe_records_preview(
             preview_df[column] = preview_df[column].astype(str)
 
     return preview_df.replace({np.nan: None}).to_dict(orient="records")
+
+
+def _remove_expired_invalid_article_id_diagnostics(
+    diagnostics_dir: Path,
+    task_name: str,
+) -> int:
+    """Удаляет диагностические CSV по невалидным article_id старше 24 часов.
+
+    Очистка ограничена файлами текущей задачи, чтобы поддерживать короткий срок
+    хранения проблемных строк и не затрагивать другие диагностические отчёты.
+    Возвращает число удалённых файлов; ошибка доступа не прерывает пересчёт.
+    """
+    if not diagnostics_dir.exists():
+        return 0
+
+    expiration_time = datetime.now().timestamp() - (
+        INVALID_ARTICLE_ID_DIAGNOSTICS_RETENTION.total_seconds()
+    )
+    removed_count = 0
+    pattern = f"{task_name}_invalid_article_id_*.csv"
+
+    for diagnostics_path in diagnostics_dir.glob(pattern):
+        try:
+            if diagnostics_path.stat().st_mtime < expiration_time:
+                diagnostics_path.unlink()
+                removed_count += 1
+        except OSError as error:
+            logger.warning(
+                "Не удалось удалить устаревший диагностический CSV; задача продолжает работу | file=%s | error_type=%s",
+                diagnostics_path.name,
+                type(error).__name__,
+            )
+
+    return removed_count
 
 
 def _resolve_integer_columns_from_schema(
@@ -481,6 +516,15 @@ def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> Non
     )
 
     try:
+        removed_diagnostics_count = _remove_expired_invalid_article_id_diagnostics(
+            diagnostics_dir=LOG_DIR / "diagnostics",
+            task_name="orders_article_analyze",
+        )
+        logger.info(
+            "Проверено время хранения диагностических CSV по невалидным article_id | retention_hours=24 | removed_files=%s",
+            removed_diagnostics_count,
+        )
+
         repo = ArticleAnalyzeRepository()
         processor = ProcessArticleAnalyze(repo)
         logger.info(
