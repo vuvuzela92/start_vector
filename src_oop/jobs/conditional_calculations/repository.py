@@ -45,8 +45,8 @@ class ConditionalCalculationsRepository:
                 SUM(o.profit_by_orders) AS general_profit_orders,
                 o.date
             FROM orders_articles_analyze o
-            WHERE o.date BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days'
-                AND CURRENT_DATE - INTERVAL '{self.days_to} days'
+            WHERE o.date >= DATE '2026-01-01'
+                AND o.date <= CURRENT_DATE - INTERVAL '{self.days_to} days'
                 AND o.account != '0'
                 AND o.account IS NOT NULL
                 AND o.account != 'NaN'
@@ -90,8 +90,8 @@ class ConditionalCalculationsRepository:
                     )
                 ) AS credit_transfers
             FROM daily_fin_reports_full f
-            WHERE DATE(f.date_from) BETWEEN CURRENT_DATE - INTERVAL '{self.days_ago} days'
-                AND CURRENT_DATE - INTERVAL '{self.days_to} days'
+            WHERE DATE(f.date_from) >= DATE '2026-01-01'
+                AND DATE(f.date_from) <= CURRENT_DATE - INTERVAL '{self.days_to} days'
                 AND f.account IS NOT NULL
                 AND f.account != '0'
                 AND f.account != 'NaN'
