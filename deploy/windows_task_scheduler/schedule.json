@@ -59,6 +59,7 @@
       "script_arguments": ""
     },
     {"name": "update_cash_flow_writeoffs", "schedule": "daily at 08:30"},
+    {"name": "update_fin_reports_art_analyze", "schedule": "daily at 08:31"},
     {"name": "update_monthly_report", "schedule": "daily at 08:32"},
     {"name": "update_weekly_profit_report", "schedule": "daily at 08:34"},
     {"name": "update_outcomes_detalize", "schedule": "daily at 08:36"},

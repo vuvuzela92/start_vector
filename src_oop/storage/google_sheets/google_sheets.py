@@ -7,6 +7,8 @@ fin_rep_analyze = {
                    "deductions_by_month" : "удержания_детализация_месяц",
                    "export_daily_fin_reports_deductions_agg": "удержания_детализация_месяц",
                    "query_cash_flow_writeoffs": "расходы_по_банку",
+                   "art_report_spreadsheet_id": "1NV6qRF2uQhQbbpkbE2YrnVTQbOfuRx4h8aUH2RmQXjs",
+                   "art_report_sheet": "по_отчетно",
                    "stock_analyze": "анализ_остатков"
                    }
 

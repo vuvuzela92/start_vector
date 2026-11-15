@@ -52,6 +52,7 @@ from src_oop.jobs.fin_reports_analyze.run import (
     update_cash_flow_writeoffs,
     update_daily_fin_reports_deductions_agg,
     update_deductions_by_month,
+    update_fin_reports_art_analyze,
     update_fin_deductions_mv,
     update_monthly_report,
     update_outcomes_detalize,
@@ -289,6 +290,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "desc": "PostgreSQL `conditions_calculation` → Google Sheets «Условный расчет», лист «Справочная информация»: публикация рассчитанных условных показателей",
     },
     # Финансовая аналитика и управленческая отчетность.
+    "update_fin_reports_art_analyze": {
+        "func": smart_run(update_fin_reports_art_analyze),
+        "desc": "PostgreSQL `fin_reports_full`, `daily_fin_reports_full`, `article`, `supply_to_sellers_warehouse` → PostgreSQL `public.fin_reports_art_analyze` → Google Sheets «Анализ_фин_отчетов_Вектор», лист «по_отчетно»: первичная загрузка с 2025-01-01, обновление последних 14 завершённых дней и полная публикация витрины",
+    },
     "update_monthly_report": {
         "func": smart_run(update_monthly_report),
         "desc": "PostgreSQL → Google Sheets «Анализ_фин_отчетов_Вектор», лист «отчет_по_месяцам»: выгрузка сводных данных финансового отчёта за месяц",

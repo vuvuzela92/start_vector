@@ -748,6 +748,30 @@ def update_monthly_report():
     # Вставляем данные в гугл-таблицу
     google_connect.set_df_to_google(df)
 
+
+def update_fin_reports_art_analyze() -> int:
+    """Обновляет PostgreSQL-витрину и выгружает её в таблицу финансового анализа.
+
+    Сначала создаёт или пересчитывает `public.fin_reports_art_analyze` с учётом
+    поздних корректировок отчётов WB, затем полностью обновляет вкладку
+    «по_отчетно» в Google-таблице по её стабильному идентификатору.
+    """
+    analyze = FinReportsAnalyze()
+    refreshed_rows = analyze.refresh_fin_reports_art_analyze()
+    dataframe = analyze.get_fin_reports_art_analyze()
+    google_connect = GoogleTabs(
+        table_title=fin_rep_analyze.get("title"),
+        sheet_title=fin_rep_analyze.get("art_report_sheet"),
+        spreadsheet_id=fin_rep_analyze.get("art_report_spreadsheet_id"),
+    )
+    google_connect.set_df_to_google(dataframe)
+    logger.info(
+        "Витрина фин. отчётов выгружена в Google Sheets | sheet=%s | rows=%s",
+        fin_rep_analyze.get("art_report_sheet"),
+        len(dataframe),
+    )
+    return refreshed_rows
+
 def update_stock_analyze():
     analyze = FinReportsAnalyze()
     table_name = fin_rep_analyze.get("title")

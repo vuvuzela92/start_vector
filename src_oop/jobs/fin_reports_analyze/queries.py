@@ -248,6 +248,171 @@ query_daily_fin_reports_deductions_agg = """
             ORDER BY f.date_from desc;
     """
 
+# Расчёт финансовой витрины по отчётам реализации и себестоимости.
+query_fin_reports_art_analyze = """
+WITH latest_purchase_price AS (
+    SELECT DISTINCT ON (LOWER(stsw.local_vendor_code))
+        LOWER(stsw.local_vendor_code) AS local_vendor_code,
+        ROUND(stsw.amount_with_vat / stsw.quantity, 2) AS price_per_item
+    FROM supply_to_sellers_warehouse stsw
+    WHERE stsw.is_valid IS TRUE
+        AND LOWER(stsw.local_vendor_code) LIKE 'wild%'
+        AND stsw.supplier_name != 'РВБ ООО'
+        AND stsw.quantity != 0
+    ORDER BY LOWER(stsw.local_vendor_code), stsw.supply_date DESC
+), vendor_codes_match AS (
+    SELECT DISTINCT ON (LOWER(a.vendor_code))
+        LOWER(a.vendor_code) AS vendor_code,
+        LOWER(a.local_vendor_code) AS local_vendor_code
+    FROM article a
+    WHERE LOWER(a.local_vendor_code) LIKE 'wild%'
+), purchase_cost_by_date AS (
+    SELECT
+        f.date_from,
+        SUM(CASE WHEN f.supplier_oper_name = 'Продажа'
+            THEN f.quantity * lpp.price_per_item ELSE 0 END) AS purchase_cost_sales,
+        SUM(CASE WHEN f.supplier_oper_name = 'Возврат'
+            THEN f.quantity * lpp.price_per_item ELSE 0 END) AS purchase_cost_returns
+    FROM daily_fin_reports_full f
+    LEFT JOIN vendor_codes_match vcm ON LOWER(f.sa_name) = vcm.vendor_code
+    LEFT JOIN latest_purchase_price lpp
+        ON vcm.local_vendor_code = lpp.local_vendor_code
+    WHERE f.supplier_oper_name IN ('Продажа', 'Возврат')
+        AND f.date_from BETWEEN :start_date AND :end_date
+    GROUP BY f.date_from
+), financials AS (
+    SELECT
+        f.account,
+        f.realizationreport_id,
+        f.date_from,
+        f.date_to,
+        SUM(CASE
+            WHEN f.supplier_oper_name IN ('Продажа', 'Возврат') THEN
+                CASE
+                    WHEN f.doc_type_name = 'Продажа' THEN 1
+                    WHEN f.doc_type_name = 'Возврат' THEN -1
+                    ELSE 0
+                END * (
+                    COALESCE(f.retail_price_withdisc_rub, 0)
+                    - COALESCE(f.ppvz_for_pay, 0)
+                    - COALESCE(f.acquiring_fee, 0)
+                )
+            ELSE 0
+        END) AS wb_commission,
+        SUM(CASE
+            WHEN f.doc_type_name = 'Продажа' THEN COALESCE(f.acquiring_fee, 0)
+            WHEN f.doc_type_name = 'Возврат' THEN -COALESCE(f.acquiring_fee, 0)
+            ELSE 0
+        END) AS acquiring_fee,
+        SUM(CASE WHEN f.doc_type_name = 'Продажа' THEN f.ppvz_for_pay ELSE 0 END)
+            - SUM(CASE WHEN f.doc_type_name = 'Возврат' THEN f.ppvz_for_pay ELSE 0 END)
+            AS payout,
+        SUM(f.delivery_rub) AS logistics,
+        SUM(CASE WHEN f.doc_type_name = 'Продажа' THEN f.ppvz_for_pay ELSE 0 END)
+            - SUM(CASE WHEN f.doc_type_name = 'Возврат' THEN f.ppvz_for_pay ELSE 0 END)
+            - SUM(f.delivery_rub) - SUM(f.penalty) - SUM(f.deduction) AS total_to_pay,
+        SUM(CASE WHEN f.doc_type_name = 'Продажа'
+            THEN f.retail_price_withdisc_rub ELSE 0 END)
+            - SUM(CASE WHEN f.doc_type_name = 'Возврат'
+                THEN f.retail_price_withdisc_rub ELSE 0 END) AS revenue,
+        SUM(f.retail_price_withdisc_rub) AS retail_price_disc,
+        SUM(f.penalty) AS penalties,
+        SUM(f.storage_fee) AS storage_fee,
+        SUM(f.deduction) AS deductions,
+        SUM(f.acceptance) AS paid_acceptance,
+        SUM(CASE WHEN f.bonus_type_name ILIKE '%кредит%'
+            THEN f.deduction ELSE 0 END) AS credit_transfers,
+        SUM(CASE WHEN f.bonus_type_name = 'К клиенту при отмене'
+            THEN f.delivery_rub ELSE 0 END) AS to_client_cancel,
+        SUM(CASE WHEN f.bonus_type_name = 'От клиента при отмене'
+            THEN f.delivery_rub ELSE 0 END) AS from_client_cancel,
+        SUM(CASE WHEN f.bonus_type_name = 'От клиента при возврате'
+            THEN f.delivery_rub ELSE 0 END) AS from_client_return,
+        SUM(CASE WHEN f.bonus_type_name = 'К клиенту при продаже'
+            THEN f.delivery_rub ELSE 0 END) AS to_client_sale
+    FROM fin_reports_full f
+    WHERE f.date_from BETWEEN :start_date AND :end_date
+    GROUP BY f.account, f.realizationreport_id, f.date_from, f.date_to
+)
+SELECT
+    f.account,
+    f.realizationreport_id,
+    f.date_from,
+    f.date_to,
+    TO_CHAR(f.date_to, 'MM-YYYY') AS month,
+    f.revenue,
+    f.logistics,
+    f.storage_fee,
+    f.acquiring_fee,
+    f.penalties,
+    f.deductions,
+    f.payout,
+    f.total_to_pay,
+    f.wb_commission,
+    CASE WHEN f.revenue <> 0
+        THEN ROUND(f.wb_commission / f.revenue, 4) * 100 ELSE 0
+    END AS wb_commission_pct,
+    f.retail_price_disc,
+    f.paid_acceptance,
+    f.credit_transfers,
+    f.to_client_cancel,
+    f.from_client_cancel,
+    f.from_client_return,
+    f.to_client_sale,
+    COALESCE(p.purchase_cost_sales, 0) AS purchase_cost_sales,
+    COALESCE(p.purchase_cost_returns, 0) AS purchase_cost_returns,
+    COALESCE(p.purchase_cost_sales, 0) - COALESCE(p.purchase_cost_returns, 0)
+        AS purchase_cost_total,
+    CASE WHEN f.revenue <> 0
+        THEN ROUND(f.total_to_pay / f.revenue, 4) * 100 ELSE 0
+    END AS margin_before_cost_pct,
+    f.total_to_pay
+        - (COALESCE(p.purchase_cost_sales, 0) - COALESCE(p.purchase_cost_returns, 0))
+        + f.credit_transfers AS gp_after_wb,
+    CASE WHEN f.revenue <> 0 THEN ROUND((
+        f.total_to_pay
+        - (COALESCE(p.purchase_cost_sales, 0) - COALESCE(p.purchase_cost_returns, 0))
+        + f.credit_transfers
+    ) / f.revenue, 4) * 100 ELSE 0
+    END AS gp_after_wb_pct
+FROM financials f
+LEFT JOIN purchase_cost_by_date p ON f.date_from = p.date_from
+"""
+
+query_fin_reports_art_analyze_export = """
+SELECT
+    account,
+    realizationreport_id,
+    date_from,
+    date_to,
+    month,
+    revenue,
+    logistics,
+    storage_fee,
+    acquiring_fee,
+    penalties,
+    deductions,
+    payout,
+    total_to_pay,
+    wb_commission,
+    wb_commission_pct,
+    retail_price_disc,
+    paid_acceptance,
+    credit_transfers,
+    to_client_cancel,
+    from_client_cancel,
+    from_client_return,
+    to_client_sale,
+    purchase_cost_sales,
+    purchase_cost_returns,
+    purchase_cost_total,
+    margin_before_cost_pct,
+    gp_after_wb,
+    gp_after_wb_pct
+FROM public.fin_reports_art_analyze
+ORDER BY date_from DESC, account, realizationreport_id
+"""
+
 query_wild_frm_products = """
     SELECT DISTINCT(p.id)
                     FROM products p
