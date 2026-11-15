@@ -250,37 +250,7 @@ query_daily_fin_reports_deductions_agg = """
 
 # Расчёт финансовой витрины по отчётам реализации и себестоимости.
 query_fin_reports_art_analyze = """
-WITH latest_purchase_price AS (
-    SELECT DISTINCT ON (LOWER(stsw.local_vendor_code))
-        LOWER(stsw.local_vendor_code) AS local_vendor_code,
-        ROUND(stsw.amount_with_vat / stsw.quantity, 2) AS price_per_item
-    FROM supply_to_sellers_warehouse stsw
-    WHERE stsw.is_valid IS TRUE
-        AND LOWER(stsw.local_vendor_code) LIKE 'wild%'
-        AND stsw.supplier_name != 'РВБ ООО'
-        AND stsw.quantity != 0
-    ORDER BY LOWER(stsw.local_vendor_code), stsw.supply_date DESC
-), vendor_codes_match AS (
-    SELECT DISTINCT ON (LOWER(a.vendor_code))
-        LOWER(a.vendor_code) AS vendor_code,
-        LOWER(a.local_vendor_code) AS local_vendor_code
-    FROM article a
-    WHERE LOWER(a.local_vendor_code) LIKE 'wild%'
-), purchase_cost_by_date AS (
-    SELECT
-        f.date_from,
-        SUM(CASE WHEN f.supplier_oper_name = 'Продажа'
-            THEN f.quantity * lpp.price_per_item ELSE 0 END) AS purchase_cost_sales,
-        SUM(CASE WHEN f.supplier_oper_name = 'Возврат'
-            THEN f.quantity * lpp.price_per_item ELSE 0 END) AS purchase_cost_returns
-    FROM daily_fin_reports_full f
-    LEFT JOIN vendor_codes_match vcm ON LOWER(f.sa_name) = vcm.vendor_code
-    LEFT JOIN latest_purchase_price lpp
-        ON vcm.local_vendor_code = lpp.local_vendor_code
-    WHERE f.supplier_oper_name IN ('Продажа', 'Возврат')
-        AND f.date_from BETWEEN :start_date AND :end_date
-    GROUP BY f.date_from
-), financials AS (
+WITH financials AS (
     SELECT
         f.account,
         f.realizationreport_id,
@@ -333,6 +303,43 @@ WITH latest_purchase_price AS (
     FROM fin_reports_full f
     WHERE f.date_from BETWEEN :start_date AND :end_date
     GROUP BY f.account, f.realizationreport_id, f.date_from, f.date_to
+), purchase_cost_lines AS (
+    SELECT
+        f.account,
+        f.realizationreport_id,
+        f.date_from,
+        f.date_to,
+        f.supplier_oper_name,
+        f.quantity * COALESCE(price.purchase_price, 0) AS line_purchase_cost
+    FROM fin_reports_full f
+    LEFT JOIN article a
+        ON a.nm_id = f.nm_id
+        AND LOWER(a.account) = LOWER(f.account)
+    LEFT JOIN LATERAL (
+        SELECT AVG(cp.purchase_price)::numeric AS purchase_price
+        FROM public.cost_price cp
+        WHERE cp.local_vendor_code = a.local_vendor_code
+            AND cp.date = (
+                SELECT MAX(price_date.date)
+                FROM public.cost_price price_date
+                WHERE price_date.local_vendor_code = a.local_vendor_code
+                    AND price_date.date <= COALESCE(f.order_dt::date, f.date_from)
+            )
+    ) price ON TRUE
+    WHERE f.supplier_oper_name IN ('Продажа', 'Возврат')
+        AND f.date_from BETWEEN :start_date AND :end_date
+), purchase_cost_by_report AS (
+    SELECT
+        account,
+        realizationreport_id,
+        date_from,
+        date_to,
+        SUM(CASE WHEN supplier_oper_name = 'Продажа'
+            THEN line_purchase_cost ELSE 0 END) AS purchase_cost_sales,
+        SUM(CASE WHEN supplier_oper_name = 'Возврат'
+            THEN line_purchase_cost ELSE 0 END) AS purchase_cost_returns
+    FROM purchase_cost_lines
+    GROUP BY account, realizationreport_id, date_from, date_to
 )
 SELECT
     f.account,
@@ -376,7 +383,11 @@ SELECT
     ) / f.revenue, 4) * 100 ELSE 0
     END AS gp_after_wb_pct
 FROM financials f
-LEFT JOIN purchase_cost_by_date p ON f.date_from = p.date_from
+LEFT JOIN purchase_cost_by_report p
+    ON f.account = p.account
+    AND f.realizationreport_id = p.realizationreport_id
+    AND f.date_from = p.date_from
+    AND f.date_to = p.date_to
 """
 
 query_fin_reports_art_analyze_export = """
