@@ -1,5 +1,5 @@
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 from sqlalchemy import text
@@ -85,13 +85,21 @@ class FinReportsAnalyze:
             df = Database.read_sql_to_dataframe(query)
             return df['id'].to_list()
 
-    def refresh_fin_reports_art_analyze(self) -> int:
+    def refresh_fin_reports_art_analyze(self, *, full_history: bool = False) -> int:
         """Создаёт или обновляет витрину финансового анализа по отчётам реализации.
 
         При первом запуске загружает историю с 1 января 2025 года. Если таблица
         уже содержит только более позднюю историю, однократно дозагружает начало
-        периода. Также добавляет и восстанавливает поле месяца для старых строк.
-        В обычных запусках заменяет последние 14 завершённых дней.
+        периода. Обновляет схему месяцем, выручкой без НДС и детализацией
+        удержаний; ставка НДС определяется по кабинету и дате отчёта. В обычных
+        запусках заменяет последние 14 завершённых дней. При `full_history=True`
+        пересчитывает все отчёты с 1 января 2025 года помесячными транзакциями,
+        чтобы применять правила небольшими этапами. Дополнительно относит
+        удержания к рекламе, сервисам, кредитам или прочим основаниям, сохраняя
+        исходные знаки сумм и не изменяя общую сумму удержаний. В «Итого к оплате»
+        учитываются вычеты за логистику, штрафы, удержания, платную приёмку
+        (`acceptance`), хранение, кешбэк, комиссию программы лояльности,
+        изменение графика выплат и корректировку вознаграждения WB.
         """
         table_name = "public.fin_reports_art_analyze"
         seed_date = date(2025, 1, 1)
@@ -100,8 +108,20 @@ class FinReportsAnalyze:
             "realizationreport_id",
             "date_from",
             "date_to",
+            "report_create_dt",
+            "report_type",
+            "report_type_label",
+            "currency",
+            "agreed_discount_pct",
             "month",
             "revenue",
+            "revenue_without_vat",
+            "dashboard_sale",
+            "loyalty_discount_compensation",
+            "loyalty_points_withheld",
+            "loyalty_program_cost",
+            "payment_schedule_adjustment",
+            "wb_reward_adjustment",
             "logistics",
             "storage_fee",
             "acquiring_fee",
@@ -124,6 +144,10 @@ class FinReportsAnalyze:
             "margin_before_cost_pct",
             "gp_after_wb",
             "gp_after_wb_pct",
+            "deductions_ads",
+            "deductions_services",
+            "deductions_credits",
+            "deductions_other",
         )
         query_parameters = {"start_date": seed_date, "end_date": seed_date}
         create_table_query = (
@@ -136,6 +160,32 @@ class FinReportsAnalyze:
             connection.execute(text(
                 f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS month TEXT"
             ))
+            connection.execute(text(
+                f"ALTER TABLE {table_name} "
+                "ADD COLUMN IF NOT EXISTS revenue_without_vat NUMERIC(18, 2)"
+            ))
+            dashboard_columns = {
+                "report_create_dt": "DATE",
+                "report_type": "SMALLINT",
+                "report_type_label": "TEXT",
+                "currency": "TEXT",
+                "agreed_discount_pct": "NUMERIC(18, 2)",
+                "dashboard_sale": "NUMERIC(18, 2)",
+                "loyalty_discount_compensation": "NUMERIC(18, 2)",
+                "loyalty_points_withheld": "NUMERIC(18, 2)",
+                "loyalty_program_cost": "NUMERIC(18, 2)",
+                "payment_schedule_adjustment": "NUMERIC(18, 2)",
+                "wb_reward_adjustment": "NUMERIC(18, 2)",
+                "deductions_ads": "NUMERIC(18, 2)",
+                "deductions_services": "NUMERIC(18, 2)",
+                "deductions_credits": "NUMERIC(18, 2)",
+                "deductions_other": "NUMERIC(18, 2)",
+            }
+            for column_name, column_type in dashboard_columns.items():
+                connection.execute(text(
+                    f"ALTER TABLE {table_name} "
+                    f"ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
+                ))
             connection.execute(text(
                 f"UPDATE {table_name} "
                 "SET month = TO_CHAR(date_to, 'MM-YYYY') "
@@ -156,27 +206,47 @@ class FinReportsAnalyze:
             )).mappings().one()
             history_needs_backfill = earliest_date is None or earliest_date > seed_date
             start_date = (
-                seed_date if history_needs_backfill else date_range["window_start"]
+                seed_date
+                if full_history or history_needs_backfill
+                else date_range["window_start"]
             )
             end_date = date_range["end_date"]
             parameters = {"start_date": start_date, "end_date": end_date}
 
-            connection.execute(
-                text(
-                    f"DELETE FROM {table_name} "
-                    "WHERE date_from BETWEEN :start_date AND :end_date"
-                ),
-                parameters,
+        insert_query = text(
+            f"INSERT INTO {table_name} ({', '.join(insert_columns)}) "
+            f"{query_fin_reports_art_analyze}"
+        )
+        delete_query = text(
+            f"DELETE FROM {table_name} "
+            "WHERE date_from BETWEEN :start_date AND :end_date"
+        )
+        batch_start = start_date
+        inserted_rows = 0
+        while batch_start <= end_date:
+            next_month = batch_start.replace(day=28) + timedelta(days=4)
+            batch_end = min(
+                next_month.replace(day=1) - timedelta(days=1),
+                end_date,
             )
-            result = connection.execute(
-                text(
-                    f"INSERT INTO {table_name} ({', '.join(insert_columns)}) "
-                    f"{query_fin_reports_art_analyze}"
-                ),
-                parameters,
+            batch_parameters = {
+                "start_date": batch_start,
+                "end_date": batch_end,
+            }
+            with self.engine.begin() as connection:
+                connection.execute(delete_query, batch_parameters)
+                result = connection.execute(insert_query, batch_parameters)
+            batch_rows = result.rowcount or 0
+            inserted_rows += batch_rows
+            logger.info(
+                "Обновлён месяц витрины финансовых отчётов | "
+                "start_date=%s | end_date=%s | rows=%s",
+                batch_start,
+                batch_end,
+                batch_rows,
             )
+            batch_start = batch_end + timedelta(days=1)
 
-        inserted_rows = result.rowcount or 0
         logger.info(
             "Витрина финансового анализа обновлена | table=%s | "
             "start_date=%s | end_date=%s | rows=%s",

@@ -256,6 +256,33 @@ WITH financials AS (
         f.realizationreport_id,
         f.date_from,
         f.date_to,
+        MAX(f.create_dt) AS report_create_dt,
+        MAX(f.report_type) AS report_type,
+        MAX(f.currency_name) AS currency,
+        SUM(CASE
+            WHEN f.doc_type_name = 'Продажа' THEN COALESCE(f.retail_amount, 0)
+            WHEN f.doc_type_name = 'Возврат' THEN -COALESCE(f.retail_amount, 0)
+            ELSE 0
+        END) AS dashboard_sale,
+        SUM(CASE
+            WHEN f.doc_type_name = 'Продажа' THEN COALESCE(f.cashback_discount, 0)
+            WHEN f.doc_type_name = 'Возврат' THEN -COALESCE(f.cashback_discount, 0)
+            ELSE 0
+        END) AS loyalty_discount_compensation,
+        SUM(CASE
+            WHEN f.doc_type_name = 'Продажа' THEN COALESCE(f.cashback_amount, 0)
+            WHEN f.doc_type_name = 'Возврат' THEN -COALESCE(f.cashback_amount, 0)
+            ELSE 0
+        END) AS loyalty_points_withheld,
+        SUM(CASE
+            WHEN f.doc_type_name = 'Продажа'
+                THEN COALESCE(f.cashback_commission_change, 0)
+            WHEN f.doc_type_name = 'Возврат'
+                THEN -COALESCE(f.cashback_commission_change, 0)
+            ELSE 0
+        END) AS loyalty_program_cost,
+        SUM(COALESCE(f.payment_schedule, 0)) AS payment_schedule_adjustment,
+        SUM(COALESCE(f.additional_payment, 0)) AS wb_reward_adjustment,
         SUM(CASE
             WHEN f.supplier_oper_name IN ('Продажа', 'Возврат') THEN
                 CASE
@@ -280,7 +307,27 @@ WITH financials AS (
         SUM(f.delivery_rub) AS logistics,
         SUM(CASE WHEN f.doc_type_name = 'Продажа' THEN f.ppvz_for_pay ELSE 0 END)
             - SUM(CASE WHEN f.doc_type_name = 'Возврат' THEN f.ppvz_for_pay ELSE 0 END)
-            - SUM(f.delivery_rub) - SUM(f.penalty) - SUM(f.deduction) AS total_to_pay,
+            - SUM(f.delivery_rub)
+            - SUM(f.storage_fee)
+            - SUM(f.penalty)
+            - SUM(f.deduction)
+            - SUM(COALESCE(f.acceptance, 0))
+            - SUM(CASE
+                WHEN f.doc_type_name = 'Продажа'
+                    THEN COALESCE(f.cashback_amount, 0)
+                WHEN f.doc_type_name = 'Возврат'
+                    THEN -COALESCE(f.cashback_amount, 0)
+                ELSE 0
+            END)
+            - SUM(CASE
+                WHEN f.doc_type_name = 'Продажа'
+                    THEN COALESCE(f.cashback_commission_change, 0)
+                WHEN f.doc_type_name = 'Возврат'
+                    THEN -COALESCE(f.cashback_commission_change, 0)
+                ELSE 0
+            END)
+            - SUM(COALESCE(f.payment_schedule, 0))
+            - SUM(COALESCE(f.additional_payment, 0)) AS total_to_pay,
         SUM(CASE WHEN f.doc_type_name = 'Продажа'
             THEN f.retail_price_withdisc_rub ELSE 0 END)
             - SUM(CASE WHEN f.doc_type_name = 'Возврат'
@@ -289,6 +336,56 @@ WITH financials AS (
         SUM(f.penalty) AS penalties,
         SUM(f.storage_fee) AS storage_fee,
         SUM(f.deduction) AS deductions,
+        SUM(CASE
+            WHEN COALESCE(f.bonus_type_name, '') ILIKE '%продвижен%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%реклам%'
+                THEN COALESCE(f.deduction, 0)
+            ELSE 0
+        END) AS deductions_ads,
+        SUM(CASE
+            WHEN COALESCE(f.bonus_type_name, '') ILIKE '%продвижен%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%реклам%'
+                THEN 0
+            WHEN COALESCE(f.bonus_type_name, '') ILIKE '%кредит%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%займ%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%заём%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%факторинг%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%баланс заемщика%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%баланс заёмщика%'
+                THEN COALESCE(f.deduction, 0)
+            ELSE 0
+        END) AS deductions_credits,
+        SUM(CASE
+            WHEN COALESCE(f.bonus_type_name, '') ILIKE '%продвижен%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%реклам%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%кредит%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%займ%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%заём%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%факторинг%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%баланс заемщика%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%баланс заёмщика%'
+                THEN 0
+            WHEN COALESCE(f.bonus_type_name, '') ILIKE '%услуг%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%подписк%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%перенос карточек%'
+                THEN COALESCE(f.deduction, 0)
+            ELSE 0
+        END) AS deductions_services,
+        SUM(CASE
+            WHEN COALESCE(f.bonus_type_name, '') ILIKE '%продвижен%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%реклам%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%кредит%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%займ%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%заём%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%факторинг%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%баланс заемщика%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%баланс заёмщика%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%услуг%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%подписк%'
+                OR COALESCE(f.bonus_type_name, '') ILIKE '%перенос карточек%'
+                THEN 0
+            ELSE COALESCE(f.deduction, 0)
+        END) AS deductions_other,
         SUM(f.acceptance) AS paid_acceptance,
         SUM(CASE WHEN f.bonus_type_name ILIKE '%кредит%'
             THEN f.deduction ELSE 0 END) AS credit_transfers,
@@ -346,8 +443,28 @@ SELECT
     f.realizationreport_id,
     f.date_from,
     f.date_to,
+    f.report_create_dt,
+    f.report_type,
+    CASE f.report_type
+        WHEN 1 THEN 'Основной'
+        WHEN 2 THEN 'По выкупам'
+        ELSE 'Не определён'
+    END AS report_type_label,
+    f.currency,
+    0::numeric AS agreed_discount_pct,
     TO_CHAR(f.date_to, 'MM-YYYY') AS month,
     f.revenue,
+    CASE
+        WHEN vat.vat IS NOT NULL
+            THEN ROUND(f.revenue / (1 + vat.vat), 2)
+        ELSE NULL
+    END AS revenue_without_vat,
+    f.dashboard_sale,
+    f.loyalty_discount_compensation,
+    f.loyalty_points_withheld,
+    f.loyalty_program_cost,
+    f.payment_schedule_adjustment,
+    f.wb_reward_adjustment,
     f.logistics,
     f.storage_fee,
     f.acquiring_fee,
@@ -382,7 +499,24 @@ SELECT
         + f.credit_transfers
     ) / f.revenue, 4) * 100 ELSE 0
     END AS gp_after_wb_pct
+    ,f.deductions_ads
+    ,f.deductions_services
+    ,f.deductions_credits
+    ,f.deductions_other
 FROM financials f
+LEFT JOIN LATERAL (
+    SELECT guide.vat
+    FROM public.vat_guide guide
+    WHERE UPPER(TRIM(guide.account)) = UPPER(TRIM(f.account))
+        AND guide.start_date <= f.date_from::date
+        AND (
+            guide.end_date IS NULL
+            OR guide.end_date = DATE '1970-01-01'
+            OR guide.end_date >= f.date_from::date
+        )
+    ORDER BY guide.start_date DESC
+    LIMIT 1
+) vat ON TRUE
 LEFT JOIN purchase_cost_by_report p
     ON f.account = p.account
     AND f.realizationreport_id = p.realizationreport_id
@@ -398,6 +532,7 @@ SELECT
     date_to,
     month,
     revenue,
+    revenue_without_vat,
     logistics,
     storage_fee,
     acquiring_fee,
@@ -419,7 +554,22 @@ SELECT
     purchase_cost_total,
     margin_before_cost_pct,
     gp_after_wb,
-    gp_after_wb_pct
+    gp_after_wb_pct,
+    report_create_dt,
+    report_type,
+    report_type_label,
+    currency,
+    agreed_discount_pct,
+    dashboard_sale,
+    loyalty_discount_compensation,
+    loyalty_points_withheld,
+    loyalty_program_cost,
+    payment_schedule_adjustment,
+    wb_reward_adjustment,
+    deductions_ads,
+    deductions_services,
+    deductions_credits,
+    deductions_other
 FROM public.fin_reports_art_analyze
 ORDER BY date_from DESC, account, realizationreport_id
 """
