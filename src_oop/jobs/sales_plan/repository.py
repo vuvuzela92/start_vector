@@ -1207,7 +1207,7 @@ class SalesPlanReportRepository:
                     ) AS fact_price,
                     sp.plan_orders_rub,
                     ROUND(
-                        sp.plan_orders_rub * dp.elapsed_days
+                        sp.plan_orders_rub * COALESCE(sd.days_with_stocks, 0)
                         / NULLIF(dp.days_in_month, 0),
                         2
                     ) AS plan_orders_rub_to_date,
