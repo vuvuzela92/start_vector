@@ -140,20 +140,27 @@ class WeekNRedeemService:
             + result["Прочие_выплаты"]
             + result["Выкуплено_по_уведомлению"]
             + result["Вознагрожденение_в_доход"]
+            # - result["Доставка"]
             - result["Итого_расходы"]
         )
         result = self._append_updated_at_column(result)
         return result
 
     def _append_updated_at_column(self, dataframe: pd.DataFrame) -> pd.DataFrame:
-        """Добавляет техническую колонку времени обновления в конец выгрузки.
+        """Добавляет время обновления последней колонкой после контрольного итога.
 
-        Колонка нужна пользователям Google Sheets как контроль свежести данных:
-        по ней видно, когда именно строки week_n_redeem были подготовлены и
-        отправлены в лист БД.
+        ``updated_at`` показывает свежесть строк в бухгалтерской витрине.
+        Контрольный ``К_перечислению_за_товар`` располагается непосредственно
+        перед ним, не участвуя в основном расчете к перечислению.
         """
         result = dataframe.copy()
+        payout_column = "К_перечислению_за_товар"
+        payout_values = (
+            result.pop(payout_column) if payout_column in result.columns else None
+        )
         result["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if payout_values is not None:
+            result.insert(len(result.columns) - 1, payout_column, payout_values)
         return result
 
     def _normalize_column_names(self, dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -182,6 +189,7 @@ class WeekNRedeemService:
             "Вознагрожденение_в_доход",
             "Вознаграждение",
             "Вовзрат_выкупа",
+            "Доставка",
             "Возмещение расходов по перевозке",
             "Возмещение_за_выдачу_и_возврат_товаров_на_ПВЗ",
             "Штрафы",

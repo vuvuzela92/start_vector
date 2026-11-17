@@ -86,6 +86,16 @@ fin_rep AS (
                 ELSE 0
             END
         ) AS return_pay,
+        SUM(COALESCE(f.delivery_rub, 0)) AS delivery,
+        SUM(
+            CASE
+                WHEN f.doc_type_name = 'Продажа'
+                    THEN COALESCE(f.ppvz_for_pay, 0)
+                WHEN f.doc_type_name = 'Возврат'
+                    THEN -COALESCE(f.ppvz_for_pay, 0)
+                ELSE 0
+            END
+        ) AS payout,
         f.account
     FROM fin_reports_full f
     WHERE f.report_type = 2
@@ -112,6 +122,7 @@ SELECT
     COALESCE(w.total_sum_without_vat, 0) AS "Всего_товара_БЕЗ_НДС",
     COALESCE(w.damages_comp, 0) AS "Компенсации_ущерба",
     COALESCE(w.other_payments, 0) AS "Прочие_выплаты",
+    COALESCE(f.delivery, 0) AS "Доставка",
     COALESCE(w.discount_loyalty, 0) AS "Компенсация_скидки_по_программе_лояльности",
     r.redeem_notif AS "Уведомление_о_выкупе_№",
     COALESCE(r.sum_rub_with_vat, 0) AS "Выкуплено_по_уведомлению",
@@ -129,7 +140,8 @@ SELECT
     COALESCE(w.reimbursement_for_delivery_and_return_of_goods_to_pvz, 0) AS "Возмещение_за_выдачу_и_возврат_товаров_на_ПВЗ",
     COALESCE(w.penalties, 0) AS "Штрафы",
     COALESCE(w.other_deductions, 0) AS "Прочие удержания",
-    COALESCE(w.retentions_in_favor_of_third_parties, 0) AS "Удержания_в_пользу_третьих_лиц"
+    COALESCE(w.retentions_in_favor_of_third_parties, 0) AS "Удержания_в_пользу_третьих_лиц",
+    COALESCE(f.payout, 0) AS "К_перечислению_за_товар"
 FROM week_rep w
 LEFT JOIN fin_rep f
     ON UPPER(w.account) = UPPER(f.account)

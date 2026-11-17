@@ -22,6 +22,14 @@ from src_oop.jobs.bukh_docs.models import DocumentRequest, DownloadedDocumentsPa
 logger = logging.getLogger(__name__)
 
 
+class WBDocsAPIError(RuntimeError):
+    """Ошибка WB Documents API, которую нельзя считать отсутствием документов.
+
+    Бизнес-сценарий должен отличать отсутствие документов от отказа API,
+    чтобы уведомления о выкупе не пропадали незаметно из бухгалтерской витрины.
+    """
+
+
 class WBDocsClient:
     """Клиент WB Documents API для получения и скачивания бухгалтерских документов."""
 
@@ -35,6 +43,11 @@ class WBDocsClient:
         date_from: date,
         date_to: date,
     ) -> list[DocumentRequest]:
+        """Получает документы WB и сообщает сервису об ошибке любой категории.
+
+        Пустой список допустим только при успешном ответе без документов;
+        отказ, например 403 на уведомления о выкупе, должен стать ошибкой аккаунта.
+        """
         documents: list[DocumentRequest] = []
 
         async with self._get_session() as session:
@@ -65,13 +78,10 @@ class WBDocsClient:
                         timeout_seconds=REQUEST_TIMEOUT_SECONDS,
                     )
                     if payload is None:
-                        logger.warning(
-                            "Не удалось получить страницу списка документов WB: account=%s category=%s offset=%s",
-                            account,
-                            category,
-                            offset,
+                        raise WBDocsAPIError(
+                            "Не удалось получить список документов WB: "
+                            f"account={account}, category={category}, offset={offset}."
                         )
-                        break
 
                     batch_documents = self._extract_documents(payload)
                     if not batch_documents:
@@ -231,6 +241,11 @@ class WBDocsClient:
         params: Mapping[str, object] | None = None,
         json: dict[str, object] | None = None,
     ) -> dict[str, object] | None:
+        """Запрашивает JSON WB и пробрасывает отказ вместо пустого результата.
+
+        Это защищает бухгалтерскую выгрузку от ложного вывода, будто документов
+        нет, если WB запретил доступ или запрос завершился сетевой ошибкой.
+        """
         headers = {"Authorization": token}
 
         for attempt in range(1, RETRY_ATTEMPTS + 1):
@@ -253,7 +268,10 @@ class WBDocsClient:
                             method,
                             url,
                         )
-                        return None
+                        raise WBDocsAPIError(
+                            "WB вернул некорректный JSON-ответ: "
+                            f"account={account}, method={method}."
+                        )
 
                     if response.status in (400, 429, 503):
                         error_detail = await self._read_error(response)
@@ -278,7 +296,10 @@ class WBDocsClient:
                         url,
                         error_detail,
                     )
-                    return None
+                    raise WBDocsAPIError(
+                        "WB отклонил запрос к Documents API: "
+                        f"account={account}, status={response.status}, method={method}."
+                    )
             except (aiohttp.ClientError, asyncio.TimeoutError) as error:
                 logger.warning(
                     "Сбой запроса WB: account=%s method=%s url=%s attempt=%s/%s error=%s",
@@ -290,7 +311,10 @@ class WBDocsClient:
                     error,
                 )
                 if attempt == RETRY_ATTEMPTS:
-                    return None
+                    raise WBDocsAPIError(
+                        "Не удалось выполнить запрос к Documents API после повторов: "
+                        f"account={account}, method={method}."
+                    ) from error
                 await asyncio.sleep(RETRY_BASE_DELAY_SECONDS * attempt)
 
         return None

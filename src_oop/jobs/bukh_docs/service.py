@@ -13,6 +13,7 @@ from src_oop.jobs.bukh_docs.config import (
     DOCUMENT_LIST_DATE_TO_LAG,
     FILTER_WEEKLY_BY_REPORT_DATE,
     MAX_CONCURRENCY,
+    ACCOUNT_FILTER,
 )
 from src_oop.jobs.bukh_docs.models import JobRunResult
 from src_oop.jobs.bukh_docs.parser import BukhDocsParser
@@ -99,10 +100,18 @@ class BukhDocsService:
             if account_result.account_name and account_result.errors
         ]
 
-        if result.errors and result.written_rows:
-            result.status = "partial"
-        elif result.errors:
-            result.status = "failed"
+        failed_accounts = [
+            account_result
+            for account_result in account_results
+            if account_result.status == "failed"
+        ]
+        partial_accounts = [
+            account_result
+            for account_result in account_results
+            if account_result.status == "partial"
+        ]
+        if failed_accounts or partial_accounts:
+            result.status = "partial" if result.written_rows else "failed"
 
         logger.info(
             "Завершен bukh_docs job: status=%s documents_found=%s documents_downloaded=%s extracted_files=%s weekly_rows=%s redeem_rows=%s written_rows=%s warnings=%s errors=%s",
@@ -230,11 +239,8 @@ class BukhDocsService:
                 result.warnings.extend(redeem_save_result.warnings)
                 result.errors.extend(weekly_save_result.errors)
                 result.errors.extend(redeem_save_result.errors)
-
-                if result.errors and result.written_rows:
-                    result.status = "partial"
-                elif result.errors:
-                    result.status = "failed"
+                if result.errors:
+                    result.status = "partial" if result.written_rows else "failed"
 
                 logger.info(
                     "Завершена обработка аккаунта bukh_docs: account=%s status=%s documents=%s extracted_files=%s weekly_files=%s redeem_files=%s weekly_rows=%s redeem_rows=%s written_rows=%s",
@@ -289,6 +295,23 @@ class BukhDocsService:
             and isinstance(token, str)
             and token.strip()
         }
+        if ACCOUNT_FILTER:
+            requested_account = ACCOUNT_FILTER.casefold()
+            matching_accounts = {
+                account: token
+                for account, token in resolved_tokens.items()
+                if account.casefold() == requested_account
+            }
+            if not matching_accounts:
+                raise ValueError(
+                    "Кабинет из WB_DOCS_ACCOUNT_FILTER не найден среди доступных токенов: "
+                    f"{ACCOUNT_FILTER}. Обработка документов не запускалась."
+                )
+            resolved_tokens = matching_accounts
+            logger.info(
+                "Включен адресный режим получения бухгалтерских документов: account=%s",
+                next(iter(resolved_tokens)),
+            )
         logger.info(
             "Подготовлены токены для bukh_docs: accounts=%s names=%s",
             len(resolved_tokens),

@@ -28,6 +28,7 @@ FILTER_WEEKLY_BY_REPORT_DATE = (
     os.getenv("WB_DOCS_FILTER_WEEKLY_BY_REPORT_DATE", "False").strip().lower()
     in {"1", "true", "yes", "on"}
 )
+ACCOUNT_FILTER = os.getenv("WB_DOCS_ACCOUNT_FILTER", "").strip()
 
 WEEKLY_REPORT_TABLE_NAME = "weekly_implementation_report"
 REDEEM_NOTIFICATION_TABLE_NAME = "redeem_notification"
