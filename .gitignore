@@ -23,4 +23,4 @@ logs/*.log
 
 # Системные файлы
 .DS_Store
-Thumbs.db
+Thumbs.dblogs/
