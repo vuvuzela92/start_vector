@@ -1,5 +1,6 @@
 const CONFIG = {
   SALARY_DIRECTORY_SHEET: 'Справочник окладов офис',
+  DRIVER_CONDITIONS_SHEET: 'Справочник условий оплаты водителей',
   SUPPLEMENTAL_ROLE_COLUMN: 12,
   SUPPLEMENTAL_ENTITY_COLUMN: 13,
   SUPPLEMENTAL_GROUP_COLUMN: 14,
@@ -9,15 +10,36 @@ const CONFIG = {
       name: 'Октябрь ЗП Вектор',
       sourceSheet: 'октябрь 2026 new',
       legalEntityCell: 'B13',
+      active: false,
     },
     {
       name: 'Октябрь ЗП Старт',
       sourceSheet: 'октябрь 2026 new',
       legalEntityCell: 'B14',
+      active: false,
+    },
+    {
+      name: 'Ноябрь ЗП Вектор',
+      sourceSheet: 'ноябрь 2026 new',
+      legalEntityCell: 'B13',
+      active: true,
+    },
+    {
+      name: 'Ноябрь ЗП Старт',
+      sourceSheet: 'ноябрь 2026 new',
+      legalEntityCell: 'B14',
+      active: true,
     },
   ],
 
   DIRECTORY_SHEET: 'Справочник',
+
+  NOVEMBER_ROSTER_SHEET: 'ноябрь 2026 new',
+  TECHNICAL_SHEET: 'Технический лист',
+  TECHNICAL_DATA_START_ROW: 2,
+  ROSTER_DATA_START_ROW: 5,
+  ROSTER_IDENTITY_COLUMN: 1,
+  ROSTER_IDENTITY_WIDTH: 4,
 
   HEADER_ROW: 2,
   DATE_HEADER_ROW: 1,
@@ -83,7 +105,7 @@ const CONFIG = {
 
 
 /**
- * Создаёт меню, через которое бухгалтер запускает актуализацию двух октябрьских ведомостей.
+ * Показывает бухгалтеру единственную команду для совместной актуализации ведомостей и табеля.
  */
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -94,9 +116,411 @@ function onOpen() {
 
 
 /**
- * Перестраивает октябрьские ведомости Вектора и Старта по актуальному листу табеля,
- * объединяет дополнительные назначения с основной строкой сотрудника и восстанавливает
- * формулы дней, выплат и групповых итогов. Ручные выплаты сохраняются.
+ * Готовит состав ноября из технических записей до перестройки строк. Если для
+ * сотрудников не найдено юрлицо, показывает список для подтверждения, чтобы
+ * бухгалтер понимал, какие строки будут добавлены с пустым юрлицом.
+ */
+function prepareNovemberRosterUpdate_(spreadsheet) {
+  const rosterSheet = spreadsheet.getSheetByName(CONFIG.NOVEMBER_ROSTER_SHEET);
+  const technicalSheet = spreadsheet.getSheetByName(CONFIG.TECHNICAL_SHEET);
+
+  if (!rosterSheet) {
+    throw new Error(`Не найден лист «${CONFIG.NOVEMBER_ROSTER_SHEET}».`);
+  }
+  if (!technicalSheet) {
+    throw new Error(`Не найден лист «${CONFIG.TECHNICAL_SHEET}».`);
+  }
+
+  const existingRows = readNovemberRosterRows_(rosterSheet);
+  const employees = readNovemberEmployees_(technicalSheet, existingRows);
+  if (!employees.length) {
+    throw new Error('В техническом листе не найдено сотрудников с записями за ноябрь 2026 года. Ведомости не изменены.');
+  }
+
+  return { rosterSheet, existingRows, employees };
+}
+
+
+/**
+ * Спрашивает подтверждение перед совместной актуализацией, если в ноябрьском
+ * источнике есть сотрудники без юрлица, необходимого для зарплатных формул.
+ */
+function confirmNovemberRosterUpdate_(employees) {
+  const employeesWithoutEntity = employees.filter((employee) => !employee.legalEntity);
+  if (!employeesWithoutEntity.length) {
+    return true;
+  }
+
+  const sampleNames = employeesWithoutEntity
+    .slice(0, 12)
+    .map((employee) => employee.fio)
+    .join('\n');
+  const answer = SpreadsheetApp.getUi().alert(
+    'Проверьте юрлица сотрудников ноября',
+    `У ${employeesWithoutEntity.length} сотрудников не определено юрлицо. ` +
+      'Ведомости не будут изменены, если нажать «Нет».\n\n' +
+      `${sampleNames}${employeesWithoutEntity.length > 12 ? '\n…' : ''}\n\n` +
+      'Продолжить общую актуализацию ведомостей?',
+    SpreadsheetApp.getUi().ButtonSet.YES_NO
+  );
+  return answer === SpreadsheetApp.getUi().Button.YES;
+}
+
+
+/**
+ * Читает сотрудников, присутствующих в технических записях ноября 2026 года,
+ * исключая повторы по дням и дополняя незаполненное юрлицо из существующей строки.
+ */
+function readNovemberEmployees_(technicalSheet, existingRows) {
+  const lastRow = technicalSheet.getLastRow();
+  if (lastRow < CONFIG.TECHNICAL_DATA_START_ROW) {
+    return [];
+  }
+
+  const rows = technicalSheet.getRange(
+    CONFIG.TECHNICAL_DATA_START_ROW,
+    1,
+    lastRow - CONFIG.TECHNICAL_DATA_START_ROW + 1,
+    6
+  ).getDisplayValues();
+  const employeesByKey = new Map();
+  const technicalEntitiesByPerson = new Map();
+
+  for (const row of rows) {
+    if (!/^2026-11-\d{2}$/.test(String(row[0] || '').trim())) {
+      continue;
+    }
+    const fioKey = normalizeHeader_(row[1]);
+    const groupKey = normalizeHeader_(row[2]);
+    const legalEntity = String(row[3] || '').trim();
+    if (!fioKey || !groupKey || !legalEntity) {
+      continue;
+    }
+    const personKey = `${fioKey}|${groupKey}`;
+    if (!technicalEntitiesByPerson.has(personKey)) {
+      technicalEntitiesByPerson.set(personKey, new Set());
+    }
+    technicalEntitiesByPerson.get(personKey).add(legalEntity);
+  }
+
+  for (const row of rows) {
+    const dateText = String(row[0] || '').trim();
+    if (!/^2026-11-\d{2}$/.test(dateText)) {
+      continue;
+    }
+
+    const fio = String(row[1] || '').trim();
+    const group = String(row[2] || '').trim();
+    let legalEntity = String(row[3] || '').trim();
+    if (!fio || !group) {
+      continue;
+    }
+
+    if (!legalEntity) {
+      const normalizedFio = normalizeHeader_(fio);
+      const normalizedGroup = normalizeHeader_(group);
+      const personKey = `${normalizedFio}|${normalizedGroup}`;
+      const entitiesFromTechnical = [
+        ...(technicalEntitiesByPerson.get(personKey) || []),
+      ];
+      const knownEntities = [...existingRows.values()]
+        .filter((saved) =>
+          normalizeHeader_(saved.identity[0]) === normalizedFio &&
+          normalizeHeader_(saved.identity[1]) === normalizedGroup &&
+          normalizeHeader_(saved.identity[2])
+        )
+        .map((saved) => String(saved.identity[2]).trim());
+      const uniqueEntities = new Map();
+      for (const entity of [...entitiesFromTechnical, ...knownEntities]) {
+        uniqueEntities.set(normalizeHeader_(entity), entity);
+      }
+      if (uniqueEntities.size === 1) {
+        legalEntity = [...uniqueEntities.values()][0];
+      }
+    }
+
+    const key = makeNovemberRosterKey_({ fio, legalEntity, group });
+    const savedRow = findNovemberRosterRow_(existingRows, {
+      fio,
+      legalEntity,
+      group,
+    });
+    const employee = {
+      fio,
+      group,
+      legalEntity,
+      position: savedRow ? savedRow.identity[3] : '',
+    };
+    if (!employeesByKey.has(key)) {
+      employeesByKey.set(key, employee);
+    }
+  }
+
+  return [...employeesByKey.values()].sort((first, second) =>
+    first.group.localeCompare(second.group, 'ru') ||
+    first.fio.localeCompare(second.fio, 'ru')
+  );
+}
+
+
+/**
+ * Сохраняет идентификаторы и ручные значения согласованных часов, чтобы при
+ * изменении состава строки и их значения оставались привязаны к нужным сотрудникам.
+ */
+function readNovemberRosterRows_(sheet) {
+  const firstRow = CONFIG.ROSTER_DATA_START_ROW;
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+  if (lastRow < firstRow) {
+    const emptyRows = new Map();
+    emptyRows.manualColumns = [];
+    emptyRows.manualCellsToClear = [];
+    return emptyRows;
+  }
+
+  const range = sheet.getRange(firstRow, 1, lastRow - firstRow + 1, lastColumn);
+  const values = range.getValues();
+  const formulas = range.getFormulas();
+  const result = new Map();
+  const headerValues = sheet
+    .getRange(CONFIG.SOURCE_HEADER_ROW, 1, 1, lastColumn)
+    .getDisplayValues()[0];
+  const manualColumns = headerValues
+    .map((header, index) =>
+      normalizeHeader_(header) === 'Согласовано добавление часов' ? index : -1
+    )
+    .filter((index) => index >= 0);
+
+  for (let rowIndex = 0; rowIndex < values.length; rowIndex += 1) {
+    const row = values[rowIndex];
+    const fio = normalizeHeader_(row[0]);
+    const group = normalizeHeader_(row[1]);
+    const legalEntity = normalizeHeader_(row[2]);
+    if (!fio || fio.startsWith('ИТОГО')) {
+      continue;
+    }
+
+    const manualValues = {};
+    for (const column of manualColumns) {
+      if (!formulas[rowIndex][column] && row[column] !== '' && row[column] !== null) {
+        manualValues[column] = row[column];
+      }
+    }
+
+    result.set(makeNovemberRosterKey_({ fio, legalEntity, group, position: row[3] }), {
+      identity: row.slice(0, CONFIG.ROSTER_IDENTITY_WIDTH),
+      manualValues,
+      sourceRow: firstRow + rowIndex,
+    });
+  }
+
+  result.manualColumns = manualColumns;
+  result.manualCellsToClear = [...result.values()].flatMap((saved) =>
+    Object.keys(saved.manualValues).map((column) => ({
+      row: saved.sourceRow,
+      column: Number(column) + 1,
+    }))
+  );
+  return result;
+}
+
+
+/**
+ * Обновляет ФИО, группу, юрлицо и должность, возвращает ручные согласованные часы,
+ * а при нехватке строк расширяет лист формулами и форматом строки-шаблона ноября.
+ */
+function writeNovemberRoster_(sheet, employees, existingRows) {
+  const firstRow = CONFIG.ROSTER_DATA_START_ROW;
+  const lastColumn = sheet.getLastColumn();
+  const oldRowCount = sheet.getMaxRows() - firstRow + 1;
+  const outputRows = buildNovemberRosterRows_(employees);
+  const neededRowCount = outputRows.length;
+  const previousIdentities = sheet
+    .getRange(firstRow, CONFIG.ROSTER_IDENTITY_COLUMN, oldRowCount, CONFIG.ROSTER_IDENTITY_WIDTH)
+    .getDisplayValues();
+  const arrivalFormulas = sheet
+    .getRange(firstRow, 5, oldRowCount, 1)
+    .getFormulas()
+    .flat();
+  const templateOffset = arrivalFormulas.findIndex(Boolean);
+  if (templateOffset < 0) {
+    throw new Error('В ноябрьском табеле не найдена формула-подсказка для дневных блоков. Список не изменён.');
+  }
+  const templateRow = firstRow + templateOffset;
+  const templateRange = sheet.getRange(templateRow, 1, 1, lastColumn);
+  sheet
+    .getRange(firstRow, CONFIG.ROSTER_IDENTITY_COLUMN, oldRowCount, CONFIG.ROSTER_IDENTITY_WIDTH)
+    .clearContent();
+  for (const cell of existingRows.manualCellsToClear) {
+    sheet.getRange(cell.row, cell.column).clearContent();
+  }
+  if (!employees.length) {
+    return;
+  }
+
+  if (neededRowCount > oldRowCount) {
+    const rowsToAdd = neededRowCount - oldRowCount;
+    const oldLastRow = sheet.getMaxRows();
+    sheet.insertRowsAfter(oldLastRow, rowsToAdd);
+
+    for (let offset = 1; offset <= rowsToAdd; offset += 1) {
+      const newRow = oldLastRow + offset;
+      templateRange.copyTo(
+        sheet.getRange(newRow, 1, 1, lastColumn),
+        SpreadsheetApp.CopyPasteType.PASTE_FORMAT,
+        false
+      );
+      templateRange.copyTo(
+        sheet.getRange(newRow, 1, 1, lastColumn),
+        SpreadsheetApp.CopyPasteType.PASTE_FORMULA,
+        false
+      );
+    }
+  }
+
+  for (let index = 0; index < outputRows.length; index += 1) {
+    if (outputRows[index].type !== 'employee') {
+      continue;
+    }
+    const targetRow = firstRow + index;
+    const wasBlank = !String(previousIdentities[index]?.[0] || '').trim();
+    const hasArrivalFormula = Boolean(arrivalFormulas[index]);
+    if (wasBlank && !hasArrivalFormula) {
+      templateRange.copyTo(
+        sheet.getRange(targetRow, 1, 1, lastColumn),
+        SpreadsheetApp.CopyPasteType.PASTE_FORMAT,
+        false
+      );
+      templateRange.copyTo(
+        sheet.getRange(targetRow, 1, 1, lastColumn),
+        SpreadsheetApp.CopyPasteType.PASTE_FORMULA,
+        false
+      );
+    }
+  }
+
+  const identities = outputRows.map((row) => row.type === 'separator'
+    ? ['', '', '', '']
+    : [
+      row.employee.fio,
+      row.employee.group,
+      row.employee.legalEntity,
+      row.employee.position,
+    ]
+  );
+  sheet.getRange(firstRow, 1, identities.length, CONFIG.ROSTER_IDENTITY_WIDTH)
+    .setValues(identities);
+
+  outputRows.forEach((row, index) => {
+    if (row.type !== 'employee') {
+      return;
+    }
+    const previousRow = findNovemberRosterRow_(existingRows, row.employee);
+    if (!previousRow) {
+      return;
+    }
+    const rowNumber = firstRow + index;
+    for (const [column, value] of Object.entries(previousRow.manualValues)) {
+      sheet.getRange(rowNumber, Number(column) + 1).setValue(value);
+    }
+  });
+
+  updateNovemberSeparatorRule_(sheet);
+}
+
+
+/**
+ * Вставляет пустую строку при смене группы, чтобы правило условного форматирования
+ * рисовало разделительную полосу между блоками сотрудников.
+ */
+function buildNovemberRosterRows_(employees) {
+  const rows = [];
+  let previousGroup = '';
+
+  for (const employee of employees) {
+    const currentGroup = normalizeHeader_(employee.group);
+    if (previousGroup && currentGroup !== previousGroup) {
+      rows.push({ type: 'separator' });
+    }
+    rows.push({ type: 'employee', employee });
+    previousGroup = currentGroup;
+  }
+
+  return rows;
+}
+
+
+/**
+ * Расширяет правило белой разделительной полосы на все строки ноябрьского листа,
+ * включая строки, добавленные при росте списка сотрудников.
+ */
+function updateNovemberSeparatorRule_(sheet) {
+  const separatorRuleFormula = '=AND(COUNTBLANK($A2:$C2)=3;$A1<>"";$A3<>"")';
+  const rules = sheet.getConditionalFormatRules();
+  const ruleIndex = rules.findIndex((rule) => {
+    const condition = rule.getBooleanCondition();
+    if (!condition || condition.getCriteriaType() !== SpreadsheetApp.BooleanCriteria.CUSTOM_FORMULA) {
+      return false;
+    }
+    return String(condition.getCriteriaValues()[0] || '').includes(
+      'COUNTBLANK($A2:$C2)=3'
+    );
+  });
+
+  if (ruleIndex < 0) {
+    return;
+  }
+
+  rules[ruleIndex] = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied(separatorRuleFormula)
+    .setBackground('#ffffff')
+    .setRanges([sheet.getRange(2, 1, sheet.getMaxRows() - 1, sheet.getLastColumn())])
+    .build();
+  sheet.setConditionalFormatRules(rules);
+}
+
+
+/**
+ * Создаёт устойчивый ключ для дедупликации ноября и переноса ручных значений,
+ * различая одинаковые ФИО по юрлицу, группе и должности.
+ */
+function makeNovemberRosterKey_(employee) {
+  return [employee.fio, employee.legalEntity, employee.group, employee.position || '']
+    .map((value) => normalizeHeader_(value).toLocaleLowerCase('ru'))
+    .join('|');
+}
+
+
+/**
+ * Находит предыдущую строку того же сотрудника по ФИО, юрлицу и группе,
+ * сохраняя должность и дневные значения при изменении состава или порядка строк.
+ */
+function findNovemberRosterRow_(existingRows, employee) {
+  const exactMatch = [...existingRows.values()].find((saved) =>
+    normalizeHeader_(saved.identity[0]) === normalizeHeader_(employee.fio) &&
+    normalizeHeader_(saved.identity[1]) === normalizeHeader_(employee.group) &&
+    normalizeHeader_(saved.identity[2]) === normalizeHeader_(employee.legalEntity) &&
+    normalizeHeader_(saved.identity[3]) !== normalizeHeader_('Уборщица')
+  );
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  const matchingRows = [...existingRows.values()].filter((saved) =>
+    normalizeHeader_(saved.identity[0]) === normalizeHeader_(employee.fio) &&
+    normalizeHeader_(saved.identity[1]) === normalizeHeader_(employee.group) &&
+    normalizeHeader_(saved.identity[2]) === normalizeHeader_(employee.legalEntity)
+  );
+  return matchingRows.find((saved) =>
+    normalizeHeader_(saved.identity[3]) !== normalizeHeader_('Уборщица')
+  ) || matchingRows[0] || null;
+}
+
+
+/**
+ * Перестраивает только активные ведомости открытого периода и обновляет ноябрьский
+ * список по техническому листу. Закрытые периоды с active:false не пересчитываются.
+ * Перед изменениями проверяет, можно ли определить юрлица сотрудников.
  */
 function actualizePayrollSheets() {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
@@ -122,7 +546,21 @@ function actualizePayrollSheets() {
       throw new Error(`Не найден лист «${CONFIG.SALARY_DIRECTORY_SHEET}».`);
     }
 
+    const novemberUpdate = prepareNovemberRosterUpdate_(spreadsheet);
+    if (!confirmNovemberRosterUpdate_(novemberUpdate.employees)) {
+      SpreadsheetApp.getUi().alert(
+        'Актуализация отменена',
+        'Из-за неустановленных юрлиц ведомости и ноябрьский список не изменены.',
+        SpreadsheetApp.getUi().ButtonSet.OK
+      );
+      return;
+    }
+
     for (const payrollConfig of CONFIG.PAYROLL_SHEETS) {
+      if (!payrollConfig.active) {
+        continue;
+      }
+
       const payrollSheet = spreadsheet.getSheetByName(payrollConfig.name);
       const sourceSheet = spreadsheet.getSheetByName(
         payrollConfig.sourceSheet
@@ -163,10 +601,15 @@ function actualizePayrollSheets() {
       );
     }
 
+    writeNovemberRoster_(
+      novemberUpdate.rosterSheet,
+      novemberUpdate.employees,
+      novemberUpdate.existingRows
+    );
     SpreadsheetApp.flush();
     SpreadsheetApp.getUi().alert(
       'Актуализация завершена',
-      'Октябрьские ведомости, дополнительные назначения и итоги групп обновлены.',
+      `Активные зарплатные ведомости обновлены. Список ноября актуализирован: ${novemberUpdate.employees.length} сотрудников.`,
       SpreadsheetApp.getUi().ButtonSet.OK
     );
   } finally {
@@ -245,6 +688,7 @@ function actualizePayrollSheet_(
   );
   applyCalculatedFormulaRules_(sheet, employeeRows);
   applyBaseSalaryFormulaRules_(sheet, employeeRows);
+  applyDriverPaymentFormulaRules_(sheet, sourceSheet, employeeRows);
   applySupplementalFormulaRules_(
     sheet,
     sourceSheet,
@@ -835,8 +1279,8 @@ function applyCalculatedFormulaRules_(sheet, employeeRows) {
 
 /**
  * Подключает начисления складских групп из итогов табеля: офис склада получает
- * базовые суммы двух периодов по ФИО, юрлицу и группе, а персонал и водители —
- * почасовые суммы с учётом дополнительных назначений.
+ * итоги двух периодов, а персонал остаётся на почасовом начислении. Водителей
+ * пропускает, потому что их аванс и зарплата рассчитываются по отдельным условиям.
  */
 function applyHourlySalaryFormulaRules_(
   sheet,
@@ -907,6 +1351,10 @@ function applyHourlySalaryFormulaRules_(
       group !== normalizeHeader_('СКЛАД. Персонал') &&
       group !== normalizeHeader_('Склад. Водитель')
     ) {
+      continue;
+    }
+
+    if (group === normalizeHeader_('Склад. Водитель')) {
       continue;
     }
 
@@ -999,42 +1447,147 @@ function payrollBasisCondition_(row, columnByHeader) {
 
 
 /**
- * Считает месячный оклад основной должности и активных дополнительных назначений
- * одной суммой в строке сотрудника, чтобы итоговая ведомость содержала одну выплату.
+ * Подставляет оклад из актуального справочника по группе сотрудника: офисные
+ * ставки берутся из справочника окладов офиса, «Склад. Офис» — из справочника
+ * нормы окладов склада, а почасовые группы оставляют базовое поле пустым.
  */
 function applyBaseSalaryFormulaRules_(sheet, employeeRows) {
   const salarySheetName = CONFIG.SALARY_DIRECTORY_SHEET.replace(/'/g, "''");
   const salaryRange = `'${salarySheetName}'`;
+  const warehouseSalaryRange = "'Справочник нормы времени окладов склад'";
   const columnByHeader = getColumnMap_(sheet);
 
   for (const row of employeeRows) {
-    const formula =
-      `=IF($B${row}="";"";LET(` +
-      `фио;$B${row};` +
-      `юрлицо;$D${row};` +
-      `группа;$E${row};` +
-      `начало_месяца;$F$1;` +
-      `конец_месяца;EOMONTH($F$1;0);` +
-      `основная_ставка;SUMPRODUCT(` +
-      `(${salaryRange}!$A$3:$A=фио)*` +
-      `(${salaryRange}!$C$3:$C<=конец_месяца)*` +
-      `((${salaryRange}!$D$3:$D="")+(${salaryRange}!$D$3:$D>=начало_месяца))*` +
-      `(${salaryRange}!$L$3:$L="")*` +
-      `${salaryRange}!$B$3:$B` +
-      `);` +
-      `дополнительные_ставки;SUMPRODUCT(` +
-      `(${salaryRange}!$A$3:$A=фио)*` +
-      `(${salaryRange}!$M$3:$M=юрлицо)*` +
-      `(${salaryRange}!$N$3:$N=группа)*` +
-      `(${salaryRange}!$L$3:$L<>"")*` +
-      `(${salaryRange}!$C$3:$C<=конец_месяца)*` +
-      `((${salaryRange}!$D$3:$D="")+(${salaryRange}!$D$3:$D>=начало_месяца))*` +
-      `${salaryRange}!$B$3:$B` +
-      `);` +
-      `итоговый_оклад;основная_ставка+дополнительные_ставки;` +
-      `IF(итоговый_оклад=0;"";итоговый_оклад)))`;
+    const group = normalizeHeader_(
+      sheet.getRange(row, columnByHeader.get(normalizeHeader_('Группа'))).getDisplayValue()
+    );
+    if (group === normalizeHeader_('Склад. Водитель')) {
+      continue;
+    }
+
+    let formula = '=IF($B' + row + '="";"";"")';
+    if (group === normalizeHeader_('Склад. Офис')) {
+      formula =
+        `=IF($B${row}="";"";LET(` +
+        `фио;$B${row};начало_месяца;$F$1;конец_месяца;EOMONTH($F$1;0);` +
+        `оклад;SUMPRODUCT(` +
+        `(${warehouseSalaryRange}!$A$3:$A=фио)*` +
+        `(${warehouseSalaryRange}!$E$3:$E<=конец_месяца)*` +
+        `((${warehouseSalaryRange}!$F$3:$F="")+` +
+        `(${warehouseSalaryRange}!$F$3:$F>=начало_месяца))*` +
+        `${warehouseSalaryRange}!$B$3:$B);IF(оклад=0;"";оклад)))`;
+    } else if (group !== normalizeHeader_('СКЛАД. Персонал')) {
+      formula =
+        `=IF($B${row}="";"";LET(` +
+        `фио;$B${row};начало_месяца;$F$1;конец_месяца;EOMONTH($F$1;0);` +
+        `оклад;SUMPRODUCT(` +
+        `(${salaryRange}!$A$3:$A=фио)*` +
+        `(${salaryRange}!$C$3:$C<=конец_месяца)*` +
+        `((${salaryRange}!$D$3:$D="")+` +
+        `(${salaryRange}!$D$3:$D>=начало_месяца))*` +
+        `${salaryRange}!$B$3:$B);IF(оклад=0;"";оклад)))`;
+    }
 
     setFormulaByHeader_(sheet, columnByHeader, 'ОКЛАД', row, formula);
+  }
+}
+
+
+/**
+ * Рассчитывает аванс и остаток зарплаты водителей по их персональным условиям:
+ * дневной эквивалент берёт фактические часы из табеля без вычета обеда, норму,
+ * дневной предел и денежный режим — из отдельного справочника водителей.
+ */
+function applyDriverPaymentFormulaRules_(sheet, sourceSheet, employeeRows) {
+  const columnByHeader = getColumnMap_(sheet);
+  const groupColumn = columnByHeader.get(normalizeHeader_('Группа'));
+  const driverRows = employeeRows.filter((row) =>
+    normalizeHeader_(sheet.getRange(row, groupColumn).getDisplayValue()) ===
+    normalizeHeader_('Склад. Водитель')
+  );
+  if (!driverRows.length) return;
+
+  const directoryName = CONFIG.DRIVER_CONDITIONS_SHEET.replace(/'/g, "''");
+  const directory = `'${directoryName}'`;
+  const sourceName = sourceSheet.getName().replace(/'/g, "''");
+  const sourceHeaders = sourceSheet
+    .getRange(CONFIG.SOURCE_HEADER_ROW, 1, 1, sourceSheet.getLastColumn())
+    .getDisplayValues()[0];
+  const factColumns = sourceHeaders.flatMap((header, index) => {
+    const match = String(header).match(/^Факт день (\d{2})\./i);
+    return match ? [{ day: Number(match[1]), column: index + 1 }] : [];
+  });
+  const firstHalfColumns = factColumns.filter((item) => item.day <= 15);
+  const allFactColumns = factColumns;
+  if (!firstHalfColumns.length || !allFactColumns.length) {
+    throw new Error(`На листе «${sourceSheet.getName()}» не найдены столбцы фактических часов водителей.`);
+  }
+
+  const directoryMatch = (row) =>
+    `MATCH(1;(${directory}!$A$3:$A=$B${row})*` +
+    `(${directory}!$B$3:$B=$D${row})*` +
+    `(${directory}!$C$3:$C=$E${row})*` +
+    `(IF(ISNUMBER(${directory}!$M$3:$M);${directory}!$M$3:$M;` +
+    `IFERROR(DATE(VALUE(RIGHT(${directory}!$M$3:$M;4));` +
+    `VALUE(MID(${directory}!$M$3:$M;4;2));` +
+    `VALUE(LEFT(${directory}!$M$3:$M;2)));0))<=EOMONTH($F$1;0))*` +
+    `IF(${directory}!$N$3:$N="";TRUE;` +
+    `IF(ISNUMBER(${directory}!$N$3:$N);${directory}!$N$3:$N;` +
+    `IFERROR(DATE(VALUE(RIGHT(${directory}!$N$3:$N;4));` +
+    `VALUE(MID(${directory}!$N$3:$N;4;2));` +
+    `VALUE(LEFT(${directory}!$N$3:$N;2)));0))>=$F$1);0)`;
+  const sourceMatch = (row) =>
+    `MATCH(1;('${sourceName}'!$A:$A=$B${row})*` +
+    `('${sourceName}'!$B:$B=$E${row})*` +
+    `('${sourceName}'!$C:$C=$D${row})*` +
+    `('${sourceName}'!$D:$D=$C${row});0)`;
+  const factHours = (row, items) =>
+    `SUM(${items.map(({ column }) =>
+      `IFERROR(INDEX('${sourceName}'!$${columnToLetter_(column)}:$${columnToLetter_(column)};${sourceMatch(row)});0)`
+    ).join(';')})`;
+
+  for (const row of driverRows) {
+    const match = directoryMatch(row);
+    const mode = `INDEX(${directory}!$G$3:$G;${match})`;
+    const salary = `INDEX(${directory}!$H$3:$H;${match})`;
+    const shiftNorm = `INDEX(${directory}!$I$3:$I;${match})`;
+    const dailyCap = `INDEX(${directory}!$J$3:$J;${match})`;
+    const lowerLimit = `INDEX(${directory}!$K$3:$K;${match})`;
+    const upperLimit = `INDEX(${directory}!$L$3:$L;${match})`;
+    const monthHours = factHours(row, allFactColumns);
+    const salaryCell = cellRef_(columnByHeader, 'ОКЛАД', row);
+    const advanceCell = cellRef_(columnByHeader, 'Аванс', row);
+    const monthlyWorkdaysColumn = sheet
+      .getRange(1, 1, 1, sheet.getLastColumn())
+      .getDisplayValues()[0]
+      .findIndex((header) => normalizeHeader_(header) === normalizeHeader_('раб дней')) + 1;
+    if (!monthlyWorkdaysColumn) {
+      throw new Error(`На листе «${sheet.getName()}» не найден показатель «раб дней».`);
+    }
+    const monthlyWorkdaysCell = `${columnToLetter_(monthlyWorkdaysColumn + 1)}$1`;
+    const firstHalfShiftUnits = firstHalfColumns.map(({ column }) => {
+      const letter = columnToLetter_(column);
+      const hours = `IFERROR(INDEX('${sourceName}'!$${letter}:$${letter};${sourceMatch(row)});0)`;
+      return `IFERROR(IF(${dailyCap}="";${hours}/${shiftNorm};MIN(${hours}/${shiftNorm};${dailyCap}));0)`;
+    }).join(';');
+
+    const salaryFormula =
+      `=IFERROR(IF(INDEX(${directory}!$H$3:$H;${match})="";"";${salary});"")`;
+    const advanceFormula =
+      `=IFERROR(IF(OR(${salaryCell}="";${monthlyWorkdaysCell}="";${shiftNorm}=0);"";` +
+      `${salaryCell}/${monthlyWorkdaysCell}*SUM(${firstHalfShiftUnits}));"")`;
+    const salaryRemainderFormula =
+      `=IFERROR(LET(режим;${mode};оклад;${salaryCell};` +
+      `часы_месяца;${monthHours};нижняя_граница;${lowerLimit};верхняя_граница;${upperLimit};` +
+      `IF(оклад="";"";IF(режим="Оклад с диапазоном часов";` +
+      `IF(часы_месяца<нижняя_граница;оклад*часы_месяца/нижняя_граница;` +
+      `IF(часы_месяца<=верхняя_граница;оклад;` +
+      `оклад+(часы_месяца-верхняя_граница)*оклад/верхняя_граница));оклад))-` +
+      `${advanceCell});"")`;
+
+    setFormulaByHeader_(sheet, columnByHeader, 'ОКЛАД', row, salaryFormula);
+    setFormulaByHeader_(sheet, columnByHeader, 'Аванс', row, advanceFormula);
+    setFormulaByHeader_(sheet, columnByHeader, 'Зарплата', row, salaryRemainderFormula);
   }
 }
 
