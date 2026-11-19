@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class WBStockControlService:
-    """Оркестрирует чтение UNIT, WB, ClickHouse и уведомления Bitrix24."""
+    """Оркестрирует чтение UNIT, WB, PostgreSQL и уведомления Bitrix24."""
 
     def __init__(
         self,
@@ -36,11 +36,12 @@ class WBStockControlService:
         self.settings = settings or StockControlSettings.from_env()
 
     async def run(self) -> None:
-        """Проверяет все активные ЛК/склады, сохраняет снимок и сообщает о рисках.
+        """Проверяет все активные ЛК/склады, обнуляет риски и сообщает о результате.
 
         Бизнес-сценарий: карточки вне UNIT также проверяются, но job никогда не
-        отправляет команды изменения остатков в WB. Исключения читаются из
-        рабочей UNIT 2.0 (tested); ошибка её чтения прерывает весь сценарий.
+        отправляет команды обнуления положительных остатков вне UNIT в WB.
+        Результаты сохраняются в PostgreSQL. Исключения читаются из рабочей
+        UNIT 2.0 (tested); ошибка её чтения прерывает весь сценарий.
         """
         unit_article_ids = read_unit_article_ids()
         targets = self.repository.fetch_targets(unit_article_ids)

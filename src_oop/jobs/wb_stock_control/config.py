@@ -11,8 +11,6 @@ CHRT_IDS_CHUNK_SIZE = 1000
 REQUEST_TIMEOUT_SECONDS = 40
 MAX_RETRIES = 5
 RETRY_DELAYS_SECONDS = (5, 10, 20, 40, 80)
-CLICKHOUSE_HISTORY_TABLE = "wb_fbs_stock_checks"
-CLICKHOUSE_CURRENT_TABLE = "wb_fbs_stock_current"
 
 
 @dataclass(frozen=True, slots=True)
