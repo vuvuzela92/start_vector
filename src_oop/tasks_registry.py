@@ -82,6 +82,11 @@ from src_oop.jobs.fbs_stocks.run import (
 )
 from src_oop.jobs.health_check.run import health_check_run
 from src_oop.jobs.logistic_ved.run import logistic_ved_full_run
+from src_oop.jobs.assembly_market_sheets.run import (
+    market_orders_run,
+    market_status_from_db_run,
+    migration_data_to_hang_run,
+)
 from src_oop.jobs.orders_articles_analyze.run import orders_article_analyze_run
 from src_oop.jobs.orders_feed.run import order_feed
 from src_oop.jobs.orders.run import orders
@@ -119,6 +124,18 @@ TASKS: Dict[str, Dict[str, Any]] = {
     "assembly_status_model_run": {
         "func": smart_run(assembly_status_model_run),
         "desc": "WB API → PostgreSQL `assembly_task_status_model`: сохранение сборочных заданий и их статусов для контроля обработки и штрафов",
+    },
+    "market_orders_run": {
+        "func": smart_run(market_orders_run),
+        "desc": "WB API → Google Sheets «Для расчетов БД», лист «БД 2 ( ТЕСТ )»: заказы по всем кабинетам за последние 11 дней",
+    },
+    "market_status_from_db_run": {
+        "func": smart_run(market_status_from_db_run),
+        "desc": "PostgreSQL `status_assembly_task` и Google Sheets «Для расчетов БД» → лист «Статусы сборки 2»: актуализация статусов заданий",
+    },
+    "migration_data_to_hang_run": {
+        "func": smart_run(migration_data_to_hang_run),
+        "desc": "Google Sheets «Для расчетов БД», лист «Сборочные задания 2» → «ВИСЯЧИЕ + ДОСТАВКА», лист «Сборочные задания 2»",
     },
     "advert_info": {
         "func": smart_run(advert_info),
