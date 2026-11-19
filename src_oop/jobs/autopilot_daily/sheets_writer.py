@@ -198,7 +198,7 @@ class AutopilotDailySheetsWriter:
         """
         if metric_name in DISABLED_PU_METRICS:
             logger.info(
-                "Метрика дневного ПУ временно пропущена, чтобы не затронуть спорную колонку: metric=%s",
+                "Метрика дневного ПУ отключена и не записывается: metric=%s",
                 metric_name,
             )
             return DailyMetricWriteResult(metric_name=metric_name, written=True, rows=0)
@@ -237,8 +237,15 @@ class AutopilotDailySheetsWriter:
         Бизнес-логика:
         средние показатели предыдущей недели и 30-дневные цены служат
         ориентирами для сравнения с текущей неделей. Отсутствующие данные
-        остаются пустыми ячейками.
+        остаются пустыми ячейками. `avg_cpm` и `avg_organic` отключены вместе
+        с удаляемыми диапазонами CPM и «Органика» и не записываются.
         """
+        if metric_name in DISABLED_PU_METRICS:
+            logger.info(
+                "Историческая метрика ПУ отключена и не записывается: metric=%s",
+                metric_name,
+            )
+            return DailyMetricWriteResult(metric_name=metric_name, written=True, rows=0)
         if metric_name not in HISTORY_METRIC_TO_COLUMN:
             return DailyMetricWriteResult(
                 metric_name=metric_name,

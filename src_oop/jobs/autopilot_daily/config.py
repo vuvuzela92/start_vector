@@ -132,4 +132,10 @@ GROWTH_METRIC_TO_COLUMN: dict[str, str] = {
 
 # Свободный остаток относится к текущему снимку UNIT и обновляется почасовым
 # сценарием в колонке текущего дня. Daily не должен заполнять завершенные дни этой метрики.
-DISABLED_PU_METRICS = {"unit_free_stock"}
+DISABLED_PU_METRICS = {
+    "unit_free_stock",
+    "cpm",
+    "organic",
+    "avg_cpm",
+    "avg_organic",
+}

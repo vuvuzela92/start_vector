@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal
@@ -22,6 +23,7 @@ from src_oop.jobs.autopilot.config import (
     UNIT_CLIENT_PRICE_HEADER,
     UNIT_EXPECTED_REMAINS_HEADER,
     UNIT_MARGIN_COLUMN_NAME,
+    UNIT_REVIEWS_COUNT_HEADER,
     UNIT_WB_DISCOUNT_HEADER,
     autopilot_gs,
     unit_gs,
@@ -75,8 +77,9 @@ class AutopilotHourlyService:
         Google Sheets. Сумма заказов записывается первой, и сразу после её
         успешной записи A2 получает время актуализации. После этого сценарий
         дописывает расходы Cometa, рекламную активность, прибыль по ИУ по
-        формуле daily-витрины, остатки UNIT и расчетные показатели порциями по
-        каждой метрике. Онлайн-парсинг цен/СПП/рейтинга WB временно защищен
+        формуле daily-витрины с резервом из «Мар» UNIT, остатки и отзывы и остальные нужные
+        показатели порциями; CPM и «Органика» не выгружаются. Онлайн-парсинг
+        цен/СПП/рейтинга WB временно защищен
         флагом. Первый успешный финансовый срез часа сохраняется в БД до
         дополнительных блоков и независимо от результата записи ПУ. День
         определяется по Москве, пересечение полуночи запрещает смешанный срез.
@@ -171,16 +174,66 @@ class AutopilotHourlyService:
             summary=summary,
         )
 
+        unit_remains: MetricValues = {}
+        unit_wb_discount: MetricValues = {}
+        unit_client_prices: MetricValues = {}
+        unit_reviews_count: MetricValues = {}
+        unit_margins: MetricValues = {}
+        try:
+            unit_connector = GoogleTabs(
+                table_title=unit_gs["title"], sheet_title=unit_gs["unit_sheet"],
+            )
+            (
+                unit_remains,
+                unit_wb_discount,
+                unit_client_prices,
+                unit_reviews_count,
+                unit_margins,
+            ) = self._load_unit_metrics(unit_connector)
+        except Exception as error:
+            logger.warning(
+                "Данные UNIT не получены после повторов; остаток, скидка, цена, отзывы "
+                "и резервная маржа пропущены, сценарий продолжается: error_type=%s",
+                type(error).__name__,
+            )
+
         adv_spend: MetricValues = {}
         calculation_metrics: dict[str, MetricValues] = {}
         try:
             adv_spend = await self.cometa_client.fetch_today_spend(articles=articles)
             summary.cometa_rows = len(adv_spend)
-            profit_inputs = self.repository.fetch_profit_calculation_inputs(
-                report_date=report_date, articles=articles,
-            )
-            calculation_metrics = self.calculator.calculate_financial_metrics(
-                funnel_metrics=funnel_metrics, adv_spend=adv_spend, profit_inputs=profit_inputs,
+            db_calculation_failed = False
+            try:
+                profit_inputs = self.repository.fetch_profit_calculation_inputs(
+                    report_date=report_date, articles=articles,
+                )
+            except Exception as error:
+                profit_inputs = {}
+                db_calculation_failed = True
+                logger.warning(
+                    "Не удалось получить справочники БД для прибыли по ИУ; "
+                    "будет использована маржа UNIT: error_type=%s",
+                    type(error).__name__,
+                )
+            try:
+                calculation_metrics = self.calculator.calculate_financial_metrics(
+                    funnel_metrics=funnel_metrics,
+                    adv_spend=adv_spend,
+                    profit_inputs=profit_inputs,
+                )
+            except Exception as error:
+                calculation_metrics = {}
+                db_calculation_failed = True
+                logger.warning(
+                    "Расчет прибыли по ИУ завершился ошибкой; будет использована маржа UNIT, "
+                    "остальные финансовые метрики пропущены: error_type=%s",
+                    type(error).__name__,
+                )
+            self._apply_unit_margin_fallback(
+                calculation_metrics,
+                unit_margins,
+                adv_spend,
+                db_calculation_failed,
             )
             summary.monitoring_capture_status = self._write_monitoring_snapshot(
                 orders_sum=orders_sum_values,
@@ -205,6 +258,7 @@ class AutopilotHourlyService:
             advert_metrics = self.calculator.calculate_advert_metrics(
                 activity_by_article=activity_by_article, adv_spend=adv_spend,
             )
+            advert_metrics.pop("cpm", None)
         except Exception as error:
             logger.warning(
                 "Рекламная статистика недоступна, остальные метрики продолжаются: error_type=%s",
@@ -221,35 +275,18 @@ class AutopilotHourlyService:
                 type(error).__name__,
             )
 
-        unit_remains: MetricValues = {}
-        unit_wb_discount: MetricValues = {}
-        unit_client_prices: MetricValues = {}
-        try:
-            unit_connector = GoogleTabs(
-                table_title=unit_gs["title"], sheet_title=unit_gs["unit_sheet"],
-            )
-            unit_remains, unit_wb_discount, unit_client_prices = self._load_unit_metrics(unit_connector)
-        except Exception as error:
-            logger.warning(
-                "Данные UNIT не получены после повторов; остаток и скидка пропущены, "
-                "сценарий продолжается: error_type=%s", type(error).__name__,
-            )
-        organic = self.calculator.calculate_organic(
-            funnel_metrics=funnel_metrics,
-            advert_metrics=advert_metrics,
-        )
-
         remaining_metrics: dict[str, MetricValues] = {}
         remaining_metrics["adv_spend"] = adv_spend
         remaining_metrics["unit_free_stock"] = unit_remains
         remaining_metrics["spp"] = unit_wb_discount
         remaining_metrics["payment_type"] = payment_types
+        remaining_metrics["reviews_count"] = unit_reviews_count
         logger.info("Свободные остатки UNIT подготовлены для почасовой записи в ПУ: rows=%s", len(unit_remains))
         logger.info("Фактическая скидка WB из UNIT подготовлена для почасовой записи в ПУ: rows=%s", len(unit_wb_discount))
         logger.info("Типы оплаты рекламы подготовлены для записи в AS: rows=%s", len(payment_types))
+        logger.info("Количество отзывов WB из UNIT подготовлено для записи в H: rows=%s", len(unit_reviews_count))
         remaining_metrics.update(calculation_metrics)
         remaining_metrics.update(advert_metrics)
-        remaining_metrics["organic"] = organic
 
         # Цена UNIT приоритетна; далее средняя цена заказов и API цен WB.
         order_prices = self._prefer_positive_prices(unit_client_prices, order_prices)
@@ -560,14 +597,15 @@ class AutopilotHourlyService:
     @staticmethod
     def _load_unit_metrics(
         connector: GoogleTabs,
-    ) -> tuple[MetricValues, MetricValues, MetricValues]:
-        """Читает остатки, скидку и клиентскую цену UNIT с ограниченными повторами.
+    ) -> tuple[MetricValues, MetricValues, MetricValues, MetricValues, MetricValues]:
+        """Читает остатки, скидку, цену, отзывы и маржу UNIT с повторами.
 
         Заголовки определяют смещаемые колонки. Общая колонка артикулов читается
         вместе с метриками. Пустые значения пропускаются, скидка переводится
         в долю. Клиентская цена служит резервом для текущего дня, когда WB
-        источники не дали положительную цену. Отсутствие заголовка не блокирует
-        остальные метрики.
+        источники не дали положительную цену. Количество отзывов передается в
+        фиксированную колонку H, а «Мар» резервирует нулевой или ошибочный расчет
+        прибыли по ИУ. Отсутствие заголовка не блокирует остальные метрики.
         """
         worksheet = connector.sheet_title
         headers = connector.execute_with_retry(
@@ -578,6 +616,8 @@ class AutopilotHourlyService:
             UNIT_EXPECTED_REMAINS_HEADER,
             UNIT_WB_DISCOUNT_HEADER,
             UNIT_CLIENT_PRICE_HEADER,
+            UNIT_REVIEWS_COUNT_HEADER,
+            UNIT_MARGIN_COLUMN_NAME,
         )
         indexes = {
             name: AutopilotHourlyService._find_unit_column_index(headers, name)
@@ -585,7 +625,7 @@ class AutopilotHourlyService:
         }
         if indexes[UNIT_ARTICLE_COLUMN_NAME] is None:
             logger.warning("В UNIT отсутствует колонка артикулов; остаток и скидка пропущены.")
-            return {}, {}, {}
+            return {}, {}, {}, {}, {}
         available = [name for name in names if indexes[name] is not None]
         for name in names:
             if indexes[name] is None:
@@ -605,6 +645,8 @@ class AutopilotHourlyService:
         remains: MetricValues = {}
         discounts: MetricValues = {}
         client_prices: MetricValues = {}
+        reviews_count: MetricValues = {}
+        margins: MetricValues = {}
         for position, sku in enumerate(columns[UNIT_ARTICLE_COLUMN_NAME]):
             sku_text = str(sku).strip()
             if not sku_text.isdigit():
@@ -613,6 +655,8 @@ class AutopilotHourlyService:
                 (UNIT_EXPECTED_REMAINS_HEADER, remains),
                 (UNIT_WB_DISCOUNT_HEADER, discounts),
                 (UNIT_CLIENT_PRICE_HEADER, client_prices),
+                (UNIT_REVIEWS_COUNT_HEADER, reviews_count),
+                (UNIT_MARGIN_COLUMN_NAME, margins),
             ):
                 column = columns.get(name, [])
                 if position >= len(column):
@@ -632,11 +676,52 @@ class AutopilotHourlyService:
                         if name == UNIT_EXPECTED_REMAINS_HEADER
                         else float(number / 100)
                         if name == UNIT_WB_DISCOUNT_HEADER
+                        else int(number)
+                        if name == UNIT_REVIEWS_COUNT_HEADER
+                        else float(number / 100)
+                        if name == UNIT_MARGIN_COLUMN_NAME
                         else float(number)
                     )
                 except (ValueError, ArithmeticError):
                     continue
-        return remains, discounts, client_prices
+        return remains, discounts, client_prices, reviews_count, margins
+
+    @staticmethod
+    def _apply_unit_margin_fallback(
+        calculation_metrics: dict[str, MetricValues],
+        unit_margins: MetricValues,
+        adv_spend: MetricValues,
+        db_calculation_failed: bool,
+    ) -> int:
+        """Подменяет нулевую или недоступную прибыль по ИУ значением из UNIT.
+
+        Бизнес-правило hourly: если расчет в БД завершился ошибкой либо дал
+        нулевую прибыль для артикула, используем его значение «Мар» без
+        дополнительного умножения; затем пересчитываем чистую прибыль за вычетом
+        расходов Cometa. Артикулы без значения «Мар» остаются без подстановки.
+        """
+        profits = calculation_metrics.setdefault("profit_by_cond_orders", {})
+        net_profits = calculation_metrics.setdefault("net_profit_after_ad", {})
+        changed = 0
+        for article_id, margin_value in unit_margins.items():
+            try:
+                fallback = float(margin_value)
+                if not math.isfinite(fallback):
+                    continue
+            except (TypeError, ValueError, ArithmeticError):
+                continue
+            if not db_calculation_failed and profits.get(article_id) != 0:
+                continue
+            profits[article_id] = fallback
+            net_profits[article_id] = fallback - float(adv_spend.get(article_id, 0) or 0)
+            changed += 1
+        if changed:
+            logger.warning(
+                "Для прибыли по ИУ применена маржа из UNIT: articles=%s db_error=%s",
+                changed,
+                db_calculation_failed,
+            )
+        return changed
 
     @staticmethod
     def _prefer_positive_prices(
