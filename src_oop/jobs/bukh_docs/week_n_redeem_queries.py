@@ -87,6 +87,15 @@ fin_rep AS (
             END
         ) AS return_pay,
         SUM(COALESCE(f.delivery_rub, 0)) AS delivery,
+        f.account
+    FROM fin_reports_full f
+    WHERE f.report_type = 2
+    GROUP BY f.realizationreport_id, f.date_from, f.date_to, f.create_dt, f.account
+),
+fin_payout AS (
+    SELECT
+        f.account,
+        f.date_to,
         SUM(
             CASE
                 WHEN f.doc_type_name = 'Продажа'
@@ -95,11 +104,10 @@ fin_rep AS (
                     THEN -COALESCE(f.ppvz_for_pay, 0)
                 ELSE 0
             END
-        ) AS payout,
-        f.account
+        ) AS payout
     FROM fin_reports_full f
-    WHERE f.report_type = 2
-    GROUP BY f.realizationreport_id, f.date_from, f.date_to, f.create_dt, f.account
+    WHERE f.report_type IN (1, 2)
+    GROUP BY f.account, f.date_to
 ),
 redeem_not AS (
     SELECT
@@ -141,12 +149,15 @@ SELECT
     COALESCE(w.penalties, 0) AS "Штрафы",
     COALESCE(w.other_deductions, 0) AS "Прочие удержания",
     COALESCE(w.retentions_in_favor_of_third_parties, 0) AS "Удержания_в_пользу_третьих_лиц",
-    COALESCE(f.payout, 0) AS "К_перечислению_за_товар"
+    COALESCE(fp.payout, 0) AS "К_перечислению_за_товар"
 FROM week_rep w
 LEFT JOIN fin_rep f
     ON UPPER(w.account) = UPPER(f.account)
    AND w.report_date = f.date_to
    AND f.date_to > DATE '2025-01-31'
+LEFT JOIN fin_payout fp
+    ON UPPER(w.account) = UPPER(fp.account)
+   AND w.report_date = fp.date_to
 LEFT JOIN redeem_not r
     ON f.realizationreport_id = r.redeem_notif::INT
    AND UPPER(w.account) = UPPER(r.account)
