@@ -337,9 +337,10 @@ def _filter_invalid_article_id_before_upsert(
 
     diagnostics_dir = LOG_DIR / "diagnostics"
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Повторный запуск за ту же бизнес-дату обновляет один CSV вместо создания нового.
+    report_date = pd.Timestamp(invalid_rows["date"].iloc[0]).strftime("%Y%m%d")
     diagnostics_path = diagnostics_dir / (
-        f"{task_name}_invalid_article_id_{timestamp}.csv"
+        f"{task_name}_invalid_article_id_{report_date}.csv"
     )
     invalid_rows.to_csv(diagnostics_path, index=False, encoding="utf-8-sig")
 
