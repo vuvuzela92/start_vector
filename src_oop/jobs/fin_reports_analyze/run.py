@@ -900,7 +900,7 @@ def update_wb_fin_model_report() -> None:
     )
     worksheet = google_connect.sheet_title
     warehouse_label = "Остатки на складе ВВТ Вектор"
-    in_transit_label = "Товар в пути до склада ВВТ Вектор"
+    in_transit_label = "Товар в пути до склада ВВТ Вектор по цене поставщика"
     arrived_debt_label = "Задолженность перед поставщиками за прибывший товар*"
     in_transit_debt_label = "Задолженность перед поставщиками за товар в пути*"
     customs_debt_label = "Задолженность перед таможней"

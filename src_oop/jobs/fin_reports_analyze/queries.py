@@ -473,6 +473,11 @@ SELECT
     f.payout,
     f.total_to_pay,
     f.wb_commission,
+    CASE
+        WHEN f.date_from < DATE '2026-01-01'
+            THEN ROUND(f.wb_commission / 1.20, 2)
+        ELSE ROUND(f.wb_commission / 1.22, 2)
+    END AS wb_commission_without_vat,
     CASE WHEN f.revenue <> 0
         THEN ROUND(f.wb_commission / f.revenue, 4) * 100 ELSE 0
     END AS wb_commission_pct,
@@ -541,6 +546,7 @@ SELECT
     payout,
     total_to_pay,
     wb_commission,
+    wb_commission_without_vat,
     wb_commission_pct,
     retail_price_disc,
     paid_acceptance,
