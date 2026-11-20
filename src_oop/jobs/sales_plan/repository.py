@@ -26,24 +26,23 @@ from src_oop.jobs.sales_plan.config import (
     SALES_PLAN_MANAGER_REFERENCE_KEY_COLUMNS,
     SALES_PLAN_MANAGER_REFERENCE_SCHEMA,
     SALES_PLAN_MANAGER_REFERENCE_TABLE,
-    SALES_WILD_STATUS_DAILY_KEY_COLUMNS,
-    SALES_WILD_STATUS_DAILY_SCHEMA,
-    SALES_WILD_STATUS_DAILY_TABLE,
-    SALES_WILD_STATUS_BACKFILL_DATE_FROM,
-    SALES_WILD_STATUS_BACKFILL_DATE_TO,
-    SALES_WILD_STATUS_BACKFILL_NEXT_SNAPSHOT_DATE,
-    SALES_WILD_STATUS_BACKFILL_PREVIOUS_SNAPSHOT_DATE,
-    SOURCE_MANAGER_COLUMN,
-    SOURCE_SUBJECT_COLUMN,
-    SOURCE_WILD_COLUMN,
     SALES_PLAN_REPORT_COLUMN_COUNT,
-    SALES_PLAN_REPORT_DOCUMENTATION_COLUMN,
     SALES_PLAN_REPORT_FIRST_DATA_ROW,
     SALES_PLAN_REPORT_HEADERS,
     SALES_PLAN_REPORT_LAST_DATA_COLUMN,
     SALES_PLAN_REPORT_UPDATED_AT_COLUMN,
-    sales_plan_report_sheet,
+    SALES_WILD_STATUS_BACKFILL_DATE_FROM,
+    SALES_WILD_STATUS_BACKFILL_DATE_TO,
+    SALES_WILD_STATUS_BACKFILL_NEXT_SNAPSHOT_DATE,
+    SALES_WILD_STATUS_BACKFILL_PREVIOUS_SNAPSHOT_DATE,
+    SALES_WILD_STATUS_DAILY_KEY_COLUMNS,
+    SALES_WILD_STATUS_DAILY_SCHEMA,
+    SALES_WILD_STATUS_DAILY_TABLE,
+    SOURCE_MANAGER_COLUMN,
+    SOURCE_SUBJECT_COLUMN,
+    SOURCE_WILD_COLUMN,
     sales_plan_manager_reference_sheet,
+    sales_plan_report_sheet,
 )
 
 logger = logging.getLogger(__name__)
@@ -1092,7 +1091,7 @@ class SalesPlanReportRepository:
         `wild` рассчитываются план, план на дату, факт, линейный прогноз и
         правило 15 дней. В Google Sheets обновляется только диапазон `A:R`
         с третьей строки: формулы итогов в первой строке, заголовки во второй
-        строке и документация в столбце `T` сохраняются.
+        строке и документация в столбце `V` сохраняются.
         """
 
         effective_report_date = report_date or datetime.now(MOSCOW_TIMEZONE).date()
@@ -1114,7 +1113,9 @@ class SalesPlanReportRepository:
         план берется из единственной учетной категории `wild`, факт — из
         `funnel_daily`, а дни наличия — из дневных snapshot-ов статуса.
         Правило 15 дней применяется только к итоговому плану; оперативный
-        план на дату рассчитывается от базового месячного плана.
+        план на дату рассчитывается от базового месячного плана. План v2.0
+        и остаток на начало месяца читаются из ноябрьского среза; при остатке
+        меньше 50 единиц план v2.0 равен нулю.
         """
 
         query = text(
@@ -1206,6 +1207,8 @@ class SalesPlanReportRepository:
                         / NULLIF(fd.fact_order_count, 0)
                     ) AS fact_price,
                     sp.plan_orders_rub,
+                    mv2.plan_orders_rub_v2,
+                    mv2.available_quantity AS opening_stock,
                     ROUND(
                         sp.plan_orders_rub * COALESCE(sd.days_with_stocks, 0)
                         / NULLIF(dp.days_in_month, 0),
@@ -1230,6 +1233,9 @@ class SalesPlanReportRepository:
                     ON mm.subject_name = sp.subject_name
                 LEFT JOIN funnel AS fd
                     ON fd.wild = sp.wild
+                LEFT JOIN sales_plan_monthly_v2 AS mv2
+                    ON mv2.wild = sp.wild
+                    AND mv2.month_start = date_trunc('month', CAST(:report_date AS date))::date
             ),
             calculated AS (
                 SELECT
@@ -1272,6 +1278,8 @@ class SalesPlanReportRepository:
                 plan_price,
                 fact_price,
                 plan_orders_rub,
+                plan_orders_rub_v2,
+                opening_stock,
                 plan_orders_rub_to_date,
                 plan_execution_to_date_percent,
                 plan_orders_rub_after_15_days_rule,
@@ -1326,9 +1334,8 @@ class SalesPlanReportRepository:
 
         Бизнес-сценарий:
         витрина должна показывать только актуальный набор `wild`. Поэтому
-        диапазон данных заполняется до последней доступной строки пустыми
-        значениями после результата, что удаляет устаревшие строки предыдущей
-        выгрузки. Области итогов, шапки и документации не изменяются.
+        управляемые Python диапазоны очищаются до конца листа. Формульные
+        колонки Q:R, итоги и документация остаются под управлением листа.
         """
 
         if len(dataframe.columns) != SALES_PLAN_REPORT_COLUMN_COUNT:
@@ -1353,14 +1360,13 @@ class SalesPlanReportRepository:
         values.extend(
             [empty_row.copy() for _ in range(available_rows - len(values))]
         )
-        target_range = (
-            f"A{SALES_PLAN_REPORT_FIRST_DATA_ROW}:"
-            f"{SALES_PLAN_REPORT_LAST_DATA_COLUMN}{worksheet.row_count}"
-        )
-        self._connector.update_range(range_name=target_range, values=values)
+        first_range = f"A{SALES_PLAN_REPORT_FIRST_DATA_ROW}:P{worksheet.row_count}"
+        second_range = f"S{SALES_PLAN_REPORT_FIRST_DATA_ROW}:{SALES_PLAN_REPORT_LAST_DATA_COLUMN}{worksheet.row_count}"
+        self._connector.update_range(range_name=first_range, values=[row[:16] for row in values])
+        self._connector.update_range(range_name=second_range, values=[row[17:] for row in values])
         self._connector.format_range(
             range_name=(
-                f"T{SALES_PLAN_REPORT_FIRST_DATA_ROW}:T{worksheet.row_count}"
+                f"W{SALES_PLAN_REPORT_FIRST_DATA_ROW}:W{worksheet.row_count}"
             ),
             format_properties={
                 "numberFormat": {
@@ -1370,71 +1376,28 @@ class SalesPlanReportRepository:
             },
         )
         logger.info(
-            "Витрина плана продаж обновлена в Google Sheets | report_rows=%s | range=%s",
+            "Витрина плана продаж обновлена в Google Sheets | report_rows=%s | ranges=%s,%s",
             len(dataframe.index),
-            target_range,
+            first_range,
+            second_range,
         )
 
     def _prepare_sheet_layout(self, worksheet) -> None:
-        """Подготавливает колонки витрины после добавления менеджера в столбец `B`.
+        """Проверяет шапку и обновляет итоги витрины с планом v2.0 в столбце K.
 
         Бизнес-сценарий:
-        менеджер нужен для сводных итогов, поэтому его добавляют рядом с
-        месяцем. Метод переносит документацию из прежнего столбца `T` в `U`,
-        обновляет заголовки и пересчитывает адреса итоговых формул так, чтобы
-        сдвиг данных не исказил суммарные показатели.
+        Документация в X и пользовательские формулы Q:R не меняются.
+        При неожиданной шапке выгрузка останавливается.
         """
 
-        layout_values = worksheet.get(
-            f"T1:{SALES_PLAN_REPORT_DOCUMENTATION_COLUMN}{worksheet.row_count}",
-            value_render_option="FORMULA",
-        )
-        legacy_documentation_header = ""
-        current_documentation_header = ""
-        if len(layout_values) > 1:
-            legacy_documentation_header = layout_values[1][0] if layout_values[1] else ""
-            current_documentation_header = (
-                layout_values[1][1] if len(layout_values[1]) > 1 else ""
-            )
-
-        if (
-            legacy_documentation_header == "Документация"
-            and current_documentation_header != "Документация"
-        ):
-            documentation_values = []
-            for row_index in range(worksheet.row_count):
-                row = layout_values[row_index] if row_index < len(layout_values) else []
-                documentation_values.append([row[0] if row else ""])
-            self._connector.update_range(
-                range_name=(
-                    f"{SALES_PLAN_REPORT_DOCUMENTATION_COLUMN}1:"
-                    f"{SALES_PLAN_REPORT_DOCUMENTATION_COLUMN}{worksheet.row_count}"
-                ),
-                values=documentation_values,
-            )
-
+        headers = worksheet.row_values(2)
+        expected_headers = list(SALES_PLAN_REPORT_HEADERS)
+        # Прежний заголовок J допустим до ручного переименования колонки владельцем листа.
+        if len(headers) > 9 and headers[9] == "План заказов, руб":
+            expected_headers[9] = "План заказов, руб"
+        if headers[:len(expected_headers)] != expected_headers or headers[len(expected_headers):len(expected_headers) + 1] != ["Документация"]:
+            raise ValueError("Выгрузка плана продаж отменена: структура заголовков листа изменилась")
         self._connector.update_range(
-            range_name="A1:T1",
-            values=[["" for _ in range(SALES_PLAN_REPORT_COLUMN_COUNT)]],
-        )
-        self._connector.update_range(
-            range_name="F1:Q1",
-            values=[[
-                "=SUBTOTAL(9;F3:F)",
-                "=SUBTOTAL(9;G3:G)",
-                "",
-                "",
-                "=SUBTOTAL(9;J3:J)",
-                "=SUBTOTAL(9;K3:K)",
-                "",
-                "=SUBTOTAL(9;M3:M)",
-                "=SUBTOTAL(9;N3:N)",
-                "=N1/J1",
-                "=SUBTOTAL(9;P3:P)",
-                "=P1/J1",
-            ]],
-        )
-        self._connector.update_range(
-            range_name="A2:T2",
-            values=[list(SALES_PLAN_REPORT_HEADERS)],
+            range_name="L1",
+            values=[["=SUBTOTAL(9;L3:L)"]],
         )

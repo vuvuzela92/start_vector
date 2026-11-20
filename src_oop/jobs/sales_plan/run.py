@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+from src_oop.jobs.sales_plan.monthly_v2 import freeze_november_v2_snapshot
 from src_oop.jobs.sales_plan.repository import (
     SalesPlanAccountingCategoryRepository,
     SalesPlanManagerReferenceRepository,
@@ -10,6 +11,17 @@ from src_oop.jobs.sales_plan.repository import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def freeze_sales_plan_v2_november_2026() -> None:
+    """Фиксирует разовый срез 01.11.2026 для сравнения нового плана продаж.
+
+    Сохраняет остаток из MAIN (tested), ноябрьский план в штуках и цену в БД.
+    При повторном запуске ранее зафиксированные значения не меняются.
+    """
+
+    count = freeze_november_v2_snapshot()
+    logger.info("Фиксация ноябрьского плана v2.0 завершена | rows=%s", count)
 
 
 def sync_sales_plan_manager_reference_to_db() -> None:

@@ -27,12 +27,22 @@ sales_plan_report_sheet = {
     "spreadsheet_id": "1_ZFKBxelzM3tJB9TTwab1watklasAtSoWSHhUsAZC7E",
 }
 
-# В витрине первые две строки заняты итогами и заголовками, а столбец U — документацией.
+# В витрине первые две строки заняты итогами и заголовками, а столбец X — документацией.
 SALES_PLAN_REPORT_FIRST_DATA_ROW = 3
-SALES_PLAN_REPORT_LAST_DATA_COLUMN = "T"
-SALES_PLAN_REPORT_DOCUMENTATION_COLUMN = "U"
-SALES_PLAN_REPORT_COLUMN_COUNT = 20
+SALES_PLAN_REPORT_LAST_DATA_COLUMN = "W"
+SALES_PLAN_REPORT_DOCUMENTATION_COLUMN = "X"
+SALES_PLAN_REPORT_COLUMN_COUNT = 22
 SALES_PLAN_REPORT_UPDATED_AT_COLUMN = "updatet_at"
+SALES_PLAN_REPORT_V2_COLUMN = "План заказов, руб v2.0"
+SALES_PLAN_V2_SNAPSHOT_TABLE = "sales_plan_monthly_v2"
+SALES_PLAN_V2_SNAPSHOT_MONTH = date(2026, 11, 1)
+SALES_PLAN_V2_SOURCE = {
+    "title": "Копия: UNIT 2.0 (tested) – 1 ноября, 08:14",
+    "sheet_title": "MAIN (tested)",
+    "spreadsheet_id": "1-glNFgCgcuYRfZ1B0t_VCjdSQOgzU4-LVgNOX2KfcF8",
+}
+SALES_PLAN_V2_SOURCE_WILD_HEADER = "wild"
+SALES_PLAN_V2_SOURCE_STOCK_HEADER = "Свободный остаток\n(сервис)1"
 SALES_PLAN_REPORT_HEADERS: tuple[str, ...] = (
     "Месяц",
     "Менеджер",
@@ -43,12 +53,15 @@ SALES_PLAN_REPORT_HEADERS: tuple[str, ...] = (
     "Количество факт",
     "Цена плановая",
     "Цена фактическая",
-    "План заказов, руб",
+    "План заказов по годовому, руб",
+    SALES_PLAN_REPORT_V2_COLUMN,
+    "Остаток на начало месяца",
     "План заказов на дату, руб",
     "Выполнение плана на дату, %",
     "План заказов, руб с правилом 15 дней",
     "Факт заказов, руб",
     "Факт заказов, %",
+    "Недопродажи на сегодня",
     "Линейный прогноз, руб",
     "Линейны прогноз, %",
     "Факт заказов, % с правилом 15 дней",
