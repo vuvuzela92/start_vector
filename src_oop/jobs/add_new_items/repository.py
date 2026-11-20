@@ -741,6 +741,17 @@ class AddNewItemsRepository:
         *,
         value_input_option: str,
     ) -> None:
+        """Добавляет строки товара в целевую вкладку и фиксирует адрес вставки.
+
+        Название таблицы и вкладки позволяет определить, где защита листа
+        помешала переносу новых SKU или wild, без вывода содержимого строк.
+        """
+        logger.info(
+            "Попытка вставки новых товаров | таблица=%s | вкладка=%s | строк=%s",
+            worksheet.spreadsheet.title,
+            worksheet.title,
+            len(rows_to_append),
+        )
         self._execute_gspread_call(
             action_name=(
                 f"append rows to '{worksheet.spreadsheet.title}' -> "
