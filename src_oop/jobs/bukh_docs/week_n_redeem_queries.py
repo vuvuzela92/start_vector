@@ -104,7 +104,20 @@ fin_payout AS (
                     THEN -COALESCE(f.ppvz_for_pay, 0)
                 ELSE 0
             END
-        ) AS payout
+        ) AS payout,
+        SUM(COALESCE(f.delivery_rub, 0)) AS delivery,
+        SUM(COALESCE(f.storage_fee, 0)) AS storage,
+        SUM(COALESCE(f.acceptance, 0)) AS processing_cost,
+        SUM(COALESCE(f.deduction, 0)) AS other_deductions,
+        SUM(COALESCE(f.penalty, 0)) AS penalties,
+        SUM(COALESCE(f.additional_payment, 0)) AS wb_reward_adjustment,
+        SUM(COALESCE(f.payment_schedule, 0)) AS payment_schedule_adjustment,
+        SUM(CASE WHEN f.doc_type_name = 'Продажа' THEN COALESCE(f.cashback_amount, 0)
+                 WHEN f.doc_type_name = 'Возврат' THEN -COALESCE(f.cashback_amount, 0)
+                 ELSE 0 END) AS loyalty_points_withheld,
+        SUM(CASE WHEN f.doc_type_name = 'Продажа' THEN COALESCE(f.cashback_commission_change, 0)
+                 WHEN f.doc_type_name = 'Возврат' THEN -COALESCE(f.cashback_commission_change, 0)
+                 ELSE 0 END) AS loyalty_program_cost
     FROM fin_reports_full f
     WHERE f.report_type IN (1, 2)
     GROUP BY f.account, f.date_to
@@ -149,7 +162,13 @@ SELECT
     COALESCE(w.penalties, 0) AS "Штрафы",
     COALESCE(w.other_deductions, 0) AS "Прочие удержания",
     COALESCE(w.retentions_in_favor_of_third_parties, 0) AS "Удержания_в_пользу_третьих_лиц",
-    COALESCE(fp.payout, 0) AS "К_перечислению_за_товар"
+    COALESCE(fp.payout, 0) AS "К_перечислению_за_товар",
+    CASE WHEN fp.account IS NOT NULL THEN
+        fp.payout - fp.delivery - fp.storage - fp.processing_cost
+        - fp.other_deductions - fp.penalties - fp.wb_reward_adjustment
+        - fp.loyalty_points_withheld - fp.loyalty_program_cost
+        - fp.payment_schedule_adjustment
+    END AS "Итого_к_оплате_по_фин_отчетам"
 FROM week_rep w
 LEFT JOIN fin_rep f
     ON UPPER(w.account) = UPPER(f.account)
