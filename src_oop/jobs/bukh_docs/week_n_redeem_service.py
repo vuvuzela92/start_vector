@@ -147,20 +147,24 @@ class WeekNRedeemService:
         return result
 
     def _append_updated_at_column(self, dataframe: pd.DataFrame) -> pd.DataFrame:
-        """Добавляет время обновления последней колонкой после контрольного итога.
+        """Добавляет время обновления после финансовых контрольных итогов.
 
         ``updated_at`` показывает свежесть строк в бухгалтерской витрине.
-        Контрольный ``К_перечислению_за_товар`` располагается непосредственно
-        перед ним, не участвуя в основном расчете к перечислению.
+        Новый итог финансовых отчетов ставится непосредственно перед
+        ``updated_at`` без перестановки ранее существовавших колонок.
         """
         result = dataframe.copy()
         payout_column = "К_перечислению_за_товар"
         payout_values = (
             result.pop(payout_column) if payout_column in result.columns else None
         )
+        total_column = "Итого_к_оплате_по_фин_отчетам"
+        total_values = result.pop(total_column) if total_column in result.columns else None
         result["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if payout_values is not None:
             result.insert(len(result.columns) - 1, payout_column, payout_values)
+        if total_values is not None:
+            result.insert(len(result.columns) - 1, total_column, total_values)
         return result
 
     def _normalize_column_names(self, dataframe: pd.DataFrame) -> pd.DataFrame:
