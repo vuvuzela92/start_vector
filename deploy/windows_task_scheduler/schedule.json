@@ -53,14 +53,6 @@
     {"name": "weekly_report", "schedule": "daily at 08:40"},
     {"name": "yandex_designer_output_initial", "schedule": "daily at 20:05"},
     {"name": "update_individual_info", "schedule": "daily at 08:37 and 13:37"},
-    {
-      "name": "cometa_run_autopilot",
-      "schedule": "hourly at minute 15 and 45",
-      "project_root": "C:\\Users\\123\\Desktop\\cometa\\cometa",
-      "python_path": "C:\\Users\\123\\Desktop\\cometa\\venv\\Scripts\\python.exe",
-      "script": "run.py",
-      "script_arguments": ""
-    },
     {"name": "update_cash_flow_writeoffs", "schedule": "daily at 08:30"},
     {"name": "update_fin_reports_art_analyze", "schedule": "daily at 08:31"},
     {"name": "update_monthly_report", "schedule": "daily at 08:32"},
