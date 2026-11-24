@@ -152,6 +152,64 @@ def _parse_finite_number(value: object) -> float | None:
     return parsed_value if math.isfinite(parsed_value) else None
 
 
+def _get_wms_stock_totals(
+    worksheet: gspread.Worksheet,
+) -> tuple[float, float, float]:
+    """Читает количество и две стоимости остатков склада ВВТ из WMS.
+
+    Бизнес-правило: на листе «WMS остатки» поля определяются по заголовкам,
+    а значения берутся из строки SUBTOTAL над ними. Поэтому все три итога
+    учитывают одинаковый фильтр листа; фиксированные адреса колонок и длина
+    списка товаров не используются. Пустой или некорректный итог прерывает
+    обновление финансовой витрины.
+    """
+    header_row = worksheet.frozen_row_count
+    if header_row < 2:
+        raise ValueError(
+            "На листе «WMS остатки» не удалось определить заголовки "
+            "и предшествующую им строку итогов."
+        )
+    required_headers = (
+        "Остаток",
+        "Стоимость остатков ФБС по закупочной стоимости",
+        "Стоимость остатков ФБС по цене для клиента",
+    )
+    header_values = worksheet.row_values(header_row)
+    header_columns = {
+        str(value).strip(): column_number
+        for column_number, value in enumerate(header_values, start=1)
+        if str(value).strip() in required_headers
+    }
+    missing_headers = set(required_headers) - header_columns.keys()
+    if missing_headers:
+        raise ValueError(
+            "На листе «WMS остатки» не найдены поля: "
+            f"{', '.join(sorted(missing_headers))}."
+        )
+    total_cells = [
+        rowcol_to_a1(header_row - 1, header_columns[header])
+        for header in required_headers
+    ]
+    raw_totals = worksheet.batch_get(
+        total_cells,
+        value_render_option="UNFORMATTED_VALUE",
+    )
+    totals: list[float] = []
+    for header, values in zip(required_headers, raw_totals, strict=True):
+        value = values[0][0] if values and values[0] else None
+        total = _parse_finite_number(value)
+        if total is None:
+            raise ValueError(
+                f"На листе «WMS остатки» нет числового итога для «{header}»."
+            )
+        totals.append(total)
+    logger.info(
+        "Получены количество и стоимости остатков ВВТ из WMS | cells=%s",
+        ",".join(total_cells),
+    )
+    return totals[0], totals[1], totals[2]
+
+
 def _get_wms_client_prices_by_wild(
     worksheet: gspread.Worksheet,
     required_wilds: set[str],
@@ -760,9 +818,11 @@ def update_stock_analyze():
 
 
 def update_wb_fin_model_report() -> None:
-    """Обновляет три категории остатков WB и финансовые показатели витрины.
+    """Обновляет остатки ВВТ, три категории WB и финансовую витрину.
 
-    Бизнес-сценарий: рассчитывает цену поставщика товара в пути до склада ВВТ
+    Бизнес-сценарий: читает количество, себестоимость и цену продаж остатков
+    склада ВВТ из итогов WMS с повтором при временной ошибке Google Sheets.
+    Затем рассчитывает цену поставщика товара в пути до склада ВВТ
     по сумме заказа с пересчётом в рубли, кроме ZILOL FAYZ INVEST. Его
     себестоимость считает по тем же ценам `cost_price` и дате снимка, что и
     остатки WB; цену клиента берёт из WMS, а при её
@@ -808,6 +868,15 @@ def update_wb_fin_model_report() -> None:
         sheet_title="WMS остатки",
         spreadsheet_id=unit_spreadsheet_id,
         required_access="читателя",
+    )
+    (
+        warehouse_quantity,
+        warehouse_purchase_cost,
+        warehouse_client_price,
+    ) = unit_connection.execute_with_retry(
+        "чтение итогов остатков склада ВВТ из WMS",
+        _get_wms_stock_totals,
+        unit_connection.sheet_title,
     )
     wms_client_prices = unit_connection.execute_with_retry(
         "чтение клиентских цен WMS для трёх категорий WB",
@@ -933,6 +1002,7 @@ def update_wb_fin_model_report() -> None:
         required_access="редактора",
     )
     worksheet = google_connect.sheet_title
+    warehouse_label = "Остатки на складе ВВТ Вектор"
     in_transit_label = "Товар в пути до склада ВВТ Вектор по цене поставщика"
     arrived_debt_label = "Задолженность перед поставщиками за прибывший товар*"
     in_transit_debt_label = "Задолженность перед поставщиками за товар в пути*"
@@ -940,6 +1010,7 @@ def update_wb_fin_model_report() -> None:
     overdraft_label = "Овердрафт"
     total_debt_label = "Всего задолженность"
     total_assets_label = "Всего активы"
+    warehouse_label_cell = worksheet.find(warehouse_label)
     in_transit_label_cell = worksheet.find(in_transit_label)
     arrived_debt_label_cell = worksheet.find(arrived_debt_label)
     in_transit_debt_label_cell = worksheet.find(in_transit_debt_label)
@@ -955,7 +1026,8 @@ def update_wb_fin_model_report() -> None:
     cost_cell = worksheet.find("по себестоимости")
     sales_cell = worksheet.find("по цене продаж")
     if (
-        in_transit_label_cell is None
+        warehouse_label_cell is None
+        or in_transit_label_cell is None
         or arrived_debt_label_cell is None
         or in_transit_debt_label_cell is None
         or customs_debt_label_cell is None
@@ -969,8 +1041,9 @@ def update_wb_fin_model_report() -> None:
         or sales_cell is None
     ):
         raise ValueError(
-            "На листе управленческого отчёта не найдена одна из трёх строк "
-            "остатков WB, строка товара в пути, задолженности, итога активов "
+            "На листе управленческого отчёта не найдена строка остатков ВВТ "
+            "или одна из трёх строк остатков WB, строка товара в пути, "
+            "задолженности, итога активов "
             "или один из целевых заголовков."
         )
     supplier_in_transit_address = rowcol_to_a1(
@@ -1005,6 +1078,11 @@ def update_wb_fin_model_report() -> None:
         wb_cost_address = rowcol_to_a1(cell.row, cost_cell.col)
         if wb_cost_address not in asset_terms:
             asset_terms.append(wb_cost_address)
+    warehouse_cost_address = rowcol_to_a1(
+        warehouse_label_cell.row, cost_cell.col
+    )
+    if warehouse_cost_address not in asset_terms:
+        asset_terms.append(warehouse_cost_address)
     assets_total_formula = "=" + "+".join(asset_terms)
     sales_total_address = rowcol_to_a1(
         total_assets_label_cell.row, sales_cell.col
@@ -1023,6 +1101,11 @@ def update_wb_fin_model_report() -> None:
         wb_sales_address = rowcol_to_a1(cell.row, sales_cell.col)
         if wb_sales_address not in sales_terms:
             sales_terms.append(wb_sales_address)
+    warehouse_sales_address = rowcol_to_a1(
+        warehouse_label_cell.row, sales_cell.col
+    )
+    if warehouse_sales_address not in sales_terms:
+        sales_terms.append(warehouse_sales_address)
     sales_total_formula = "=" + "+".join(sales_terms)
     report_labels = google_connect.execute_with_retry(
         "чтение названий статей управленческого отчёта",
@@ -1058,6 +1141,16 @@ def update_wb_fin_model_report() -> None:
         }
         for label, cell in wb_label_cells.items()
     )
+    target_ranges.extend([
+        {
+            "range": rowcol_to_a1(warehouse_label_cell.row, quantity_cell.col),
+            "values": [[warehouse_quantity]],
+        },
+        {
+            "range": f"{warehouse_cost_address}:{warehouse_sales_address}",
+            "values": [[warehouse_purchase_cost, warehouse_client_price]],
+        },
+    ])
     target_ranges.extend([
         {
             "range": supplier_in_transit_address,
@@ -1124,7 +1217,7 @@ def update_wb_fin_model_report() -> None:
     )
     google_connect._execute_google_write_with_retry(
         operation_name=(
-            "обновление трёх категорий WB, товара в пути и задолженности"
+            "обновление остатков ВВТ, трёх категорий WB и задолженности"
         ),
         func=worksheet.batch_update,
         data=target_ranges,
@@ -1132,8 +1225,9 @@ def update_wb_fin_model_report() -> None:
     )
     logger.info(
         "Финансовые показатели записаны в управленческий отчёт | "
-        "wb_rows=%s | in_transit_row=%s | arrived_debt_row=%s | "
+        "warehouse_row=%s | wb_rows=%s | in_transit_row=%s | arrived_debt_row=%s | "
         "in_transit_debt_row=%s | customs_debt_row=%s",
+        warehouse_label_cell.row,
         ",".join(str(cell.row) for cell in wb_label_cells.values()),
         in_transit_label_cell.row,
         arrived_debt_label_cell.row,
