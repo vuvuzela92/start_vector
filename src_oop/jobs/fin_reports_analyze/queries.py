@@ -82,7 +82,7 @@ query_stock_analyze = """
     ORDER BY o."date" DESC;
             """
 
-# Остатки WB и товары в пути без «Склад WB РФ» на последний доступный снимок.
+# Остатки WB по всем складам и товары в пути на последний доступный снимок.
 query_wb_stock_financial_report = """
 WITH latest_stock_snapshot AS (
     SELECT MAX(w.snapshot_date) AS snapshot_date
@@ -98,7 +98,6 @@ stock_by_article AS (
     FROM wb_stock_2 AS w
     CROSS JOIN latest_stock_snapshot AS snapshot
     WHERE w.snapshot_date = snapshot.snapshot_date
-      AND w.warehouse_name <> 'Склад WB РФ'
     GROUP BY w.nm_id
 ),
 price_by_article AS (
