@@ -4,7 +4,7 @@ import argparse
 import json
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -22,6 +22,7 @@ from src_oop.jobs.autopilot.config import (
 )
 
 logger = logging.getLogger(__name__)
+_SHEETS_DATE_ORIGIN = date(1899, 12, 30)
 
 
 @dataclass(slots=True)
@@ -356,7 +357,8 @@ class MonitoringSnapshotWriter:
 
         Читаем A:B и только C:E проверяемых строк. Пустую строку с существующим
         ключом можно заполнить; частично заполненные или отличающиеся суммы
-        требуют разбора. Проверяются также места для новых строк.
+        требуют разбора. Новая дата передаётся числом Sheets, чтобы месячные
+        формулы работали как с датой, а не с текстовым ключом архива.
         """
         sheet = self._connect_sheet().sheet_title
         keys = sheet.get("A:B", value_render_option="FORMATTED_VALUE")
@@ -378,7 +380,8 @@ class MonitoringSnapshotWriter:
                     "key": key,
                     "row": target,
                     "values": [
-                        *key,
+                        (row["snapshot_date"] - _SHEETS_DATE_ORIGIN).days,
+                        key[1],
                         *[
                             float(self._money(row[name]))
                             for name in (
@@ -426,6 +429,8 @@ class MonitoringSnapshotWriter:
         попытка узнает ключ и подтвердит её. Конфликты обычных часов не
         перезаписываются; для закрытого дня строка 24:00 обновляется из
         PostgreSQL, поскольку этот источник является достоверным итогом.
+        После записи задаём колонке A формат даты; до этого доставка не
+        подтверждается, поэтому неуспешное форматирование будет повторено.
         """
         plans = self._inspect_batch(rows)
         sheet = self._connect_sheet().sheet_title
@@ -450,6 +455,11 @@ class MonitoringSnapshotWriter:
             if required_rows > sheet.row_count:
                 sheet.resize(rows=required_rows)
             sheet.batch_update(updates, value_input_option="RAW")
+            target_rows = [int(update["range"].split(":", 1)[0][1:]) for update in updates]
+            sheet.format(
+                f"A{min(target_rows)}:A{max(target_rows)}",
+                {"numberFormat": {"type": "DATE", "pattern": "dd.mm.yyyy"}},
+            )
         statuses: list[str | None] = []
         for plan in plans:
             overwritten = plan["row"] in overwrite_conflicts
@@ -538,7 +548,9 @@ class MonitoringSnapshotWriter:
 
     @staticmethod
     def _normalize_date(value: str) -> str:
-        """Сводит отображаемую дату Sheets к ISO-ключу без дублей при смене формата."""
+        """Сводит текстовую или числовую дату Sheets к ключу архива без дублей."""
+        if value.strip().isdigit():
+            return (_SHEETS_DATE_ORIGIN + timedelta(days=int(value.strip()))).isoformat()
         for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
             try:
                 return datetime.strptime(value.strip(), fmt).strftime("%Y-%m-%d")
