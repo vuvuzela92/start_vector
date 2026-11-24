@@ -1,7 +1,7 @@
 import json
 import logging
 import math
-from datetime import datetime
+from datetime import date, datetime
 from itertools import zip_longest
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import gspread
 from gspread_dataframe import set_with_dataframe
 from gspread.utils import rowcol_to_a1
+from sqlalchemy import text
 
 from src_oop.core.database import Database
 from src_oop.core.my_gspread import GoogleTabs
@@ -18,6 +19,7 @@ from src_oop.storage.google_sheets.google_sheets import fin_rep_analyze
 from src_oop.jobs.fin_reports_analyze.queries import (
     query_cash_flow_writeoffs,
     query_deductions_by_month,
+    query_in_transit_purchase_prices,
     query_monthly_report,
     query_stock_analyze,
     query_wb_stock_financial_report,
@@ -94,13 +96,10 @@ def _read_table_rows_by_headers(
 
     Бизнес-сценарий: листы поставок и справочники могут менять расположение
     полей и число строк. Заголовки берутся из последней закреплённой строки,
-    данные читаются только по нужным столбцам до текущей границы листа.
+    а на листах без закрепления — из первой строки. Данные читаются только
+    по нужным столбцам до текущей границы листа.
     """
-    header_row = worksheet.frozen_row_count
-    if header_row < 1:
-        raise ValueError(
-            f"На листе «{worksheet.title}» не задана строка заголовков."
-        )
+    header_row = worksheet.frozen_row_count or 1
 
     header_values = worksheet.row_values(header_row)
     header_columns = {
@@ -153,64 +152,6 @@ def _parse_finite_number(value: object) -> float | None:
     return parsed_value if math.isfinite(parsed_value) else None
 
 
-def _get_wms_stock_totals(worksheet: gspread.Worksheet) -> tuple[float, float]:
-    """Читает себестоимость и клиентскую стоимость остатков склада ВВТ.
-
-    Бизнес-сценарий: берёт рассчитанные итоги SUBTOTAL с листа «WMS остатки»
-    таблицы UNIT 2.0. Колонки определяются по названиям в последней
-    закреплённой строке, а строка итогов — непосредственно над заголовками;
-    размер диапазона товарных данных не фиксируется.
-    """
-    header_row = worksheet.frozen_row_count
-    if header_row < 2:
-        raise ValueError(
-            "На листе «WMS остатки» не удалось определить строку заголовков "
-            "и предшествующую ей строку итогов."
-        )
-
-    header_values = worksheet.row_values(header_row)
-    required_headers = {
-        "Стоимость остатков ФБС по закупочной стоимости",
-        "Стоимость остатков ФБС по цене для клиента",
-    }
-    header_columns = {
-        str(value).strip(): column_number
-        for column_number, value in enumerate(header_values, start=1)
-        if str(value).strip() in required_headers
-    }
-    if required_headers - header_columns.keys():
-        raise ValueError(
-            "На листе «WMS остатки» не найдены заголовки итогов по закупочной "
-            "стоимости и цене для клиента."
-        )
-
-    totals_row = header_row - 1
-    total_cells = [
-        rowcol_to_a1(totals_row, header_columns[header])
-        for header in (
-            "Стоимость остатков ФБС по закупочной стоимости",
-            "Стоимость остатков ФБС по цене для клиента",
-        )
-    ]
-    total_values = worksheet.batch_get(
-        total_cells,
-        value_render_option="UNFORMATTED_VALUE",
-    )
-    try:
-        purchase_cost = float(total_values[0][0][0])
-        client_price = float(total_values[1][0][0])
-    except (IndexError, TypeError, ValueError):
-        raise ValueError(
-            "Итоги остатков на листе «WMS остатки» пусты или не являются числами."
-        ) from None
-
-    logger.info(
-        "Получены итоги остатков склада ВВТ из UNIT 2.0 | source=%s",
-        ",".join(total_cells),
-    )
-    return purchase_cost, client_price
-
-
 def _get_wms_client_prices_by_wild(
     worksheet: gspread.Worksheet,
     required_wilds: set[str],
@@ -246,19 +187,21 @@ def _get_order_goods_totals(
     unit_spreadsheet: gspread.Spreadsheet,
     statuses: set[str],
     scenario_name: str,
-) -> tuple[float, float]:
-    """Считает закупочную и клиентскую стоимость товара по статусам заказа.
+    snapshot_date: date,
+) -> tuple[float, float, float]:
+    """Считает цену поставщика, себестоимость и цену клиента товара в пути.
 
     Бизнес-правила: включаются только строки листа заказов с указанными
-    статусами. Закупочная стоимость считается по «Сумма заказа, RMB»,
+    статусами. Цена поставщика считается по «Сумма заказа, RMB»,
     умноженной на «Курс юаня», кроме ZILOL FAYZ INVEST, где сумма уже указана
-    в рублях. Закупочная цена из «Сопост» или плана используется только для
-    оценки цены клиента. Её расчёт выполняется построчно, чтобы сохранить
-    разные плановые цены каждого
-    `wild`. Если цена клиента из WMS отсутствует или не положительна, она
-    рассчитывается как закупочная цена × 2. При отсутствии закупочной цены для
-    такой оценки строка отражается в логе, но не исключается из суммы заказов
-    по себестоимости.
+    в рублях. Себестоимость равна количеству по `wild`, умноженному на среднюю
+    `purchase_price` из PostgreSQL `cost_price` на дату снимка WB; отсутствие
+    такой цены даёт нулевой вклад и предупреждение, как для остатков WB.
+    Закупочная цена из «Сопост» или плана используется только для резервной
+    оценки цены клиента. Она выбирается построчно, чтобы сохранить разные
+    плановые цены одного `wild`. Если цена клиента из WMS отсутствует или не
+    положительна, она рассчитывается как закупочная цена × 2. Строки без цены
+    для такой оценки исключаются только из суммы по цене клиента.
     """
     order_spreadsheet_id = "1fXiijP8vMYv8vEFN1BnnTcqioCT_P2t1tgogi_ATh_8"
     order_worksheet = _open_financial_report_sheet(
@@ -282,7 +225,7 @@ def _get_order_goods_totals(
     first_data_row = order_worksheet.frozen_row_count + 1
     order_lines_by_wild: dict[str, list[tuple[float, float | None, int]]] = {}
     matching_order_row_count = 0
-    purchase_cost_total = 0.0
+    supplier_price_total = 0.0
     normalized_statuses = {status.strip().casefold() for status in statuses}
     for row_offset, row in enumerate(order_rows):
         status = str(row.get("Статус") or "").strip().casefold()
@@ -317,7 +260,7 @@ def _get_order_goods_totals(
             )
         if supplier.startswith("zilol"):
             # Для ZILOL сумма заказа уже указана в рублях.
-            purchase_cost_total += order_amount
+            supplier_price_total += order_amount
         else:
             currency_rate = _parse_finite_number(row.get("Курс юаня"))
             if currency_rate is None or currency_rate <= 0:
@@ -326,7 +269,7 @@ def _get_order_goods_totals(
                     f"для {wild} не указан положительный курс юаня "
                     f"в сценарии «{scenario_name}»."
                 )
-            purchase_cost_total += order_amount * currency_rate
+            supplier_price_total += order_amount * currency_rate
         order_lines_by_wild.setdefault(wild, []).append(
             (quantity, planned_purchase_cost, source_row)
         )
@@ -335,6 +278,37 @@ def _get_order_goods_totals(
         raise ValueError(
             f"На листе «Заказы белые ТЕСТ» не найдено строк для сценария "
             f"«{scenario_name}» со статусами: {', '.join(sorted(statuses))}."
+        )
+
+    purchase_prices = Database.read_sql_to_dataframe(
+        text(query_in_transit_purchase_prices),
+        params={
+            "snapshot_date": snapshot_date,
+            "wilds": list(order_lines_by_wild),
+        },
+    )
+    purchase_price_by_wild = {
+        str(row.local_vendor_code).strip(): _parse_finite_number(
+            row.average_purchase_price
+        )
+        for row in purchase_prices.itertuples(index=False)
+    }
+    purchase_cost_total = 0.0
+    missing_purchase_price_wilds: set[str] = set()
+    for wild, order_lines in order_lines_by_wild.items():
+        purchase_price = purchase_price_by_wild.get(wild) or 0.0
+        if not purchase_price and any(quantity for quantity, _, _ in order_lines):
+            missing_purchase_price_wilds.add(wild)
+        purchase_cost_total += sum(
+            quantity * purchase_price for quantity, _, _ in order_lines
+        )
+    if missing_purchase_price_wilds:
+        logger.warning(
+            "Для части товара в пути нет себестоимости в cost_price на дату "
+            "снимка WB; эти wild учтены с нулевой себестоимостью, расчёт "
+            "продолжается | wild_count=%s | wild=%s",
+            len(missing_purchase_price_wilds),
+            ", ".join(sorted(missing_purchase_price_wilds)),
         )
 
     match_rows = _read_table_rows_by_headers(
@@ -437,7 +411,7 @@ def _get_order_goods_totals(
         logger.warning(
             "Товары сценария «%s» без закупочной стоимости в «Сопост» и "
             "плановых заказах исключены из суммы по цене клиента; суммы заказа "
-            "по себестоимости учтены, расчёт продолжается | "
+            "по цене поставщика учтены, расчёт продолжается | "
             "wild_count=%s | wild=%s",
             scenario_name,
             len(excluded_wilds),
@@ -447,7 +421,7 @@ def _get_order_goods_totals(
         logger.warning(
             "Строки сценария «%s» без закупочной стоимости в «Сопост» и "
             "плановых заказах исключены из суммы по цене клиента; суммы заказа "
-            "по себестоимости учтены, расчёт продолжается | "
+            "по цене поставщика учтены, расчёт продолжается | "
             "line_count=%s | wild_rows=%s",
             scenario_name,
             len(excluded_order_lines),
@@ -475,14 +449,15 @@ def _get_order_goods_totals(
 
     logger.info(
         "Рассчитана стоимость %s | order_rows=%s | client_priced_wilds=%s | "
-        "purchase_cost=%.2f | client_price=%.2f",
+        "supplier_price=%.2f | purchase_cost=%.2f | client_price=%.2f",
         scenario_name,
         matching_order_row_count,
         included_wild_count,
+        supplier_price_total,
         purchase_cost_total,
         client_price_total,
     )
-    return purchase_cost_total, client_price_total
+    return supplier_price_total, purchase_cost_total, client_price_total
 
 
 def _get_supplier_debt_by_order_status(order_status: str) -> float:
@@ -576,57 +551,62 @@ def _get_supplier_debt_by_order_status(order_status: str) -> float:
     return debt_total
 
 
-def _get_customs_debt_total() -> float:
-    """Считает неоплаченную задолженность по трём этапам оформления КРЕДО.
+def _get_payment_stage_totals(required_stages: set[str]) -> dict[str, float]:
+    """Суммирует неоплаченные суммы по нужным этапам платёжного календаря.
 
-    Бизнес-правило: в листе «Аналитика_платежей» суммируются значения поля
-    «Не_оплачено» только для этапов брокерского оформления КРЕДО, агентского
-    вознаграждения КРЕДО и таможенных платежей КРЕДО. Аналитика уже содержит
-    отдельную строку каждого этапа, поэтому повторная группировка заказов
-    или пересчёт по исходным суммам не выполняются.
+    Бизнес-правило: для каждой статьи управленческого отчёта берутся строки
+    листа «Аналитика_платежей» с точным названием этапа и суммируется поле
+    «Не_оплачено» без повторного пересчёта заказов. Заголовки этого листа
+    находятся в первой строке. Временные ошибки чтения Google Sheets
+    повторяются; пустая или некорректная сумма нужного этапа прерывает расчёт.
     """
     payment_calendar_spreadsheet_id = "1lL9LSIBE5IxXIrx-R5aBu-DUib6wHuK2TU9fUpS9xOs"
-    worksheet = _open_financial_report_sheet(
+    connection = _open_financial_report_sheet(
         table_title="Платежный календарь",
         sheet_title="Аналитика_платежей",
         spreadsheet_id=payment_calendar_spreadsheet_id,
         required_access="читателя",
-    ).sheet_title
-    customs_stages = {
-        "Брокерское оформление КРЕДО",
-        "Агентское вознаграждение КРЕДО",
-        "Таможенные платежи КРЕДО",
-    }
-    rows = _read_table_rows_by_headers(
+    )
+    worksheet = connection.sheet_title
+    rows = connection.execute_with_retry(
+        "чтение неоплаченных этапов платёжного календаря",
+        _read_table_rows_by_headers,
         worksheet,
         ("Этап платежа", "Не_оплачено"),
     )
-    unpaid_total = 0.0
-    stage_counts = {stage: 0 for stage in customs_stages}
+    stage_totals = {stage: 0.0 for stage in required_stages}
+    stage_counts = {stage: 0 for stage in required_stages}
 
     for row_offset, row in enumerate(rows):
         stage = str(row.get("Этап платежа") or "").strip()
-        if stage not in customs_stages:
+        if stage not in required_stages:
             continue
 
         unpaid_amount = _parse_finite_number(row.get("Не_оплачено"))
         if unpaid_amount is None:
-            source_row = worksheet.frozen_row_count + 1 + row_offset
+            source_row = (worksheet.frozen_row_count or 1) + 1 + row_offset
             raise ValueError(
                 f"В строке {source_row} листа «Аналитика_платежей» "
                 f"для этапа «{stage}» не указана сумма поля «Не_оплачено»."
             )
-        unpaid_total += unpaid_amount
+        stage_totals[stage] += unpaid_amount
         stage_counts[stage] += 1
 
+    missing_stages = required_stages - {
+        stage for stage, count in stage_counts.items() if count
+    }
+    if missing_stages:
+        raise ValueError(
+            "На листе «Аналитика_платежей» не найдены этапы платежа: "
+            f"{', '.join(sorted(missing_stages))}."
+        )
     logger.info(
-        "Рассчитана задолженность перед таможней по неоплаченным этапам КРЕДО | "
-        "broker_rows=%s | agency_rows=%s | customs_payment_rows=%s",
-        stage_counts["Брокерское оформление КРЕДО"],
-        stage_counts["Агентское вознаграждение КРЕДО"],
-        stage_counts["Таможенные платежи КРЕДО"],
+        "Рассчитаны неоплаченные суммы по этапам платёжного календаря | "
+        "stage_count=%s | source_rows=%s",
+        len(stage_totals),
+        sum(stage_counts.values()),
     )
-    return unpaid_total
+    return stage_totals
 
 
 def update_weekly_profit_report():
@@ -780,19 +760,28 @@ def update_stock_analyze():
 
 
 def update_wb_fin_model_report() -> None:
-    """Обновляет остатки ВВТ и WB, товар в пути и финансовые задолженности.
+    """Обновляет три категории остатков WB и финансовые показатели витрины.
 
-    Бизнес-сценарий: читает итоги склада ВВТ из SUBTOTAL листа «WMS остатки»,
-    рассчитывает стоимость товара в пути по сумме заказа с пересчётом в рубли,
-    кроме поставщика ZILOL FAYZ INVEST; цену клиента берёт из WMS, а при её
+    Бизнес-сценарий: рассчитывает цену поставщика товара в пути до склада ВВТ
+    по сумме заказа с пересчётом в рубли, кроме ZILOL FAYZ INVEST. Его
+    себестоимость считает по тем же ценам `cost_price` и дате снимка, что и
+    остатки WB; цену клиента берёт из WMS, а при её
     отсутствии оценивает по себестоимости из «Сопост» или плану, затем
-    рассчитывает стоимость остатков WB за вчера без сгоревших складов:
-    положительная цена берётся из PostgreSQL, а при её отсутствии или нулевом
-    значении — цена за штуку из WMS по wild. Если цены нет в обоих источниках,
-    клиентская стоимость товара остаётся нулевой и выводится предупреждение.
+    распределяет последний доступный снимок WB по остаткам складов,
+    пути к клиенту и пути от клиента, исключая «Склад WB РФ» до суммирования.
+    Для каждой категории количество и себестоимость берутся из PostgreSQL;
+    клиентская цена — из PostgreSQL или, если она
+    отсутствует или не положительна, из WMS по wild. Без обеих клиентских
+    цен товар учитывается с нулевой клиентской стоимостью и предупреждением.
+    Чтение клиентских цен WMS повторяется при временной ошибке сети.
     Также считает неоплаченную задолженность по прибывшим заказам, заказам в
-    пути и трём таможенным этапам КРЕДО, затем обновляет целевые ячейки витрины,
-    записывая задолженности во вторые поля соответствующих строк.
+    пути и этапам платёжного календаря. Брокерская статья объединяет два этапа,
+    а общая таможенная задолженность — три этапа КРЕДО. Затем обновляет
+    целевые ячейки витрины: цену поставщика, себестоимость и цену клиента
+    товара в пути пишет в соответствующие колонки, а задолженности — в поля
+    «по себестоимости». Итог активов учитывает себестоимость товара в пути.
+    Итог задолженности исключает справочную общую строку таможни, чтобы её
+    этапы не учитывались дважды.
     """
     dataframe = Database.read_sql_to_dataframe(query_wb_stock_financial_report)
     if dataframe.empty:
@@ -800,7 +789,9 @@ def update_wb_fin_model_report() -> None:
 
     required_wb_columns = {
         "local_vendor_code",
-        "total_quantity",
+        "quantity",
+        "in_way_to_client",
+        "in_way_from_client",
         "average_purchase_price",
         "discounted_price",
     }
@@ -818,10 +809,9 @@ def update_wb_fin_model_report() -> None:
         spreadsheet_id=unit_spreadsheet_id,
         required_access="читателя",
     )
-    warehouse_purchase_cost, warehouse_client_price = _get_wms_stock_totals(
-        unit_connection.sheet_title
-    )
-    wms_client_prices = _get_wms_client_prices_by_wild(
+    wms_client_prices = unit_connection.execute_with_retry(
+        "чтение клиентских цен WMS для трёх категорий WB",
+        _get_wms_client_prices_by_wild,
         unit_connection.sheet_title,
         required_wilds={
             str(wild).strip()
@@ -829,36 +819,44 @@ def update_wb_fin_model_report() -> None:
             if str(wild).strip()
         },
     )
-    total_purchase_price = 0.0
-    total_client_price = 0.0
+    # Каждая колонка количества WB соответствует отдельной строке витрины.
+    wb_quantity_columns = {
+        "Остатки на ВБ (все склады)": "quantity",
+        "Остатки на ВБ (в пути до клиента)": "in_way_to_client",
+        "Остатки на ВБ (в пути от клиента)": "in_way_from_client",
+    }
+    wb_quantity_totals = {label: 0.0 for label in wb_quantity_columns}
+    wb_cost_totals = {label: 0.0 for label in wb_quantity_columns}
+    wb_client_totals = {label: 0.0 for label in wb_quantity_columns}
     fallback_price_wilds: set[str] = set()
     unavailable_client_price_wilds: set[str] = set()
-    for wild_value, quantity_value, purchase_price_value, wb_price_value in (
+    for values in (
         dataframe[
             [
                 "local_vendor_code",
-                "total_quantity",
+                *wb_quantity_columns.values(),
                 "average_purchase_price",
                 "discounted_price",
             ]
         ].itertuples(index=False, name=None)
     ):
-        quantity = _parse_finite_number(quantity_value) or 0.0
-        purchase_price = _parse_finite_number(purchase_price_value) or 0.0
-        total_purchase_price += quantity * purchase_price
-
-        wb_price = _parse_finite_number(wb_price_value)
-        if wb_price is not None and wb_price > 0:
-            total_client_price += quantity * wb_price
-            continue
-
-        wild = str(wild_value or "").strip()
+        wild = str(values[0] or "").strip()
+        purchase_price = _parse_finite_number(values[-2]) or 0.0
+        wb_price = _parse_finite_number(values[-1])
         wms_price = wms_client_prices.get(wild)
-        if wms_price is not None and wms_price > 0:
-            total_client_price += quantity * wms_price
-            fallback_price_wilds.add(wild)
-        elif quantity:
-            unavailable_client_price_wilds.add(wild or "(пустой wild)")
+        client_price = wb_price if wb_price is not None and wb_price > 0 else wms_price
+        for (label, _), quantity_value in zip(
+            wb_quantity_columns.items(), values[1:-2], strict=True
+        ):
+            quantity = _parse_finite_number(quantity_value) or 0.0
+            wb_quantity_totals[label] += quantity
+            wb_cost_totals[label] += quantity * purchase_price
+            if client_price is not None and client_price > 0:
+                wb_client_totals[label] += quantity * client_price
+                if wb_price is None or wb_price <= 0:
+                    fallback_price_wilds.add(wild)
+            elif quantity:
+                unavailable_client_price_wilds.add(wild or "(пустой wild)")
 
     if fallback_price_wilds:
         logger.info(
@@ -875,22 +873,58 @@ def update_wb_fin_model_report() -> None:
             ", ".join(sorted(unavailable_client_price_wilds)),
         )
     logger.info(
-        "Рассчитаны суммы остатков WB по себестоимости и цене клиента | "
-        "total_purchase_price=%.2f | total_client_price=%.2f",
-        total_purchase_price,
-        total_client_price,
+        "Рассчитаны три категории остатков WB без склада WB РФ | "
+        "stock_qty=%.0f | to_client_qty=%.0f | from_client_qty=%.0f",
+        *wb_quantity_totals.values(),
     )
-    in_transit_purchase_cost, in_transit_client_price = _get_order_goods_totals(
+    (
+        in_transit_supplier_price,
+        in_transit_purchase_cost,
+        in_transit_client_price,
+    ) = _get_order_goods_totals(
         unit_connection.table,
         statuses={"в пути"},
         scenario_name="товара в пути до склада ВВТ",
+        snapshot_date=dataframe["snapshot_date"].iloc[0],
     )
     arrived_supplier_debt = _get_supplier_debt_by_order_status("прибыло")
     in_transit_supplier_debt = _get_supplier_debt_by_order_status("в пути")
-    customs_debt = _get_customs_debt_total()
+    # Название строки отчёта сопоставляется с одним или двумя этапами источника.
+    payment_report_stages = {
+        "Таможенные платежи КРЕДО": ("Таможенные платежи КРЕДО",),
+        "Международная перевозка": ("Международная перевозка",),
+        "Российская доставка": ("Российская доставка",),
+        "Брокерское оформление (Брокерское оформление+Брокерское оформление КРЕДО)": (
+            "Брокерское оформление",
+            "Брокерское оформление КРЕДО",
+        ),
+        "Страхование груза": ("Страхование груза",),
+        "Простой": ("Простой",),
+        "Хранение": ("Хранение",),
+        "Агентское вознаграждение КРЕДО": (
+            "Агентское вознаграждение КРЕДО",
+        ),
+    }
+    payment_stage_totals = _get_payment_stage_totals({
+        stage
+        for stages in payment_report_stages.values()
+        for stage in stages
+    })
+    customs_debt = sum(
+        payment_stage_totals[stage]
+        for stage in (
+            "Брокерское оформление КРЕДО",
+            "Агентское вознаграждение КРЕДО",
+            "Таможенные платежи КРЕДО",
+        )
+    )
     spreadsheet_id = "1Cqr7pb0RKglLgQAc00o8bj5jiL14G1qOD_dSAWrpD2Y"
     worksheet_name = "Фин отчет управл"
-    logger.info("Получены суммы остатков WB для управленческого отчёта | snapshot=вчера")
+    logger.info(
+        "Получены категории остатков WB для управленческого отчёта | "
+        "snapshot=%s",
+        dataframe["snapshot_date"].iloc[0],
+    )
 
     google_connect = _open_financial_report_sheet(
         table_title="Модель фин отчетов",
@@ -899,75 +933,185 @@ def update_wb_fin_model_report() -> None:
         required_access="редактора",
     )
     worksheet = google_connect.sheet_title
-    warehouse_label = "Остатки на складе ВВТ Вектор"
     in_transit_label = "Товар в пути до склада ВВТ Вектор по цене поставщика"
     arrived_debt_label = "Задолженность перед поставщиками за прибывший товар*"
     in_transit_debt_label = "Задолженность перед поставщиками за товар в пути*"
     customs_debt_label = "Задолженность перед таможней"
-    wb_label = "Остатки на WB (в тч в пути) без сгоревших складов"
-    warehouse_label_cell = worksheet.find(warehouse_label)
+    overdraft_label = "Овердрафт"
+    total_debt_label = "Всего задолженность"
+    total_assets_label = "Всего активы"
     in_transit_label_cell = worksheet.find(in_transit_label)
     arrived_debt_label_cell = worksheet.find(arrived_debt_label)
     in_transit_debt_label_cell = worksheet.find(in_transit_debt_label)
     customs_debt_label_cell = worksheet.find(customs_debt_label)
-    wb_label_cell = worksheet.find(wb_label)
+    overdraft_label_cell = worksheet.find(overdraft_label)
+    total_debt_label_cell = worksheet.find(total_debt_label)
+    wb_label_cells = {
+        label: worksheet.find(label) for label in wb_quantity_columns
+    }
+    total_assets_label_cell = worksheet.find(total_assets_label)
+    supplier_price_cell = worksheet.find("по цене поставщика")
+    quantity_cell = worksheet.find("количество")
     cost_cell = worksheet.find("по себестоимости")
     sales_cell = worksheet.find("по цене продаж")
     if (
-        warehouse_label_cell is None
-        or in_transit_label_cell is None
+        in_transit_label_cell is None
         or arrived_debt_label_cell is None
         or in_transit_debt_label_cell is None
         or customs_debt_label_cell is None
-        or wb_label_cell is None
+        or overdraft_label_cell is None
+        or total_debt_label_cell is None
+        or any(cell is None for cell in wb_label_cells.values())
+        or total_assets_label_cell is None
+        or supplier_price_cell is None
+        or quantity_cell is None
         or cost_cell is None
         or sales_cell is None
     ):
         raise ValueError(
-            "На листе управленческого отчёта не найдена строка остатков ВВТ, "
-            "товара в пути, задолженности за прибывший товар, товар в пути "
-            "или перед таможней, "
-            "остатков WB или одного из целевых заголовков."
+            "На листе управленческого отчёта не найдена одна из трёх строк "
+            "остатков WB, строка товара в пути, задолженности, итога активов "
+            "или один из целевых заголовков."
+        )
+    supplier_in_transit_address = rowcol_to_a1(
+        in_transit_label_cell.row, supplier_price_cell.col
+    )
+    cost_in_transit_address = rowcol_to_a1(
+        in_transit_label_cell.row, cost_cell.col
+    )
+    assets_total_address = rowcol_to_a1(
+        total_assets_label_cell.row, cost_cell.col
+    )
+    assets_total_cell = google_connect.execute_with_retry(
+        "чтение формулы итога активов управленческого отчёта",
+        worksheet.acell,
+        assets_total_address,
+        value_render_option="FORMULA",
+    )
+    assets_total_formula = assets_total_cell.value or ""
+    asset_terms = assets_total_formula.removeprefix("=").split("+")
+    if not assets_total_formula.startswith("="):
+        raise ValueError("В строке «Всего активы» не найдена формула себестоимости.")
+    if supplier_in_transit_address in asset_terms:
+        asset_terms[asset_terms.index(supplier_in_transit_address)] = (
+            cost_in_transit_address
+        )
+    elif cost_in_transit_address not in asset_terms:
+        raise ValueError(
+            "Формула «Всего активы» не содержит ссылку на товар в пути "
+            "в колонке по себестоимости или по цене поставщика."
+        )
+    for cell in wb_label_cells.values():
+        wb_cost_address = rowcol_to_a1(cell.row, cost_cell.col)
+        if wb_cost_address not in asset_terms:
+            asset_terms.append(wb_cost_address)
+    assets_total_formula = "=" + "+".join(asset_terms)
+    sales_total_address = rowcol_to_a1(
+        total_assets_label_cell.row, sales_cell.col
+    )
+    sales_total_cell = google_connect.execute_with_retry(
+        "чтение формулы итога активов по цене продаж",
+        worksheet.acell,
+        sales_total_address,
+        value_render_option="FORMULA",
+    )
+    sales_total_formula = sales_total_cell.value or ""
+    if not sales_total_formula.startswith("="):
+        raise ValueError("В строке «Всего активы» не найдена формула цены продаж.")
+    sales_terms = sales_total_formula.removeprefix("=").split("+")
+    for cell in wb_label_cells.values():
+        wb_sales_address = rowcol_to_a1(cell.row, sales_cell.col)
+        if wb_sales_address not in sales_terms:
+            sales_terms.append(wb_sales_address)
+    sales_total_formula = "=" + "+".join(sales_terms)
+    report_labels = google_connect.execute_with_retry(
+        "чтение названий статей управленческого отчёта",
+        worksheet.col_values,
+        in_transit_label_cell.col,
+    )
+    payment_label_rows = {
+        str(value).strip(): row_number
+        for row_number, value in enumerate(report_labels, start=1)
+        if str(value).strip() in payment_report_stages
+    }
+    missing_payment_labels = set(payment_report_stages) - payment_label_rows.keys()
+    if missing_payment_labels:
+        raise ValueError(
+            "На листе управленческого отчёта не найдены строки этапов платежа: "
+            f"{', '.join(sorted(missing_payment_labels))}."
         )
 
     target_ranges = [
         {
             "range": (
-                f"{rowcol_to_a1(row_number, cost_cell.col)}:"
-                f"{rowcol_to_a1(row_number, sales_cell.col)}"
+                f"{rowcol_to_a1(cell.row, cost_cell.col)}:"
+                f"{rowcol_to_a1(cell.row, sales_cell.col)}"
             ),
-            "values": [values],
+            "values": [[wb_cost_totals[label], wb_client_totals[label]]],
         }
-        for row_number, values in (
-            (
-                warehouse_label_cell.row,
-                [warehouse_purchase_cost, warehouse_client_price],
-            ),
-            (
-                in_transit_label_cell.row,
-                [in_transit_purchase_cost, in_transit_client_price],
-            ),
-            (wb_label_cell.row, [total_purchase_price, total_client_price]),
-        )
+        for label, cell in wb_label_cells.items()
     ]
+    target_ranges.extend(
+        {
+            "range": rowcol_to_a1(cell.row, quantity_cell.col),
+            "values": [[wb_quantity_totals[label]]],
+        }
+        for label, cell in wb_label_cells.items()
+    )
+    target_ranges.extend([
+        {
+            "range": supplier_in_transit_address,
+            "values": [[in_transit_supplier_price]],
+        },
+        {
+            "range": cost_in_transit_address,
+            "values": [[in_transit_purchase_cost]],
+        },
+        {
+            "range": rowcol_to_a1(in_transit_label_cell.row, sales_cell.col),
+            "values": [[in_transit_client_price]],
+        },
+        {
+            "range": assets_total_address,
+            "values": [[assets_total_formula]],
+        },
+        {
+            "range": sales_total_address,
+            "values": [[sales_total_formula]],
+        },
+    ])
     target_ranges.append(
         {
-            "range": rowcol_to_a1(arrived_debt_label_cell.row, sales_cell.col),
+            "range": rowcol_to_a1(arrived_debt_label_cell.row, cost_cell.col),
             "values": [[arrived_supplier_debt]],
         }
     )
     target_ranges.append(
         {
-            "range": rowcol_to_a1(in_transit_debt_label_cell.row, sales_cell.col),
+            "range": rowcol_to_a1(in_transit_debt_label_cell.row, cost_cell.col),
             "values": [[in_transit_supplier_debt]],
         }
     )
     target_ranges.append(
         {
-            "range": rowcol_to_a1(customs_debt_label_cell.row, sales_cell.col),
+            "range": rowcol_to_a1(customs_debt_label_cell.row, cost_cell.col),
             "values": [[customs_debt]],
         }
     )
+    for label, stages in payment_report_stages.items():
+        target_ranges.append({
+            "range": rowcol_to_a1(payment_label_rows[label], cost_cell.col),
+            "values": [[sum(payment_stage_totals[stage] for stage in stages)]],
+        })
+    first_debt_cell = rowcol_to_a1(arrived_debt_label_cell.row, cost_cell.col)
+    last_debt_cell = rowcol_to_a1(overdraft_label_cell.row, cost_cell.col)
+    customs_debt_cell = rowcol_to_a1(customs_debt_label_cell.row, cost_cell.col)
+    target_ranges.append({
+        "range": rowcol_to_a1(total_debt_label_cell.row, cost_cell.col),
+        "values": [[
+            f"=SUM({first_debt_cell}:{last_debt_cell})-{customs_debt_cell}"
+        ]],
+    })
     execution_timestamp = datetime.now(MOSCOW_TZ).strftime("%d.%m.%Y %H:%M:%S")
     target_ranges.append(
         {
@@ -980,7 +1124,7 @@ def update_wb_fin_model_report() -> None:
     )
     google_connect._execute_google_write_with_retry(
         operation_name=(
-            "обновление остатков ВВТ, товара в пути, задолженности и WB"
+            "обновление трёх категорий WB, товара в пути и задолженности"
         ),
         func=worksheet.batch_update,
         data=target_ranges,
@@ -988,14 +1132,13 @@ def update_wb_fin_model_report() -> None:
     )
     logger.info(
         "Финансовые показатели записаны в управленческий отчёт | "
-        "warehouse_row=%s | in_transit_row=%s | arrived_debt_row=%s | "
-            "in_transit_debt_row=%s | customs_debt_row=%s | wb_row=%s",
-        warehouse_label_cell.row,
+        "wb_rows=%s | in_transit_row=%s | arrived_debt_row=%s | "
+        "in_transit_debt_row=%s | customs_debt_row=%s",
+        ",".join(str(cell.row) for cell in wb_label_cells.values()),
         in_transit_label_cell.row,
         arrived_debt_label_cell.row,
         in_transit_debt_label_cell.row,
         customs_debt_label_cell.row,
-        wb_label_cell.row,
     )
 
 # python -m src_oop.jobs.fin_reports_analyze.run

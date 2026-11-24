@@ -82,7 +82,7 @@ query_stock_analyze = """
     ORDER BY o."date" DESC;
             """
 
-# Остатки WB и цены по артикулам на последний доступный снимок без сгоревших складов.
+# Остатки WB и товары в пути без «Склад WB РФ» на последний доступный снимок.
 query_wb_stock_financial_report = """
 WITH latest_stock_snapshot AS (
     SELECT MAX(w.snapshot_date) AS snapshot_date
@@ -98,15 +98,7 @@ stock_by_article AS (
     FROM wb_stock_2 AS w
     CROSS JOIN latest_stock_snapshot AS snapshot
     WHERE w.snapshot_date = snapshot.snapshot_date
-      AND NOT EXISTS (
-          SELECT 1
-          FROM unnest(ARRAY[
-              'Волгоград', 'Самара', 'Тула',
-              'Пенза', 'Краснодар', 'Сарапул',
-              'Шушары', 'Электросталь', 'Коледино'
-          ]) AS excluded_city(city_name)
-          WHERE w.warehouse_name ILIKE '%%' || excluded_city.city_name || '%%'
-      )
+      AND w.warehouse_name <> 'Склад WB РФ'
     GROUP BY w.nm_id
 ),
 price_by_article AS (
@@ -122,7 +114,9 @@ stock_by_nm_id AS (
         a.nm_id,
         a.local_vendor_code,
         MAX(p.discounted_price) AS discounted_price,
-        SUM(s.quantity + s.in_way_to_client + s.in_way_from_client) AS total_quantity
+        SUM(s.quantity) AS quantity,
+        SUM(s.in_way_to_client) AS in_way_to_client,
+        SUM(s.in_way_from_client) AS in_way_from_client
     FROM stock_by_article AS s
     JOIN article AS a
       ON a.nm_id = s.nm_id
@@ -141,13 +135,26 @@ purchase_price_by_product AS (
 SELECT
     (SELECT snapshot_date FROM latest_stock_snapshot) AS snapshot_date,
     s.local_vendor_code,
-    s.total_quantity,
+    COALESCE(s.quantity, 0) AS quantity,
+    COALESCE(s.in_way_to_client, 0) AS in_way_to_client,
+    COALESCE(s.in_way_from_client, 0) AS in_way_from_client,
     COALESCE(c.average_purchase_price, 0) AS average_purchase_price,
     s.discounted_price
 FROM stock_by_nm_id AS s
 LEFT JOIN purchase_price_by_product AS c
   ON c.local_vendor_code = s.local_vendor_code
 ORDER BY s.nm_id;
+"""
+
+# Себестоимость заказов в пути по тем же ценам и дате, что у остатков WB.
+query_in_transit_purchase_prices = """
+SELECT
+    cp.local_vendor_code,
+    AVG(cp.purchase_price) AS average_purchase_price
+FROM cost_price AS cp
+WHERE cp."date" = :snapshot_date
+  AND cp.local_vendor_code = ANY(:wilds)
+GROUP BY cp.local_vendor_code;
 """
 
 query_outcomes_detalize = """
