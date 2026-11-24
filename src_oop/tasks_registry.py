@@ -350,7 +350,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
     },
     "update_wb_fin_model_report": {
         "func": smart_run(update_wb_fin_model_report),
-        "desc": "PostgreSQL `wb_stock_2`, `prices_data`, `article`, `cost_price`; Google Sheets «Расчет поставки Китай_по обороту», лист «Заказы белые ТЕСТ»; Google Sheets «UNIT 2.0 (tested)», листы «Сопост» и «WMS остатки»; Google Sheets «Платежный календарь», лист «Аналитика_платежей» → Google Sheets «Модель фин отчетов», лист «Фин отчет управл»: количество и стоимость остатков WB по трём категориям без «Склад WB РФ», товар в пути до ВВТ по цене поставщика, себестоимости и цене продаж, а также неоплаченные задолженности",
+        "desc": "PostgreSQL `wb_stock_2`, `prices_data`, `article`, `cost_price`; Google Sheets «Расчет поставки Китай_по обороту», лист «Заказы белые ТЕСТ»; Google Sheets «UNIT 2.0 (tested)», листы «Сопост» и «WMS остатки»; Google Sheets «Платежный календарь», лист «Аналитика_платежей» → Google Sheets «Модель фин отчетов», лист «Фин отчет управл»: количество и стоимость остатков склада ВВТ, три категории WB без «Склад WB РФ», товар в пути до ВВТ по цене поставщика, себестоимости и цене продаж, а также неоплаченные задолженности",
     },
     "run_system_penalties_analysis": {
         "func": smart_run(run_system_penalties_analysis),
