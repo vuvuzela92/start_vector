@@ -76,6 +76,8 @@ urllib3==2.5.0
 uvicorn
 wcwidth==0.2.14
 yarl==1.22.0
+loguru
+pydantic>=2,<3
 openai
 pymupdf
 pdfplumber
