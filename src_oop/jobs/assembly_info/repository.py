@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 from datetime import date, datetime
 from io import StringIO
+from tempfile import TemporaryFile
 import logging
 import time
 from typing import Any
@@ -71,15 +72,18 @@ class AssemblyInfoRepository:
             return
 
         table = self._ensure_table()
-        rows = dataframe.loc[:, self.COLUMNS].to_dict(orient="records")
-        total = len(rows)
+        total = len(dataframe.index)
         started_at = time.perf_counter()
         logger.info(
             "Начата запись статусной модели через staging | table=%s | rows=%s | method=COPY",
             self.TABLE_NAME, total,
         )
-        csv_data = self._build_csv(rows)
-        self._save_all_with_retry(table, csv_data, total)
+        with TemporaryFile(mode="w+t", encoding="utf-8", newline="") as csv_buffer:
+            writer = csv.writer(csv_buffer, lineterminator="\n")
+            for row in dataframe.loc[:, self.COLUMNS].itertuples(index=False, name=None):
+                writer.writerow([self._serialize_value(value) for value in row])
+            csv_buffer.flush()
+            self._save_all_with_retry(table, csv_buffer, total)
         elapsed = time.perf_counter() - started_at
         logger.info(
             "Запись статусной модели завершена | table=%s | rows=%s | seconds=%.2f",
@@ -119,30 +123,25 @@ class AssemblyInfoRepository:
                     ON {self.TABLE_NAME} (wb_status, account, id)
                     """
                 ))
-                rows: list[dict[str, object]] = []
+                result: dict[str, set[int]] = {}
                 for account, order_ids in order_ids_by_account.items():
                     if not order_ids:
                         continue
-                    rows.extend(
-                        connection.execute(
+                    for row in connection.execute(
                             query,
                             {
                                 "statuses": list(statuses),
                                 "account": account,
                                 "order_ids": order_ids,
                             },
-                        ).mappings().all()
-                    )
+                        ).mappings():
+                        result.setdefault(str(row["account"]), set()).add(int(row["id"]))
         except Exception as error:
             logger.warning(
                 "Не удалось прочитать завершенные сборочные задания; статусы будут проверены полностью | error_type=%s",
                 type(error).__name__,
             )
             return {}
-        result: dict[str, set[int]] = {}
-        for row in rows:
-            account = str(row["account"])
-            result.setdefault(account, set()).add(int(row["id"]))
         logger.info(
             "Завершенные сборочные задания текущего запуска загружены для инкрементальной проверки | accounts=%s | orders=%s",
             len(result), sum(len(order_ids) for order_ids in result.values()),
@@ -161,11 +160,12 @@ class AssemblyInfoRepository:
         metadata.create_all(Database.get_engine())
         return table
 
-    def _save_all_with_retry(self, table: Table, csv_data: str, total: int) -> None:
+    def _save_all_with_retry(self, table: Table, csv_buffer: Any, total: int) -> None:
         """Повторяет атомарную загрузку снимка после временного обрыва PostgreSQL."""
         for attempt in range(1, self.settings.db_max_retries + 1):
             try:
-                self._save_all(table, csv_data, total)
+                csv_buffer.seek(0)
+                self._save_all(table, csv_buffer, total)
                 return
             except (OperationalError, DBAPIError) as error:
                 if attempt >= self.settings.db_max_retries:
@@ -182,7 +182,7 @@ class AssemblyInfoRepository:
                 Database.get_engine().dispose()
                 time.sleep(delay)
 
-    def _save_all(self, table: Table, csv_data: str, total: int) -> None:
+    def _save_all(self, table: Table, csv_buffer: Any, total: int) -> None:
         """Загружает полный снимок во временную таблицу и выполняет условный merge."""
         stage_name = "assembly_task_status_model_stage"
         insert_columns = ", ".join(self.COLUMNS)
@@ -205,8 +205,6 @@ class AssemblyInfoRepository:
             "WITH (FORMAT CSV, NULL '\\N')"
         )
 
-        csv_buffer = StringIO(csv_data)
-        csv_buffer.seek(0)
         engine = Database.get_engine()
         with engine.begin() as connection:
             connection.execute(

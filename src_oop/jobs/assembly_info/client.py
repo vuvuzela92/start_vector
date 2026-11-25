@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import aiohttp
 
@@ -27,8 +29,15 @@ class AssemblyInfoClient:
         account: str,
         token: str,
     ) -> list[dict[str, object]]:
-        """Загружает все сборочные задания аккаунта за доступный период WB."""
+        """Загружает задания WB за окно проверки статусов, освобождая старые страницы.
+
+        Бизнес-правило: задания старше окна не участвуют в пятиминутной модели.
+        Пагинация продолжается до конца, поскольку порядок WB не гарантирован.
+        """
         result: list[dict[str, object]] = []
+        cutoff = datetime.now(ZoneInfo("Europe/Moscow")) - timedelta(
+            days=self.settings.status_lookback_days
+        )
         async with self._semaphore:
             next_cursor = 0
             while True:
@@ -42,7 +51,20 @@ class AssemblyInfoClient:
                 if not isinstance(orders, list):
                     logger.error("WB вернул некорректный список сборочных заданий | account=%s", account)
                     break
-                result.extend({**order, "account": account} for order in orders if isinstance(order, dict))
+                for order in orders:
+                    if not isinstance(order, dict):
+                        continue
+                    try:
+                        created_at = datetime.fromisoformat(
+                            str(order["createdAt"]).replace("Z", "+00:00")
+                        )
+                        if created_at.tzinfo is None or created_at < cutoff:
+                            continue
+                    except (KeyError, TypeError, ValueError):
+                        # Не отбрасываем запись с неожиданной датой: проверка
+                        # качества данных остаётся в основном сценарии.
+                        pass
+                    result.append({**order, "account": account})
                 next_cursor = int(payload.get("next", 0) or 0)
                 if not next_cursor:
                     break
