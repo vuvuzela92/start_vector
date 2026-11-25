@@ -8,8 +8,9 @@ from src_oop.core.database import Database
 
 logger = logging.getLogger(__name__)
 
-# Ставки, применяемые в расчётной прибыли по заказам и продажам.
-TAX_PERCENT = 5
+# Ставки налога для условной прибыли до и после изменения с 1 июля 2026 года.
+TAX_PERCENT_BEFORE_2026_07_01 = 8
+TAX_PERCENT_FROM_2026_07_01 = 5
 ACQUIRING_PERCENT = 3
 
 
@@ -210,7 +211,11 @@ class ArticleAnalyzeRepository:
 
                 COALESCE(o.order_count, 0) * (
                     COALESCE(wbf.avg_price, o.avg_price, pd.avg_price, 0) - (
-                        (COALESCE(wbf.avg_price, o.avg_price, pd.avg_price, 0) / 100.0 * ({TAX_PERCENT} + {ACQUIRING_PERCENT} +
+                        (COALESCE(wbf.avg_price, o.avg_price, pd.avg_price, 0) / 100.0 * (
+                            CASE
+                                WHEN b.date < DATE '2026-07-01' THEN {TAX_PERCENT_BEFORE_2026_07_01}
+                                ELSE {TAX_PERCENT_FROM_2026_07_01}
+                            END + {ACQUIRING_PERCENT} +
                             CASE
                                 WHEN b.date >= '2026-01-01' THEN ic_2026.fbo_individual_conditions
                                 WHEN b.date BETWEEN '2025-01-01' AND '2025-12-31' THEN ic_2025.fbo_individual_conditions
@@ -225,14 +230,19 @@ class ArticleAnalyzeRepository:
 
                 ROUND(
                     COALESCE(fin_sales.sales_sum, 0) * (
-                        1 - ({TAX_PERCENT} + {ACQUIRING_PERCENT} +
+                        1 - (
+                            CASE
+                                WHEN b.date < DATE '2026-07-01' THEN {TAX_PERCENT_BEFORE_2026_07_01}
+                                ELSE {TAX_PERCENT_FROM_2026_07_01}
+                            END +
                             CASE
                                 WHEN b.date >= '2026-01-01' THEN ic_2026.fbo_individual_conditions
                                 WHEN b.date BETWEEN '2025-01-01' AND '2025-12-31' THEN ic_2025.fbo_individual_conditions
                                 ELSE 26
                             END
                         ) / 100.0
-                    ) - COALESCE(fin_sales.sales_count, 0) * COALESCE(cp.purchase_price, 0),
+                    ) - COALESCE(fin_sales.acquiring_fee, 0)
+                    - COALESCE(fin_sales.sales_count, 0) * COALESCE(cp.purchase_price, 0),
                     2
                 ) AS profit_by_cond_sales,
                 COALESCE(o.open_count, 0) AS open_card_count,
@@ -307,24 +317,33 @@ class ArticleAnalyzeRepository:
                 SELECT
                     DATE(financial_sales.date_from) AS date,
                     financial_sales.nm_id AS article_id,
-                    SUM(
-                        CASE
-                            WHEN financial_sales.supplier_oper_name = 'Продажа'
-                                THEN financial_sales.retail_price_withdisc_rub
-                            WHEN financial_sales.supplier_oper_name IN ('Возврат', 'Коррекция возвратов')
-                                THEN -financial_sales.retail_price_withdisc_rub
-                            WHEN financial_sales.supplier_oper_name = 'Коррекция продаж'
-                                THEN financial_sales.retail_price_withdisc_rub
-                            ELSE 0
-                        END
-                    ) AS sales_sum,
+                    SUM(CASE
+                        WHEN financial_sales.doc_type_name = 'Продажа'
+                            THEN financial_sales.retail_price_withdisc_rub
+                        ELSE 0
+                    END) - SUM(CASE
+                        WHEN financial_sales.doc_type_name = 'Возврат'
+                            THEN financial_sales.retail_price_withdisc_rub
+                        ELSE 0
+                    END) AS sales_sum,
                     SUM(
                         CASE
                             WHEN financial_sales.doc_type_name = 'Продажа'
                                 THEN financial_sales.quantity
+                            WHEN financial_sales.doc_type_name = 'Возврат'
+                                THEN -financial_sales.quantity
                             ELSE 0
                         END
-                    ) AS sales_count
+                    ) AS sales_count,
+                    SUM(
+                        CASE
+                            WHEN financial_sales.doc_type_name = 'Продажа'
+                                THEN COALESCE(financial_sales.acquiring_fee, 0)
+                            WHEN financial_sales.doc_type_name = 'Возврат'
+                                THEN -COALESCE(financial_sales.acquiring_fee, 0)
+                            ELSE 0
+                        END
+                    ) AS acquiring_fee
                 FROM daily_fin_reports_full financial_sales
                 INNER JOIN (
                     SELECT
@@ -445,7 +464,13 @@ class ArticleAnalyzeRepository:
         return df
 
     def get_fin_report_stat(self, days_ago: int, days_to: int) -> pd.DataFrame:
-        """Возвращает финансовые метрики из daily_fin_reports_full на уровне article_id + date."""
+        """Возвращает финансовые метрики по аккаунту, товару и дате.
+
+        Для бизнеса продаж выручка, количество и фактический эквайринг
+        рассчитываются по финансовому отчёту: продажи прибавляются, возвраты
+        вычитаются. Другие типы документов в эти метрики не включаются;
+        количество возвратов дополнительно возвращается отдельно для контроля.
+        """
         sales_date_from = f"CURRENT_DATE - INTERVAL '{days_ago} days'"
         sales_date_to = f"CURRENT_DATE - INTERVAL '{days_to} days'"
         expected_create_dt_from = f"CURRENT_DATE - INTERVAL '{max(days_ago - 1, 0)} days'"
@@ -478,6 +503,7 @@ class ArticleAnalyzeRepository:
                     fin.doc_type_name,
                     fin.bonus_type_name,
                     fin.retail_price_withdisc_rub,
+                    fin.acquiring_fee,
                     fin.ppvz_for_pay,
                     fin.delivery_rub,
                     fin.quantity,
@@ -501,10 +527,8 @@ class ArticleAnalyzeRepository:
                 fin.date,
                 fin.article_id,
                 snapshot.create_dt,
-                SUM(CASE WHEN fin.supplier_oper_name = 'Продажа' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
-                SUM(CASE WHEN fin.supplier_oper_name = 'Возврат' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
-                SUM(CASE WHEN fin.supplier_oper_name = 'Коррекция возвратов' THEN fin.retail_price_withdisc_rub ELSE 0 END) +
-                SUM(CASE WHEN fin.supplier_oper_name = 'Коррекция продаж' THEN fin.retail_price_withdisc_rub ELSE 0 END) AS sales_revenue_rep,
+                SUM(CASE WHEN fin.doc_type_name = 'Продажа' THEN fin.retail_price_withdisc_rub ELSE 0 END) -
+                SUM(CASE WHEN fin.doc_type_name = 'Возврат' THEN fin.retail_price_withdisc_rub ELSE 0 END) AS sales_revenue_rep,
                 SUM(CASE WHEN fin.supplier_oper_name = 'Продажа' THEN fin.ppvz_for_pay ELSE 0 END) -
                 SUM(CASE WHEN fin.supplier_oper_name = 'Возврат' THEN fin.ppvz_for_pay ELSE 0 END) -
                 (
@@ -518,8 +542,14 @@ class ArticleAnalyzeRepository:
                 ) AS wb_commission_rep,
                 SUM(CASE WHEN fin.supplier_oper_name = 'Логистика' THEN fin.delivery_rub ELSE 0 END) +
                 SUM(CASE WHEN fin.supplier_oper_name = 'Коррекция логистики' THEN fin.delivery_rub ELSE 0 END) AS logistics,
-                SUM(CASE WHEN fin.doc_type_name = 'Продажа' THEN fin.quantity ELSE 0 END) AS sales_count_rep,
-                SUM(CASE WHEN fin.doc_type_name = 'Возврат' THEN fin.quantity ELSE 0 END) AS returns_count_rep
+                SUM(CASE WHEN fin.doc_type_name = 'Продажа' THEN fin.quantity ELSE 0 END) -
+                SUM(CASE WHEN fin.doc_type_name = 'Возврат' THEN fin.quantity ELSE 0 END) AS sales_count_rep,
+                SUM(CASE WHEN fin.doc_type_name = 'Возврат' THEN fin.quantity ELSE 0 END) AS returns_count_rep,
+                SUM(CASE
+                    WHEN fin.doc_type_name = 'Продажа' THEN COALESCE(fin.acquiring_fee, 0)
+                    WHEN fin.doc_type_name = 'Возврат' THEN -COALESCE(fin.acquiring_fee, 0)
+                    ELSE 0
+                END) AS acquiring_fee_rep
             FROM fin_filtered fin
             INNER JOIN fin_latest_snapshot snapshot
                 ON snapshot.account = fin.account
@@ -544,6 +574,7 @@ class ArticleAnalyzeRepository:
                     "logistics",
                     "sales_count_rep",
                     "returns_count_rep",
+                    "acquiring_fee_rep",
                 ]
             )
 
