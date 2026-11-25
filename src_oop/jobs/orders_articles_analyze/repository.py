@@ -154,7 +154,9 @@ class ArticleAnalyzeRepository:
         суммы, количества и средней цены в историческом дневном блоке. Данные
         wb_order_feed по-прежнему используются для дополнительных метрик, где
         они предусмотрены текущим запросом, но не подменяют историческое
-        количество заказов.
+        количество заказов. Предварительная условная прибыль от продаж здесь
+        использует только финансовые данные; итоговая прибыль будет пересчитана
+        после привязки финансового отчёта к аккаунту товара.
         """
         logger.info(
             "Начато выполнение запроса общей статистики | method=get_general_stat | days_ago=%s | days_to=%s",
@@ -222,25 +224,16 @@ class ArticleAnalyzeRepository:
                 COALESCE(fin_sales.sales_count, s.sales_count, orders_sales.sales_count, 0) AS sales_count,
 
                 ROUND(
-                    COALESCE(fin_sales.sales_count, s.sales_count, orders_sales.sales_count, 0) * (
-                        COALESCE(
-                            COALESCE(fin_sales.sales_sum, s.sales_sum, orders_sales.sales_sum)
-                            / NULLIF(COALESCE(fin_sales.sales_count, s.sales_count, orders_sales.sales_count), 0),
-                            0
-                        ) - (
-                            (COALESCE(
-                                COALESCE(fin_sales.sales_sum, s.sales_sum, orders_sales.sales_sum)
-                                / NULLIF(COALESCE(fin_sales.sales_count, s.sales_count, orders_sales.sales_count), 0),
-                                0
-                            ) / 100.0 * ({TAX_PERCENT} + {ACQUIRING_PERCENT} +
-                                CASE
-                                    WHEN b.date >= '2026-01-01' THEN ic_2026.fbo_individual_conditions
-                                    WHEN b.date BETWEEN '2025-01-01' AND '2025-12-31' THEN ic_2025.fbo_individual_conditions
-                                    ELSE 26
-                                END
-                            )) + COALESCE(cp.purchase_price, 0)
-                        )
-                    ), 2
+                    COALESCE(fin_sales.sales_sum, 0) * (
+                        1 - ({TAX_PERCENT} + {ACQUIRING_PERCENT} +
+                            CASE
+                                WHEN b.date >= '2026-01-01' THEN ic_2026.fbo_individual_conditions
+                                WHEN b.date BETWEEN '2025-01-01' AND '2025-12-31' THEN ic_2025.fbo_individual_conditions
+                                ELSE 26
+                            END
+                        ) / 100.0
+                    ) - COALESCE(fin_sales.sales_count, 0) * COALESCE(cp.purchase_price, 0),
+                    2
                 ) AS profit_by_cond_sales,
                 COALESCE(o.open_count, 0) AS open_card_count,
                 COALESCE(o.cart_count, 0) AS add_to_cart_count,

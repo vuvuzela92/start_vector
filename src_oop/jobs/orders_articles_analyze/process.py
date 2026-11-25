@@ -4,7 +4,11 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import BigInteger
 
-from src_oop.jobs.orders_articles_analyze.repository import ArticleAnalyzeRepository
+from src_oop.jobs.orders_articles_analyze.repository import (
+    ACQUIRING_PERCENT,
+    TAX_PERCENT,
+    ArticleAnalyzeRepository,
+)
 from src_oop.jobs.orders_articles_analyze.tables_scheme import (
     orders_articles_analyze_table,
 )
@@ -18,6 +22,47 @@ class ProcessArticleAnalyze:
 
     def __init__(self, repo: ArticleAnalyzeRepository):
         self.repo = repo
+
+    @staticmethod
+    def _recalculate_financial_sales_profit(df: pd.DataFrame) -> pd.DataFrame:
+        """Считает условную прибыль только по продажам из финансового отчёта.
+
+        Бизнес-правило: для показателя прибыли от продаж выручка и количество
+        берутся из `sales_revenue_rep` и `sales_count_rep`, сопоставленных по
+        аккаунту, артикулу и дате. Если нет финансовой выручки или ставки
+        комиссии, прибыль этой строки равна нулю; источники `sales` и `orders`
+        не подменяют финансовые данные. Нулевое количество не обнуляет
+        ненулевую финансовую выручку: количество влияет только на себестоимость.
+        """
+        required_columns = {
+            "sales_revenue_rep",
+            "sales_count_rep",
+            "purchase_price",
+            "ind_comission_fbo",
+        }
+        if not required_columns.issubset(df.columns):
+            missing_columns = sorted(required_columns.difference(df.columns))
+            raise ValueError(
+                "Нельзя рассчитать условную прибыль только по финансовому отчёту: "
+                f"отсутствуют колонки {missing_columns}"
+            )
+
+        revenue = pd.to_numeric(df["sales_revenue_rep"], errors="coerce").fillna(0)
+        sales_count = pd.to_numeric(df["sales_count_rep"], errors="coerce").fillna(0)
+        purchase_price = pd.to_numeric(df["purchase_price"], errors="coerce").fillna(0)
+        commission_pct = pd.to_numeric(df["ind_comission_fbo"], errors="coerce")
+        variable_cost_pct = TAX_PERCENT + ACQUIRING_PERCENT + commission_pct
+
+        profit = (
+            revenue * (1 - variable_cost_pct / 100.0)
+            - sales_count * purchase_price
+        )
+        has_financial_commission = commission_pct.notna()
+        df["profit_by_cond_sales"] = profit.where(
+            has_financial_commission,
+            0,
+        ).round(2)
+        return df
 
     @staticmethod
     def _safe_preview(
@@ -307,7 +352,10 @@ class ProcessArticleAnalyze:
         Собирает итоговый DataFrame для артикульного анализа.
 
         Принимает границы периода в днях, загружает данные из всех источников,
-        объединяет их и возвращает отсортированный DataFrame.
+        объединяет их и возвращает отсортированный DataFrame. Условная прибыль
+        от продаж рассчитывается после сопоставления с фин. отчётом по аккаунту,
+        артикулу и дате и использует только его выручку и количество продаж;
+        резервные источники продаж для этой метрики не применяются.
         Если на любом этапе возникает ошибка, исключение пробрасывается выше.
         """
         current_stage = "load_adv_stat"
@@ -610,6 +658,7 @@ class ProcessArticleAnalyze:
                     - pd.to_numeric(df["logistics"], errors="coerce").fillna(0)
                     - pd.to_numeric(df["cost_price_sales_fin_rep"], errors="coerce").fillna(0)
                 )
+            df = self._recalculate_financial_sales_profit(df)
             logger.info(
                 "Merge с данными daily_fin_reports_full завершён | stage=%s | merge_keys=%s | rows_after=%s | sales_revenue_rep_sum_before_merge=%s | non_empty_sales_revenue_rep_after_merge=%s",
                 current_stage,
