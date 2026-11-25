@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sqlalchemy import text
+
 STOCKS_URL_TEMPLATE = "https://marketplace-api.wildberries.ru/api/v3/stocks/{warehouse_id}"
 
 REQUEST_TIMEOUT_SECONDS = 40
@@ -14,6 +16,33 @@ REFRESH_VERIFY_SLEEP_SECONDS = (5, 10, 20, 30, 60)
 
 UNIT_TABLE_TITLE = "UNIT 2.0 (tested) управление остатками"
 UNIT_SHEET_TITLE = "MAIN (tested)"
+UNIT_FBO_SPREADSHEET_ID = "1bvZLSNb-CdWzuyBScL6C6x2fw--U1F8BD9PY4krElc4"
+UNIT_FBO_SHEET_TITLE = "Остатки ФБО"
+UNIT_FBO_COLUMNS = [
+    "local_vendor_code",
+    "purchase_price",
+    "quantity",
+    "in_way_to_client",
+    "in_way_from_client",
+]
+UNIT_FBO_QUERY = text(
+    """
+    SELECT
+        a.local_vendor_code,
+        MAX(cp.purchase_price) AS purchase_price,
+        SUM(ws.quantity) AS quantity,
+        SUM(ws.in_way_to_client) AS in_way_to_client,
+        SUM(ws.in_way_from_client) AS in_way_from_client
+    FROM wb_stock_2 AS ws
+    LEFT JOIN article AS a ON a.nm_id = ws.nm_id
+    LEFT JOIN cost_price AS cp
+        ON cp.local_vendor_code = a.local_vendor_code
+        AND cp."date" = ws.snapshot_date
+    WHERE ws.snapshot_date = CURRENT_DATE
+    GROUP BY a.local_vendor_code
+    ORDER BY a.local_vendor_code;
+    """
+)
 SOPOST_SHEET_TITLE = "Сопост"
 HEADER_ROW_INDEX = 1
 DATA_START_ROW = 2

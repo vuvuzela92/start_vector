@@ -185,21 +185,21 @@ python main.py delete_fbs_warehouse
 
 ```bash
 export WB_FBS_ACCOUNT="СТАРТ0854"
-python main.py update_fbs_stocks_in_unit
+python main.py update_stocks_in_unit
 ```
 
 ### Для всех ЛК
 
 ```bash
 unset WB_FBS_ACCOUNT
-python main.py update_fbs_stocks_in_unit
+python main.py update_stocks_in_unit
 ```
 
 Если нужных колонок в тестовой таблице еще нет:
 
 ```bash
 export WB_FBS_CREATE_MISSING_COLUMNS=true
-python main.py update_fbs_stocks_in_unit
+python main.py update_stocks_in_unit
 ```
 
 Команда заполняет колонку:
@@ -308,7 +308,7 @@ python main.py auto_refill_fbs_stocks_from_unit
 
 1. Сначала получить или синхронизировать склады WB.
 2. Проверить, что в `warehouses_fbs` есть нужные пары `account + warehouse_id + wb_warehouse_id`.
-3. Обновить `ФБС общий остаток` через `update_fbs_stocks_in_unit`.
+3. Обновить `ФБС общий остаток` через `update_stocks_in_unit`.
 4. Для ручного сценария заполнить `Новый остаток для всех складов` или `Новый остаток Вешки`.
 5. Выполнить нужную команду после проверки управляющих значений в UNIT.
 6. Для отдельного cron-сценария автопополнения включить `WB_FBS_AUTO_REFILL_APPLY=true` только после проверки результата.

@@ -78,7 +78,7 @@ from src_oop.jobs.fbs_warehouses.run import (
 from src_oop.jobs.fbs_stocks.run import (
     apply_new_fbs_stocks_from_unit,
     auto_refill_fbs_stocks_from_unit,
-    update_fbs_stocks_in_unit,
+    update_stocks_in_unit,
 )
 from src_oop.jobs.health_check.run import health_check_run
 from src_oop.jobs.logistic_ved.run import logistic_ved_full_run
@@ -181,7 +181,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
     },
     "fbs2_test_stocks_run": {
         "func": smart_run(fbs2_test_stocks_run),
-        "desc": "PostgreSQL/WMS → Google Sheets «Карта БД Закупщиков», лист «БД Остатки», и card_data → Google Sheets «WMS остатки», поле fbs2",
+        "desc": "PostgreSQL/WMS → лист «БД Остатки»; card_data → лист «WMS остатки», поле fbs2",
     },
     # Старый контур Google Sheets и управленческих витрин.
     "update_penalties_in_gs_purchase_russia": {
@@ -405,9 +405,9 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(sync_fbs_warehouses_from_wb),
         "desc": "Дозаполнение справочника warehouses_fbs текущими данными складов WB",
     },
-    "update_fbs_stocks_in_unit": {
-        "func": smart_run(update_fbs_stocks_in_unit),
-        "desc": "WB API → Google Sheets «UNIT 2.0 (tested)», лист «MAIN (tested)»: запись фактического общего FBS-остатка в колонку «ФБС общий остаток»",
+    "update_stocks_in_unit": {
+        "func": smart_run(update_stocks_in_unit),
+        "desc": "WB API → UNIT, поле «ФБС общий остаток»; PostgreSQL `wb_stock_2` → UNIT, лист «Остатки ФБО»",
     },
     "apply_new_fbs_stocks_from_unit": {
         "func": smart_run(apply_new_fbs_stocks_from_unit),

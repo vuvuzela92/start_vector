@@ -120,7 +120,7 @@ class FBSStocksService:
             chrt_ids_by_article=chrt_ids_by_article,
             warehouses=warehouses,
             tokens_by_account=tokens_by_account,
-            job_name="update_fbs_stocks_in_unit",
+            job_name="update_stocks_in_unit",
             notification_events=summary.notification_events,
         )
         summary.wb_requests = len(stocks_by_account_warehouse)
