@@ -45,7 +45,7 @@
     {"name": "sync_sales_plan_accounting_category_reference_to_db", "schedule": "daily at 08:21"},
     {"name": "sync_sales_plan_manager_reference_to_db", "schedule": "daily at 08:25"},
     {"name": "sync_sales_wild_status_daily_to_db", "schedule": "daily at 08:28"},
-    {"name": "update_fbs_stocks_in_unit", "schedule": "hourly at minute 41"},
+    {"name": "update_stocks_in_unit", "schedule": "hourly at minute 41"},
     {"name": "update_sales_warehouse_analytics", "schedule": "hourly at minute 42"},
     {"name": "update_stock_analyze", "schedule": "hourly at minute 43"},
     {"name": "update_wild_statuses", "schedule": "hourly at minute 44"},
