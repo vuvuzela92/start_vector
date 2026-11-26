@@ -1,10 +1,12 @@
 ﻿import logging
 import re
+import ssl
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.request import urlopen
 from xml.etree import ElementTree
 
+import certifi
 import pandas as pd
 
 from src_oop.core.my_gspread import GoogleTabs
@@ -22,9 +24,22 @@ logger = logging.getLogger(__name__)
 
 
 def load_cbr_rates() -> dict[str, float]:
-    """Получает официальные рублёвые курсы за единицу валюты на московскую дату."""
+    """Получает официальные курсы ЦБ на московскую дату для пересчета платежей.
+
+    HTTPS-соединение проверяет сертификат сайта по системным корневым
+    сертификатам и дополнительному bundle пакета certifi. Проверка TLS
+    остается включенной; если получить или проверить ответ ЦБ не удается,
+    расчет валютных сумм должен завершиться ошибкой, а не использовать
+    неподтвержденный курс.
+    """
     today = datetime.now(timezone(timedelta(hours=3))).strftime("%d/%m/%Y")
-    with urlopen(f"https://www.cbr.ru/scripts/XML_daily.asp?date_req={today}", timeout=20) as response:
+    tls_context = ssl.create_default_context()
+    tls_context.load_verify_locations(cafile=certifi.where())
+    with urlopen(
+        f"https://www.cbr.ru/scripts/XML_daily.asp?date_req={today}",
+        timeout=20,
+        context=tls_context,
+    ) as response:
         bulletin = ElementTree.parse(response).getroot()
     rates = {}
     for entry in bulletin.findall("Valute"):
