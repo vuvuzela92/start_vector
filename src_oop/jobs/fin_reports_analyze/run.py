@@ -834,13 +834,10 @@ def update_wb_fin_model_report() -> None:
     отсутствует или не положительна, из WMS по wild. Без обеих клиентских
     цен товар учитывается с нулевой клиентской стоимостью и предупреждением.
     Чтение клиентских цен WMS повторяется при временной ошибке сети.
-    Также считает неоплаченную задолженность по прибывшим заказам, заказам в
-    пути и этапам платёжного календаря. Брокерская статья объединяет два этапа.
-    Затем обновляет целевые ячейки витрины: цену поставщика, себестоимость и
-    цену клиента товара в пути пишет в соответствующие колонки, а задолженности
-    — в поля «по себестоимости». Итог активов учитывает себестоимость товара в пути.
-    Итог задолженности суммирует отдельные статьи без справочной общей строки
-    таможни, удалённой из витрины.
+    Обновляет количество и стоимости остатков, а также цену поставщика,
+    себестоимость и цену клиента товара в пути в соответствующих колонках.
+    Итог активов учитывает себестоимость товара в пути. Задолженность
+    поставщикам, этапы платёжного календаря и итог задолженности не изменяет.
     """
     dataframe = Database.read_sql_to_dataframe(query_wb_stock_financial_report)
     if dataframe.empty:
@@ -955,29 +952,6 @@ def update_wb_fin_model_report() -> None:
         scenario_name="товара в пути до склада ВВТ",
         snapshot_date=dataframe["snapshot_date"].iloc[0],
     )
-    arrived_supplier_debt = _get_supplier_debt_by_order_status("прибыло")
-    in_transit_supplier_debt = _get_supplier_debt_by_order_status("в пути")
-    # Название строки отчёта сопоставляется с одним или двумя этапами источника.
-    payment_report_stages = {
-        "Таможенные платежи КРЕДО": ("Таможенные платежи КРЕДО",),
-        "Международная перевозка": ("Международная перевозка",),
-        "Российская доставка": ("Российская доставка",),
-        "Брокерское оформление (Брокерское оформление+Брокерское оформление КРЕДО)": (
-            "Брокерское оформление",
-            "Брокерское оформление КРЕДО",
-        ),
-        "Страхование груза": ("Страхование груза",),
-        "Простой": ("Простой",),
-        "Хранение": ("Хранение",),
-        "Агентское вознаграждение КРЕДО": (
-            "Агентское вознаграждение КРЕДО",
-        ),
-    }
-    payment_stage_totals = _get_payment_stage_totals({
-        stage
-        for stages in payment_report_stages.values()
-        for stage in stages
-    })
     spreadsheet_id = "1Cqr7pb0RKglLgQAc00o8bj5jiL14G1qOD_dSAWrpD2Y"
     worksheet_name = "Фин отчет управл"
     logger.info(
@@ -995,17 +969,9 @@ def update_wb_fin_model_report() -> None:
     worksheet = google_connect.sheet_title
     warehouse_label = "Остатки на складе ВВТ Вектор"
     in_transit_label = "Товар в пути до склада ВВТ Вектор по цене поставщика"
-    arrived_debt_label = "Задолженность перед поставщиками за прибывший товар*"
-    in_transit_debt_label = "Задолженность перед поставщиками за товар в пути*"
-    overdraft_label = "Овердрафт"
-    total_debt_label = "Всего задолженность"
     total_assets_label = "Всего активы"
     warehouse_label_cell = worksheet.find(warehouse_label)
     in_transit_label_cell = worksheet.find(in_transit_label)
-    arrived_debt_label_cell = worksheet.find(arrived_debt_label)
-    in_transit_debt_label_cell = worksheet.find(in_transit_debt_label)
-    overdraft_label_cell = worksheet.find(overdraft_label)
-    total_debt_label_cell = worksheet.find(total_debt_label)
     wb_label_cells = {
         label: worksheet.find(label) for label in wb_quantity_columns
     }
@@ -1017,10 +983,6 @@ def update_wb_fin_model_report() -> None:
     if (
         warehouse_label_cell is None
         or in_transit_label_cell is None
-        or arrived_debt_label_cell is None
-        or in_transit_debt_label_cell is None
-        or overdraft_label_cell is None
-        or total_debt_label_cell is None
         or any(cell is None for cell in wb_label_cells.values())
         or total_assets_label_cell is None
         or supplier_price_cell is None
@@ -1031,7 +993,7 @@ def update_wb_fin_model_report() -> None:
         raise ValueError(
             "На листе управленческого отчёта не найдена строка остатков ВВТ "
             "или одна из трёх строк остатков WB, строка товара в пути, "
-            "задолженности, итог активов или один из целевых заголовков."
+            "итог активов или один из целевых заголовков."
         )
     supplier_in_transit_address = rowcol_to_a1(
         in_transit_label_cell.row, supplier_price_cell.col
@@ -1094,23 +1056,6 @@ def update_wb_fin_model_report() -> None:
     if warehouse_sales_address not in sales_terms:
         sales_terms.append(warehouse_sales_address)
     sales_total_formula = "=" + "+".join(sales_terms)
-    report_labels = google_connect.execute_with_retry(
-        "чтение названий статей управленческого отчёта",
-        worksheet.col_values,
-        in_transit_label_cell.col,
-    )
-    payment_label_rows = {
-        str(value).strip(): row_number
-        for row_number, value in enumerate(report_labels, start=1)
-        if str(value).strip() in payment_report_stages
-    }
-    missing_payment_labels = set(payment_report_stages) - payment_label_rows.keys()
-    if missing_payment_labels:
-        raise ValueError(
-            "На листе управленческого отчёта не найдены строки этапов платежа: "
-            f"{', '.join(sorted(missing_payment_labels))}."
-        )
-
     target_ranges = [
         {
             "range": (
@@ -1160,29 +1105,6 @@ def update_wb_fin_model_report() -> None:
             "values": [[sales_total_formula]],
         },
     ])
-    target_ranges.append(
-        {
-            "range": rowcol_to_a1(arrived_debt_label_cell.row, cost_cell.col),
-            "values": [[arrived_supplier_debt]],
-        }
-    )
-    target_ranges.append(
-        {
-            "range": rowcol_to_a1(in_transit_debt_label_cell.row, cost_cell.col),
-            "values": [[in_transit_supplier_debt]],
-        }
-    )
-    for label, stages in payment_report_stages.items():
-        target_ranges.append({
-            "range": rowcol_to_a1(payment_label_rows[label], cost_cell.col),
-            "values": [[sum(payment_stage_totals[stage] for stage in stages)]],
-        })
-    first_debt_cell = rowcol_to_a1(arrived_debt_label_cell.row, cost_cell.col)
-    last_debt_cell = rowcol_to_a1(overdraft_label_cell.row, cost_cell.col)
-    target_ranges.append({
-        "range": rowcol_to_a1(total_debt_label_cell.row, cost_cell.col),
-        "values": [[f"=SUM({first_debt_cell}:{last_debt_cell})"]],
-    })
     execution_timestamp = datetime.now(MOSCOW_TZ).strftime("%d.%m.%Y %H:%M:%S")
     target_ranges.append(
         {
@@ -1194,22 +1116,17 @@ def update_wb_fin_model_report() -> None:
         }
     )
     google_connect._execute_google_write_with_retry(
-        operation_name=(
-            "обновление остатков ВВТ, трёх категорий WB и задолженности"
-        ),
+        operation_name="обновление остатков ВВТ, трёх категорий WB и товара в пути",
         func=worksheet.batch_update,
         data=target_ranges,
         value_input_option="USER_ENTERED",
     )
     logger.info(
         "Финансовые показатели записаны в управленческий отчёт | "
-        "warehouse_row=%s | wb_rows=%s | in_transit_row=%s | arrived_debt_row=%s | "
-        "in_transit_debt_row=%s",
+        "warehouse_row=%s | wb_rows=%s | in_transit_row=%s",
         warehouse_label_cell.row,
         ",".join(str(cell.row) for cell in wb_label_cells.values()),
         in_transit_label_cell.row,
-        arrived_debt_label_cell.row,
-        in_transit_debt_label_cell.row,
     )
 
 # python -m src_oop.jobs.fin_reports_analyze.run
