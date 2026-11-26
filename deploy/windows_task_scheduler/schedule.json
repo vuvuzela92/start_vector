@@ -31,6 +31,7 @@
     {"name": "purchase_price_update_run", "schedule": "hourly at minute 07"},
     {"name": "conditional_calculation_to_db_run", "schedule": "hourly at minute 20"},
     {"name": "update_conditional_calculations_to_gs", "schedule": "hourly at minute 23"},
+    {"name": "update_penalties_to_gs", "schedule": "hourly at minute 25"},
     {"name": "set_orders_quantity", "schedule": "hourly at minute 06"},
     {"name": "transport_orders_and_supply", "schedule": "hourly at minute 00, 15, 30, 45"},
     {"name": "update_supplies_1c_in_purchase_russia", "schedule": "hourly at minute 17"},

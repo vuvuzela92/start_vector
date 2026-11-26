@@ -47,6 +47,7 @@ from src_oop.jobs.calculation_of_purchases_russia.run import (
 from src_oop.jobs.conditional_calculations.run import (
     conditional_calculation_to_db_run,
     update_conditional_calculations_to_gs,
+    update_penalties_to_gs,
 )
 from src_oop.jobs.fin_reports_analyze.run import (
     update_cash_flow_writeoffs,
@@ -311,6 +312,10 @@ TASKS: Dict[str, Dict[str, Any]] = {
         "func": smart_run(update_conditional_calculations_to_gs),
         "desc": "PostgreSQL `conditions_calculation` → Google Sheets «Условный расчет», лист «Справочная информация»: публикация рассчитанных условных показателей",
     },
+    "update_penalties_to_gs": {
+        "func": smart_run(update_penalties_to_gs),
+        "desc": "PostgreSQL `daily_fin_reports_full`, `orders`, `article`, `assembly_task_status_model` → Google Sheets «Условный расчет», лист «Штрафы»: обновление детализации штрафов за последние 14 недель",
+    },
     # Финансовая аналитика и управленческая отчетность.
     "update_fin_reports_art_analyze": {
         "func": smart_run(update_fin_reports_art_analyze),
@@ -350,7 +355,7 @@ TASKS: Dict[str, Dict[str, Any]] = {
     },
     "update_wb_fin_model_report": {
         "func": smart_run(update_wb_fin_model_report),
-        "desc": "PostgreSQL `wb_stock_2`, `prices_data`, `article`, `cost_price`; Google Sheets «Расчет поставки Китай_по обороту», лист «Заказы белые ТЕСТ»; Google Sheets «UNIT 2.0 (tested)», листы «Сопост» и «WMS остатки»; Google Sheets «Платежный календарь», лист «Аналитика_платежей» → Google Sheets «Модель фин отчетов», лист «Фин отчет управл»: количество и стоимость остатков склада ВВТ, три категории WB по всем складам, товар в пути до ВВТ по цене поставщика, себестоимости и цене продаж, а также неоплаченные задолженности",
+        "desc": "PostgreSQL `wb_stock_2`, `prices_data`, `article`, `cost_price`; Google Sheets «Расчет поставки Китай_по обороту», лист «Заказы белые ТЕСТ»; Google Sheets «UNIT 2.0 (tested)», листы «Сопост» и «WMS остатки» → Google Sheets «Модель фин отчетов», лист «Фин отчет управл»: количество и стоимость остатков склада ВВТ, три категории WB по всем складам, товар в пути до ВВТ по цене поставщика, себестоимости и цене продаж",
     },
     "run_system_penalties_analysis": {
         "func": smart_run(run_system_penalties_analysis),
