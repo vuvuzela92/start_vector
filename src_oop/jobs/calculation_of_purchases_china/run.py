@@ -2,9 +2,7 @@ import logging
 
 import pandas as pd
 
-from src_oop.jobs.calculation_of_purchases_china.config import (
-    payments_calendar, payments_calendar_form,
-)
+from src_oop.core.my_gspread import GoogleTabs
 from src_oop.jobs.calculation_of_purchases_china.orders_white_balance_analytics import (
     OrdersWhiteBalanceAnalyticsService,
 )
@@ -34,6 +32,7 @@ def _build_combined_balance_with_ved() -> tuple[pd.DataFrame, VedBalanceAnalytic
 
     balance_df = orders_service.run(upload=False)
     ved_balance_df = ved_service.run()
+    balance_df["_currency"] = ""
 
     alignment_result = ved_service.align_to_balance_columns(
         ved_balance_df=ved_balance_df,
@@ -104,31 +103,18 @@ def transport_quarterly_plan_to_pivot() -> None:
 
 
 def update_payments_analyze_with_ved() -> None:
-    """
-    Обновляет production-лист платежного календаря по объединенной white + VED аналитике.
-
-    Что делает функция:
-    - считает часть по белым заказам без промежуточной выгрузки;
-    - считает VED-часть по листу `ОТЧЁТ_2.0`;
-    - приводит VED-данные к общей структуре платежной аналитики;
-    - объединяет обе части в один итоговый DataFrame;
-    - добавляет служебные колонки для платежного календаря;
-    - записывает результат в `payments_calendar / Аналитика_платежей`.
-
-    Это основной и единственный актуальный entrypoint для CLI и webhook.
-    Старые вспомогательные режимы выгрузки убраны, чтобы в проекте
-    оставался один понятный сценарий обновления боевой аналитики.
-    """
+    """Обновляет лист «Аналитика_платежей» основного платежного календаря."""
     combined_balance_df, ved_service = _build_combined_balance_with_ved()
+    if combined_balance_df.empty:
+        logger.warning("Пустая аналитика платежей, выгрузка пропущена.")
+        return
     df_upload = ved_service.prepare_dataframe_for_upload(combined_balance_df)
-    ved_service.upload_to_sheet(
-        df_upload=df_upload,
-        target_table_name=payments_calendar["title"],
-        target_sheet_name=payments_calendar["analytic_sheet"],
+    target = GoogleTabs(
+        table_title="Платежный календарь",
+        sheet_title="Аналитика_платежей",
+        spreadsheet_id="1lL9LSIBE5IxXIrx-R5aBu-DUib6wHuK2TU9fUpS9xOs",
     )
-    # Добавляем данные в таблицу Форма Платеж календарь финансового директора
-    ved_service.upload_to_sheet(
-        df_upload=df_upload,
-        target_table_name=payments_calendar_form["title"],
-        target_sheet_name=payments_calendar_form["analytic_sheet"],
-    )
+    sheet = target.sheet_title
+    if sheet.col_count < len(df_upload.columns):
+        sheet.add_cols(len(df_upload.columns) - sheet.col_count)
+    target.set_df_to_google(df_upload)
