@@ -30,7 +30,7 @@ class ConditionalCalculationsRepository:
             SELECT
                 UPPER(TRIM(o.account)) AS account,
                 SUM(o.orders_sum_rub) AS orders_sum,
-                ROUND(SUM(o.sales_revenue_rep)) AS sales_sum,
+                ROUND(SUM(o.sales_sum)) AS sales_sum,
                 ROUND(SUM(o.profit_by_cond_orders)) AS profit_by_ind_cond_orders,
                 ROUND(SUM(o.profit_by_cond_sales)) AS profit_by_ind_cond_sales,
                 SUM(o.sales_count_rep) AS sales_count,
