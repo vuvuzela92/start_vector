@@ -21,6 +21,13 @@ class ConditionalCalculationsRepository:
         Бизнес-сценарий: собирает базовые показатели продаж из
         `orders_articles_analyze` и дополняет их финансовыми удержаниями WB из
         `daily_fin_reports_full` по бизнес-дате фин. отчета `date_from`.
+        Выручка и количество продаж берутся из sales_sum и sales_count
+        готовой артикульной витрины. Себестоимость продаж суммируется
+        построчно как sales_count * purchase_price, как и в условной прибыли.
+        Возвраты уже вычтены из sales_count; повторно их не вычитаем.
+        Денежные итоги округляются до рублей после суммирования по дню
+        и аккаунту. Отсутствующие значения обрабатываются по правилам
+        существующей витрины и её подготовки перед записью.
         Штрафы, итог к оплате и кредитные перечисления считаются
         на уровне дня и аккаунта, чтобы в БД и выгрузке была одна строка
         `date + account` с полной финансовой картиной.
@@ -33,7 +40,7 @@ class ConditionalCalculationsRepository:
                 ROUND(SUM(o.sales_sum)) AS sales_sum,
                 ROUND(SUM(o.profit_by_cond_orders)) AS profit_by_ind_cond_orders,
                 ROUND(SUM(o.profit_by_cond_sales)) AS profit_by_ind_cond_sales,
-                SUM(o.sales_count_rep) AS sales_count,
+                SUM(o.sales_count) AS sales_count,
                 SUM(o.orders_count) AS order_count,
                 SUM(o.adv_spend) AS adv_spend,
                 SUM(o.bonuses) AS bonuses,
@@ -41,7 +48,7 @@ class ConditionalCalculationsRepository:
                     SUM(o.profit_by_cond_sales) - SUM(o.adv_spend)
                 ) AS profit_cond_sales_minus_adv_spend,
                 ROUND(SUM(o.orders_count * o.purchase_price)) AS cost_price_orders,
-                ROUND(SUM(o.sales_count_rep * o.purchase_price)) AS cost_price_sales,
+                ROUND(SUM(o.sales_count * o.purchase_price)) AS cost_price_sales,
                 SUM(o.profit_by_orders) AS general_profit_orders,
                 o.date
             FROM orders_articles_analyze o
@@ -132,6 +139,72 @@ class ConditionalCalculationsRepository:
             AND fin_report.account = orders.account;
     """)
 
+        return Database.read_sql_to_dataframe(query)
+
+    def get_penalties_for_google_sheets(self):
+        """Загружает детализацию штрафов для вкладки «Штрафы».
+
+        Бизнес-сценарий: готовит для коммерческой команды разбор штрафных
+        операций WB за последние 14 недель с товаром, заказом, стикером,
+        сборочным заданием и его последними известными статусами. Строки без
+        штрафа не выгружаются; последняя версия статуса выбирается по
+        `created_at_db` для каждого сборочного задания.
+        """
+        query = text("""
+        WITH latest_assembly_status AS (
+            SELECT DISTINCT ON (id)
+                id,
+                supplier_status,
+                wb_status,
+                supply_id
+            FROM assembly_task_status_model
+            ORDER BY id, created_at_db DESC
+        )
+        SELECT
+            penalties.date_from,
+            penalties.sale_dt,
+            SUM(penalties.penalty) AS penalty,
+            COUNT(penalties.nm_id) AS count_items,
+            penalties.bonus_type_name,
+            penalties.nm_id,
+            penalties.subject_name,
+            penalties.account,
+            penalties.srid,
+            orders.warehouse_type,
+            orders.date AS order_date,
+            article.local_vendor_code,
+            penalties.shk_id,
+            penalties.assembly_id,
+            latest_assembly_status.supplier_status,
+            latest_assembly_status.wb_status,
+            latest_assembly_status.supply_id
+        FROM daily_fin_reports_full AS penalties
+        LEFT JOIN orders
+            ON penalties.srid = orders.srid
+        LEFT JOIN article
+            ON penalties.nm_id = article.nm_id
+        LEFT JOIN latest_assembly_status
+            ON penalties.assembly_id = latest_assembly_status.id
+        WHERE penalties.penalty <> 0
+            AND penalties.date_from >= CURRENT_DATE - INTERVAL '14 weeks'
+        GROUP BY
+            penalties.date_from,
+            penalties.sale_dt,
+            penalties.bonus_type_name,
+            penalties.nm_id,
+            penalties.subject_name,
+            penalties.account,
+            penalties.srid,
+            orders.warehouse_type,
+            orders.date,
+            article.local_vendor_code,
+            penalties.shk_id,
+            penalties.assembly_id,
+            latest_assembly_status.supplier_status,
+            latest_assembly_status.wb_status,
+            latest_assembly_status.supply_id
+        ORDER BY penalties.date_from DESC, SUM(penalties.penalty) DESC
+        """)
         return Database.read_sql_to_dataframe(query)
     
 

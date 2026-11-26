@@ -65,3 +65,94 @@ def update_conditional_calculations_to_gs(
         print(f"Не найден лист {sheet_name} в таблице {table_name}")
     except RuntimeError as e:
         print(f"Ошибка подключения: {e}")
+
+
+def update_penalties_to_gs(
+    table_name: str = "Условный расчет",
+    sheet_name: str = "Штрафы",
+) -> None:
+    """Публикует детализацию штрафов WB на вкладку условного расчёта.
+
+    Бизнес-сценарий: загружает штрафные операции за последние 14 недель,
+    добавляет сведения о товаре и статусах сборочного задания, переводит
+    ключевые статусы на русский язык и полностью обновляет вкладку «Штрафы».
+    Если за период штрафов нет, текущая вкладка сохраняется без очистки.
+    """
+    repo = ConditionalCalculationsRepository()
+    df = repo.get_penalties_for_google_sheets()
+    if df is None or df.empty:
+        logger.warning(
+            "Выгрузка штрафов пропущена: за последние 14 недель строк со штрафами нет."
+        )
+        return
+
+    status_translations = {
+        "supplier_status": {
+            "new": "Новое сборочное задание",
+            "confirm": "На сборке",
+            "complete": "В доставке",
+            "cancel": "Отменено продавцом",
+        },
+        "wb_status": {
+            "waiting": "сборочное задание в работе",
+            "sorted": "сборочное задание отсортировано",
+            "sold": "заказ получен покупателем",
+            "canceled": "отмена сборочного задания",
+            "canceled_by_client": "покупатель отменил заказ при получении",
+            "declined_by_client": (
+                "покупатель отменил заказ. Отмена доступна покупателю в первый час "
+                "с момента заказа, если заказ не переведён на сборку"
+            ),
+            "defect": "отмена заказа по причине брака",
+            "ready_for_pickup": (
+                "сборочное задание прибыло на пункт выдачи заказов (ПВЗ)"
+            ),
+        },
+    }
+    for column_name, translations in status_translations.items():
+        if column_name in df.columns:
+            df[column_name] = df[column_name].replace(translations)
+
+    df = df.rename(
+        columns={
+            "date_from": "Дата отчета",
+            "sale_dt": "Дата продажи",
+            "penalty": "Штраф",
+            "count_items": "Количество",
+            "bonus_type_name": "Вид штрафа",
+            "nm_id": "SKU",
+            "subject_name": "Предмет",
+            "account": "ЛК",
+            "local_vendor_code": "wild",
+            "shk_id": "Стикер",
+            "assembly_id": "Сборочное задание",
+            "supplier_status": "Статус СЗ у продавца",
+            "wb_status": "Cтатус СЗ в системе WB",
+            "supply_id": "Номер поставки",
+        }
+    )
+    for column_name in ("Дата продажи", "Дата отчета", "order_date"):
+        if column_name in df.columns:
+            df[column_name] = df[column_name].astype(str)
+    df = df.sort_values(
+        ["Дата отчета", "Штраф"],
+        ascending=[False, False],
+    )
+
+    try:
+        GoogleTabs(table_title=table_name, sheet_title=sheet_name).set_df_to_google(df)
+        logger.info(
+            "Детализация штрафов опубликована в Google Sheets | строк=%s | вкладка=%s",
+            len(df.index),
+            sheet_name,
+        )
+    except gspread.exceptions.SpreadsheetNotFound:
+        logger.error("Таблица Google Sheets «%s» не найдена.", table_name)
+        raise
+    except gspread.exceptions.WorksheetNotFound:
+        logger.error(
+            "Вкладка Google Sheets «%s» в таблице «%s» не найдена.",
+            sheet_name,
+            table_name,
+        )
+        raise
