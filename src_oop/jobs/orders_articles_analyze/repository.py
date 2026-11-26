@@ -224,9 +224,9 @@ class ArticleAnalyzeRepository:
                     )
                 ) AS profit_by_cond_orders,
 
-                -- Основной источник реализаций — последний финансовый snapshot.
-                COALESCE(fin_sales.sales_sum, s.sales_sum, orders_sales.sales_sum, 0) AS sales_sum,
-                COALESCE(fin_sales.sales_count, s.sales_count, orders_sales.sales_count, 0) AS sales_count,
+                -- Продажи берём только из последнего финансового snapshot.
+                COALESCE(fin_sales.sales_sum, 0) AS sales_sum,
+                COALESCE(fin_sales.sales_count, 0) AS sales_count,
 
                 ROUND(
                     COALESCE(fin_sales.sales_sum, 0) * (
@@ -308,12 +308,6 @@ class ArticleAnalyzeRepository:
                 GROUP BY anpd.article_id, anpd."date"
             ) anpd ON anpd.article_id = b.article_id AND anpd."date" = b."date"
             LEFT JOIN (
-                SELECT s.date, s.article_id, SUM(s.price_with_disc) AS sales_sum, COUNT(s.is_realization) AS sales_count
-                FROM sales s
-                WHERE is_realization IS TRUE AND s.date BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days' AND CURRENT_DATE - INTERVAL '{days_to} days'
-                GROUP BY s.article_id, s.date
-            ) s ON s.article_id = b.article_id AND s."date" = b."date"
-            LEFT JOIN (
                 SELECT
                     DATE(financial_sales.date_from) AS date,
                     financial_sales.nm_id AS article_id,
@@ -367,18 +361,6 @@ class ArticleAnalyzeRepository:
                 GROUP BY DATE(financial_sales.date_from), financial_sales.nm_id
             ) fin_sales ON fin_sales.article_id = b.article_id
                 AND fin_sales.date = b.date
-            -- sales и orders используются только как fallback для отсутствующих финансовых данных.
-            LEFT JOIN (
-                SELECT ord_sales.date, ord_sales.article_id,
-                    SUM(ord_sales.price_with_disc) AS sales_sum,
-                    COUNT(*) AS sales_count
-                FROM orders ord_sales
-                WHERE ord_sales.is_realization IS TRUE
-                    AND ord_sales.date BETWEEN CURRENT_DATE - INTERVAL '{days_ago} days'
-                    AND CURRENT_DATE - INTERVAL '{days_to} days'
-                GROUP BY ord_sales.article_id, ord_sales.date
-            ) orders_sales ON orders_sales.article_id = b.article_id
-                AND orders_sales."date" = b."date"
             LEFT JOIN (
                 SELECT pami.date, pami.nm_id, pami.manager, pami.promo_title, pami.promo_status
                 FROM promo_and_managers_info AS pami

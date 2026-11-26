@@ -27,17 +27,18 @@ class ProcessArticleAnalyze:
     def _recalculate_financial_sales_profit(df: pd.DataFrame) -> pd.DataFrame:
         """Считает условную прибыль только по продажам из финансового отчёта.
 
-        Бизнес-правило: для показателя прибыли от продаж нетто-выручка и
-        нетто-количество и фактический эквайринг из финансового отчёта
-        сопоставляются по аккаунту, артикулу и дате. Налог составляет 8% до
+        Бизнес-правило: выручка sales_sum и количество sales_count берутся из
+        одного агрегата последнего финансового снимка по артикулу и дате.
+        Фактический эквайринг берётся из финансового отчёта после сопоставления
+        по аккаунту, артикулу и дате. Налог составляет 8% до
         1 июля 2026 года и 5% начиная с этой даты. Если нет финансовой
-        выручки или ставки комиссии, прибыль этой строки равна нулю; источники
+        ставки комиссии, прибыль этой строки равна нулю; источники
         `sales` и `orders` не подменяют финансовые данные. Количество возвратов
         уже вычтено из количества продаж и определяет нетто-себестоимость.
         """
         required_columns = {
-            "sales_revenue_rep",
-            "sales_count_rep",
+            "sales_sum",
+            "sales_count",
             "purchase_price",
             "ind_comission_fbo",
             "acquiring_fee_rep",
@@ -50,8 +51,8 @@ class ProcessArticleAnalyze:
                 f"отсутствуют колонки {missing_columns}"
             )
 
-        revenue = pd.to_numeric(df["sales_revenue_rep"], errors="coerce").fillna(0)
-        sales_count = pd.to_numeric(df["sales_count_rep"], errors="coerce").fillna(0)
+        revenue = pd.to_numeric(df["sales_sum"], errors="coerce").fillna(0)
+        sales_count = pd.to_numeric(df["sales_count"], errors="coerce").fillna(0)
         purchase_price = pd.to_numeric(df["purchase_price"], errors="coerce").fillna(0)
         commission_pct = pd.to_numeric(df["ind_comission_fbo"], errors="coerce")
         acquiring_fee = pd.to_numeric(df["acquiring_fee_rep"], errors="coerce").fillna(0)
