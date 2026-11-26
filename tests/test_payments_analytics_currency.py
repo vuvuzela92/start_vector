@@ -26,6 +26,23 @@ def test_conversion_preserves_existing_columns():
     assert result.columns[-2:].tolist() == ["updated_at", "Валюта из логистики"]
 
 
+def test_ruble_logistics_uses_original_amounts():
+    stages = ["Российская доставка", "Брокерское оформление", "Таможенные платежи КРЕДО",
+              "Брокерское оформление КРЕДО", "Агентское вознаграждение КРЕДО",
+              "Хранение", "Услуги по КТС"]
+    frame = pd.DataFrame({"Этап платежа": stages, "Поставщик": "", "_currency": "",
+                          "Дата_платеж_календарь": "", "Дата_план": "",
+                          "Сумма_оплаты": 10.25, "Оплачено": 0, "Не_оплачено": 10.25})
+    with patch.object(ved, "load_cbr_rates") as rates:
+        result = ved.VedBalanceAnalyticsService.prepare_dataframe_for_upload(frame)
+    rates.assert_not_called()
+    for amount in ("Сумма_оплаты", "Оплачено", "Не_оплачено"):
+        position = result.columns.get_loc(amount)
+        assert result.iloc[:, position + 1].eq("рубли").all()
+        assert result.iloc[:, position + 2].eq(frame[amount]).all()
+    assert result["Валюта из логистики"].eq("").all()
+
+
 def test_single_destination():
     """Проверяет единственную запись и расширение сетки только целевого листа."""
     frame = pd.DataFrame([[1] * 33])

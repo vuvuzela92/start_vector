@@ -578,6 +578,12 @@ class VedBalanceAnalyticsService:
         df_upload = df_upload.loc[:, base_columns + service_columns]
         logistics_currency = df_upload.pop("_currency").fillna("").astype(str).str.strip()
         currency = logistics_currency.copy()
+        ruble_stages = {
+            "Российская доставка", "Брокерское оформление", "Таможенные платежи КРЕДО",
+            "Брокерское оформление КРЕДО", "Агентское вознаграждение КРЕДО",
+            "Хранение", "Услуги по КТС",
+        }
+        currency.loc[currency.eq("") & stage_normalized.isin(ruble_stages)] = "рубли"
         supplier = df_upload["Поставщик"].fillna("").astype(str).str.strip()
         china = stage_normalized.isin(["Аванс", "Баланс 1", "Баланс 2"]) & supplier.ne("")
         currency.loc[china] = "юани"
