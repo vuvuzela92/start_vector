@@ -487,7 +487,7 @@ def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> Non
     Запускает полный сценарий построения и записи артикульного анализа по дням.
 
     Функция собирает витрину `orders_articles_analyze`, очищает невалидные ключи,
-    проверяет дубли и пишет данные в PostgreSQL порциями по 1000 строк, чтобы
+    проверяет дубли и пишет данные в PostgreSQL порциями по 200 строк, чтобы
     не перегружать сервер крупным upsert. Перед записью
     дополнительно выполняет защитную диагностику integer-диапазонов, чтобы
     заранее ловить переполнения схемы и логировать проблемные строки.
@@ -622,7 +622,7 @@ def orders_article_analyze_run(days_ago_total: int = 2, days_to: int = 1) -> Non
                 data=df,
                 schema_definition=scheme,
                 unique_keys=unique_keys,
-                chunk_size=1000,
+                chunk_size=200,
             )
             logger.info(
                 "Синхронизация с PostgreSQL завершена | day=%s | table=%s | rows=%s",
