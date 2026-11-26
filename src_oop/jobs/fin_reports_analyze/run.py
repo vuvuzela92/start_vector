@@ -835,13 +835,12 @@ def update_wb_fin_model_report() -> None:
     цен товар учитывается с нулевой клиентской стоимостью и предупреждением.
     Чтение клиентских цен WMS повторяется при временной ошибке сети.
     Также считает неоплаченную задолженность по прибывшим заказам, заказам в
-    пути и этапам платёжного календаря. Брокерская статья объединяет два этапа,
-    а общая таможенная задолженность — три этапа КРЕДО. Затем обновляет
-    целевые ячейки витрины: цену поставщика, себестоимость и цену клиента
-    товара в пути пишет в соответствующие колонки, а задолженности — в поля
-    «по себестоимости». Итог активов учитывает себестоимость товара в пути.
-    Итог задолженности исключает справочную общую строку таможни, чтобы её
-    этапы не учитывались дважды.
+    пути и этапам платёжного календаря. Брокерская статья объединяет два этапа.
+    Затем обновляет целевые ячейки витрины: цену поставщика, себестоимость и
+    цену клиента товара в пути пишет в соответствующие колонки, а задолженности
+    — в поля «по себестоимости». Итог активов учитывает себестоимость товара в пути.
+    Итог задолженности суммирует отдельные статьи без справочной общей строки
+    таможни, удалённой из витрины.
     """
     dataframe = Database.read_sql_to_dataframe(query_wb_stock_financial_report)
     if dataframe.empty:
@@ -979,14 +978,6 @@ def update_wb_fin_model_report() -> None:
         for stages in payment_report_stages.values()
         for stage in stages
     })
-    customs_debt = sum(
-        payment_stage_totals[stage]
-        for stage in (
-            "Брокерское оформление КРЕДО",
-            "Агентское вознаграждение КРЕДО",
-            "Таможенные платежи КРЕДО",
-        )
-    )
     spreadsheet_id = "1Cqr7pb0RKglLgQAc00o8bj5jiL14G1qOD_dSAWrpD2Y"
     worksheet_name = "Фин отчет управл"
     logger.info(
@@ -1006,7 +997,6 @@ def update_wb_fin_model_report() -> None:
     in_transit_label = "Товар в пути до склада ВВТ Вектор по цене поставщика"
     arrived_debt_label = "Задолженность перед поставщиками за прибывший товар*"
     in_transit_debt_label = "Задолженность перед поставщиками за товар в пути*"
-    customs_debt_label = "Задолженность перед таможней"
     overdraft_label = "Овердрафт"
     total_debt_label = "Всего задолженность"
     total_assets_label = "Всего активы"
@@ -1014,7 +1004,6 @@ def update_wb_fin_model_report() -> None:
     in_transit_label_cell = worksheet.find(in_transit_label)
     arrived_debt_label_cell = worksheet.find(arrived_debt_label)
     in_transit_debt_label_cell = worksheet.find(in_transit_debt_label)
-    customs_debt_label_cell = worksheet.find(customs_debt_label)
     overdraft_label_cell = worksheet.find(overdraft_label)
     total_debt_label_cell = worksheet.find(total_debt_label)
     wb_label_cells = {
@@ -1030,7 +1019,6 @@ def update_wb_fin_model_report() -> None:
         or in_transit_label_cell is None
         or arrived_debt_label_cell is None
         or in_transit_debt_label_cell is None
-        or customs_debt_label_cell is None
         or overdraft_label_cell is None
         or total_debt_label_cell is None
         or any(cell is None for cell in wb_label_cells.values())
@@ -1043,8 +1031,7 @@ def update_wb_fin_model_report() -> None:
         raise ValueError(
             "На листе управленческого отчёта не найдена строка остатков ВВТ "
             "или одна из трёх строк остатков WB, строка товара в пути, "
-            "задолженности, итога активов "
-            "или один из целевых заголовков."
+            "задолженности, итог активов или один из целевых заголовков."
         )
     supplier_in_transit_address = rowcol_to_a1(
         in_transit_label_cell.row, supplier_price_cell.col
@@ -1185,12 +1172,6 @@ def update_wb_fin_model_report() -> None:
             "values": [[in_transit_supplier_debt]],
         }
     )
-    target_ranges.append(
-        {
-            "range": rowcol_to_a1(customs_debt_label_cell.row, cost_cell.col),
-            "values": [[customs_debt]],
-        }
-    )
     for label, stages in payment_report_stages.items():
         target_ranges.append({
             "range": rowcol_to_a1(payment_label_rows[label], cost_cell.col),
@@ -1198,12 +1179,9 @@ def update_wb_fin_model_report() -> None:
         })
     first_debt_cell = rowcol_to_a1(arrived_debt_label_cell.row, cost_cell.col)
     last_debt_cell = rowcol_to_a1(overdraft_label_cell.row, cost_cell.col)
-    customs_debt_cell = rowcol_to_a1(customs_debt_label_cell.row, cost_cell.col)
     target_ranges.append({
         "range": rowcol_to_a1(total_debt_label_cell.row, cost_cell.col),
-        "values": [[
-            f"=SUM({first_debt_cell}:{last_debt_cell})-{customs_debt_cell}"
-        ]],
+        "values": [[f"=SUM({first_debt_cell}:{last_debt_cell})"]],
     })
     execution_timestamp = datetime.now(MOSCOW_TZ).strftime("%d.%m.%Y %H:%M:%S")
     target_ranges.append(
@@ -1226,13 +1204,12 @@ def update_wb_fin_model_report() -> None:
     logger.info(
         "Финансовые показатели записаны в управленческий отчёт | "
         "warehouse_row=%s | wb_rows=%s | in_transit_row=%s | arrived_debt_row=%s | "
-        "in_transit_debt_row=%s | customs_debt_row=%s",
+        "in_transit_debt_row=%s",
         warehouse_label_cell.row,
         ",".join(str(cell.row) for cell in wb_label_cells.values()),
         in_transit_label_cell.row,
         arrived_debt_label_cell.row,
         in_transit_debt_label_cell.row,
-        customs_debt_label_cell.row,
     )
 
 # python -m src_oop.jobs.fin_reports_analyze.run
