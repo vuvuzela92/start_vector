@@ -186,7 +186,7 @@ class ConditionalCalculationsRepository:
         LEFT JOIN latest_assembly_status
             ON penalties.assembly_id = latest_assembly_status.id
         WHERE penalties.penalty <> 0
-            AND penalties.date_from >= CURRENT_DATE - INTERVAL '14 weeks'
+            AND penalties.date_from >= CURRENT_DATE - INTERVAL '365 days'
         GROUP BY
             penalties.date_from,
             penalties.sale_dt,
