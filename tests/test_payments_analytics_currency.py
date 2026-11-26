@@ -19,11 +19,11 @@ def test_conversion_preserves_existing_columns():
     with patch.object(ved, "load_cbr_rates", return_value={"CNY": 12, "EUR": 90, "USD": 80}) as rates:
         result = ved.VedBalanceAnalyticsService.prepare_dataframe_for_upload(frame)
     rates.assert_called_once_with()
-    assert result.columns[:7].tolist() == frame.columns[:7].tolist()
-    assert result.columns[-8] == "updated_at"
-    assert result.iloc[:, -6].tolist() == [120, 10, 900, ""]
-    assert result.iloc[:, -4].tolist() == [36, 3, 270, ""]
-    assert result.iloc[:, -2].tolist() == [84, 7, 630, ""]
+    for amount, expected in zip(frame.columns[4:7], ([120, 10, 900, ""], [36, 3, 270, ""], [84, 7, 630, ""])):
+        position = result.columns.get_loc(amount)
+        assert result.columns[position + 1:position + 3].tolist() == ["валюта", "сумма в рублях"]
+        assert result.iloc[:, position + 2].tolist() == expected
+    assert result.columns[-2:].tolist() == ["updated_at", "Валюта из логистики"]
 
 
 def test_single_destination():

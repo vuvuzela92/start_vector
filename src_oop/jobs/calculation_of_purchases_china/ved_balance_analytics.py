@@ -590,8 +590,7 @@ class VedBalanceAnalyticsService:
             rates.update(load_cbr_rates())
         multipliers = codes.map(rates)
         for amount in ("Сумма_оплаты", "Оплачено", "Не_оплачено"):
-            # Формулы рабочего календаря используют прежние адреса A:Z.
-            index = len(df_upload.columns)
+            index = df_upload.columns.get_loc(amount) + 1
             df_upload.insert(index, "валюта", currency, allow_duplicates=True)
             converted = pd.to_numeric(df_upload[amount], errors="coerce") * multipliers
             rubles = converted.astype(object).where(converted.notna(), "")
