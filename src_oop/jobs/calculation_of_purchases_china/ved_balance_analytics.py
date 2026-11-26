@@ -1,7 +1,9 @@
 ﻿import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from urllib.request import urlopen
+from xml.etree import ElementTree
 
 import pandas as pd
 
@@ -17,6 +19,25 @@ from src_oop.jobs.calculation_of_purchases_china.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def load_cbr_rates() -> dict[str, float]:
+    """Получает официальные рублёвые курсы за единицу валюты на московскую дату."""
+    today = datetime.now(timezone(timedelta(hours=3))).strftime("%d/%m/%Y")
+    with urlopen(f"https://www.cbr.ru/scripts/XML_daily.asp?date_req={today}", timeout=20) as response:
+        bulletin = ElementTree.parse(response).getroot()
+    rates = {}
+    for entry in bulletin.findall("Valute"):
+        code = entry.findtext("CharCode")
+        if code in {"CNY", "USD", "EUR"}:
+            rate = float(entry.findtext("Value").replace(",", ".")) / int(entry.findtext("Nominal"))
+            if not 0 < rate < float("inf"):
+                raise ValueError(f"Некорректный курс ЦБ для {code}")
+            rates[code] = rate
+    if rates.keys() != {"CNY", "USD", "EUR"}:
+        raise ValueError("В ответе ЦБ отсутствуют обязательные валюты")
+    logger.info("Курсы ЦБ на %s: %s", bulletin.get("Date"), rates)
+    return rates
 
 
 @dataclass(slots=True)
@@ -251,6 +272,16 @@ class VedBalanceAnalyticsService:
         df_payment["_Порядок исходной строки"] = range(len(df_payment))
         stage_name = str(payment_config["Этап платежа"]).strip()
         df_payment["Этап платежа"] = stage_name
+        currency_columns = {
+            "Международная перевозка": "РАСХОДЫ ЗА МЕЖДУНАРОДНУЮ ТРАНСПОРТИРОВКУ, Валюта",
+            "Страхование груза": "РАСХОДЫ СТРАХОВАНИЕ ГРУЗА, Валюта",
+            "Простой": "РАСХОДЫ на ПРОСТОЙ, Валюта",
+        }
+        source_currency = currency_columns.get(stage_name)
+        df_payment["_currency"] = (
+            df_source[source_currency].fillna("").astype(str).str.strip()
+            if source_currency in df_source.columns else ""
+        )
         df_payment["Номер этапа платежа"] = payment_config["Номер этапа платежа"]
 
         for target_column, source_column in payment_columns.items():
@@ -545,6 +576,27 @@ class VedBalanceAnalyticsService:
             if column not in {"Месяц", *service_columns}
         ]
         df_upload = df_upload.loc[:, base_columns + service_columns]
+        logistics_currency = df_upload.pop("_currency").fillna("").astype(str).str.strip()
+        currency = logistics_currency.copy()
+        supplier = df_upload["Поставщик"].fillna("").astype(str).str.strip()
+        china = stage_normalized.isin(["Аванс", "Баланс 1", "Баланс 2"]) & supplier.ne("")
+        currency.loc[china] = "юани"
+        currency.loc[china & supplier.str.contains("ZILOL", case=False, regex=False)] = "рубли"
+        aliases = dict.fromkeys(["РУБЛИ", "РУБ", "РУБ.", "РУБЛЬ", "₽", "RUR"], "RUB")
+        aliases.update({"ЮАНИ": "CNY", "RMB": "CNY"})
+        codes = currency.str.upper().replace(aliases)
+        rates = {"RUB": 1.0}
+        if codes.isin(["USD", "CNY", "EUR"]).any():
+            rates.update(load_cbr_rates())
+        multipliers = codes.map(rates)
+        for amount in ("Сумма_оплаты", "Оплачено", "Не_оплачено"):
+            # Формулы рабочего календаря используют прежние адреса A:Z.
+            index = len(df_upload.columns)
+            df_upload.insert(index, "валюта", currency, allow_duplicates=True)
+            converted = pd.to_numeric(df_upload[amount], errors="coerce") * multipliers
+            rubles = converted.astype(object).where(converted.notna(), "")
+            df_upload.insert(index + 1, "сумма в рублях", rubles, allow_duplicates=True)
+        df_upload["Валюта из логистики"] = logistics_currency
         return df_upload
 
     def upload_to_test_sheet(self, df_upload: pd.DataFrame) -> None:
