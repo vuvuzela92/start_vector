@@ -28,9 +28,9 @@ class DailySheetConfig:
     avg_position_current_width: int = 6
     articles_column_index: int = 1
     status_cell: str = "A2"
-    avg_position_current_range_start: str = "IQ"
-    avg_position_current_range_end: str = "IV"
-    avg_position_history_column: str = "IP"
+    avg_position_current_range_start: str = "HZ"
+    avg_position_current_range_end: str = "IE"
+    avg_position_history_column: str = "HY"
 
 
 @dataclass(frozen=True, slots=True)
