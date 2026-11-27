@@ -1,4 +1,4 @@
-from sqlalchemy import Date, String, BigInteger
+from sqlalchemy import Date, String, BigInteger, Numeric
 
 
 # Колонки Условного расчета
@@ -21,6 +21,7 @@ conditional_calculations ={
         'penalties': BigInteger,
         'total_to_pay': BigInteger,
         'credit_transfers': BigInteger,
+        'acquiring_fee': Numeric(18, 2),
         'date': Date
     },
     "unique_keys": ["date", "account"]

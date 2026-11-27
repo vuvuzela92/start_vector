@@ -37,6 +37,10 @@ class ProcessConditionalCalculation:
         # 2. Проходим по всем колонкам
         for col in df.columns:
             if col.lower() not in ["date", "account"]:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(np.int64)
+                numeric_values = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                if col == "acquiring_fee":
+                    df[col] = numeric_values.round(2)
+                else:
+                    df[col] = numeric_values.astype(np.int64)
         
         return df

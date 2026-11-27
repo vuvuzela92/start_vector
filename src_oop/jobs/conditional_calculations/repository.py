@@ -61,6 +61,31 @@ class ConditionalCalculationsRepository:
                 UPPER(TRIM(o.account)),
                 o.date
         ),
+        fin_report_latest AS (
+            SELECT f.*
+            FROM daily_fin_reports_full f
+            INNER JOIN (
+                SELECT
+                    UPPER(TRIM(account)) AS account,
+                    DATE(date_from) AS date,
+                    MAX(create_dt) AS create_dt
+                FROM daily_fin_reports_full
+                WHERE DATE(date_from) >= DATE '2026-01-01'
+                    AND DATE(date_from) <= CURRENT_DATE - INTERVAL '{self.days_to} days'
+                    AND account IS NOT NULL
+                    AND account != '0'
+                    AND account != 'NaN'
+                GROUP BY UPPER(TRIM(account)), DATE(date_from)
+            ) latest
+                ON latest.account = UPPER(TRIM(f.account))
+                AND latest.date = DATE(f.date_from)
+                AND latest.create_dt = f.create_dt
+            WHERE DATE(f.date_from) >= DATE '2026-01-01'
+                AND DATE(f.date_from) <= CURRENT_DATE - INTERVAL '{self.days_to} days'
+                AND f.account IS NOT NULL
+                AND f.account != '0'
+                AND f.account != 'NaN'
+        ),
         fin_report AS (
             SELECT
                 DATE(f.date_from) AS date,
@@ -95,13 +120,17 @@ class ConditionalCalculationsRepository:
                             ELSE 0
                         END
                     )
-                ) AS credit_transfers
-            FROM daily_fin_reports_full f
+                ) AS credit_transfers,
+                SUM(
+                    CASE
+                        WHEN f.doc_type_name IN ('Продажа', 'Возврат')
+                            THEN COALESCE(f.acquiring_fee, 0)
+                        ELSE 0
+                    END
+                ) AS acquiring_fee
+            FROM fin_report_latest f
             WHERE DATE(f.date_from) >= DATE '2026-01-01'
                 AND DATE(f.date_from) <= CURRENT_DATE - INTERVAL '{self.days_to} days'
-                AND f.account IS NOT NULL
-                AND f.account != '0'
-                AND f.account != 'NaN'
             GROUP BY
                 DATE(f.date_from),
                 UPPER(TRIM(f.account))
@@ -132,6 +161,7 @@ class ConditionalCalculationsRepository:
             COALESCE(fin_report.penalties, 0) AS penalties,
             COALESCE(fin_report.total_to_pay, 0) AS total_to_pay,
             COALESCE(fin_report.credit_transfers, 0) AS credit_transfers,
+            COALESCE(fin_report.acquiring_fee, 0) AS acquiring_fee,
             COALESCE(orders.date, fin_report.date) AS date
         FROM orders
         FULL OUTER JOIN fin_report
@@ -235,7 +265,8 @@ class ConditionalCalculationsRepository:
                         cc.date,
                         cc.penalties,
                         cc.total_to_pay,
-                        cc.credit_transfers
+                        cc.credit_transfers,
+                        cc.acquiring_fee
                     FROM conditions_calculation cc
         WHERE cc.date >= '2025-12-01'
         ORDER BY cc.date ASC,
@@ -263,6 +294,16 @@ class ConditionalCalculationsRepository:
             return
 
         existing_columns = set(self._get_existing_column_types(table_name))
+
+        if "acquiring_fee" in existing_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        f'ALTER TABLE "{table_name}" '
+                        'ALTER COLUMN "acquiring_fee" TYPE NUMERIC(18, 2) '
+                        'USING "acquiring_fee"::NUMERIC(18, 2)'
+                    )
+                )
 
         for column_name, column_type in conditional_calculations["columns"].items():
             if column_name in existing_columns:

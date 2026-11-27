@@ -47,7 +47,8 @@ def update_conditional_calculations_to_gs(
 
     Бизнес-сценарий: публикует в справочный лист те же данные, которые были
     записаны в `conditions_calculation`, включая штрафы по `date_from`, итог к
-    оплате и кредитные перечисления.
+    оплате, кредитные перечисления и фактический эквайринг из финансового
+    отчёта. Колонка эквайринга добавляется перед `updated_at`.
     """
     df = ConditionalCalculationsRepository().get_conditional_calculations()
 
