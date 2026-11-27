@@ -20,7 +20,8 @@ class AssemblyMarketSheetsSettings:
     max_retries: int = 4
     max_concurrent_accounts: int = 3
     request_delay_seconds: float = 1.0
-    sheets_write_chunk_rows: int = 500
+    # 2 000 строк заметно сокращают число HTTP-вызовов без чрезмерного тела запроса.
+    sheets_write_chunk_rows: int = 2000
 
 
 REQUIRED_ASSEMBLY_COLUMNS: tuple[str, ...] = (

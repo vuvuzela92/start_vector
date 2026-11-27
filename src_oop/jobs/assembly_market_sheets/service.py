@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 
 import aiohttp
@@ -43,6 +44,7 @@ class AssemblyMarketSheetsService:
 
     async def update_orders(self) -> None:
         """Загружает заказы всех кабинетов за последние 11 дней и обновляет тестовый лист."""
+        started_at = time.perf_counter()
         end_time = datetime.now()
         begin = int((end_time - timedelta(days=self.settings.orders_lookback_days)).timestamp())
         end = int(end_time.timestamp())
@@ -54,26 +56,35 @@ class AssemblyMarketSheetsService:
                 for account, token in tokens.items()
             ))
         rows = [row for batch in batches for row in batch]
+        api_seconds = time.perf_counter() - started_at
         dataframe = normalize_orders_for_sheet(
             rows, self.settings.orders_time_zone_offset_hours
         )
         self.sheets.upload(
             dataframe, self.settings.market_table, self.settings.market_orders_sheet
         )
-        logger.info("Выгрузка заказов в тестовый лист завершена | rows=%s", len(dataframe))
+        logger.info(
+            "Выгрузка заказов в тестовый лист завершена | rows=%s | wb_api_seconds=%.1f | total_seconds=%.1f",
+            len(dataframe), api_seconds, time.perf_counter() - started_at,
+        )
 
     def update_statuses(self) -> None:
         """Публикует статусы PostgreSQL для заданий, присутствующих в рабочем листе."""
+        started_at = time.perf_counter()
         values = self.sheets.read_values(
             self.settings.market_table, self.settings.market_orders_sheet
         )
         statuses = self.repository.fetch_statuses()
         dataframe = normalize_market_statuses(values, statuses)
         self.sheets.update_statuses(dataframe)
-        logger.info("Обновление листа статусов сборки завершено | rows=%s", len(dataframe))
+        logger.info(
+            "Обновление листа статусов сборки завершено | rows=%s | total_seconds=%.1f",
+            len(dataframe), time.perf_counter() - started_at,
+        )
 
     def migrate_assembly_data(self) -> None:
         """Переносит выбранные колонки сборочных заданий в таблицу висящих заказов."""
+        started_at = time.perf_counter()
         values = self.sheets.read_values(
             self.settings.market_table, self.settings.source_assembly_sheet
         )
@@ -91,4 +102,7 @@ class AssemblyMarketSheetsService:
         self.sheets.upload(
             dataframe, self.settings.hanging_table, self.settings.destination_assembly_sheet
         )
-        logger.info("Перенос сборочных заданий завершен | rows=%s", len(dataframe))
+        logger.info(
+            "Перенос сборочных заданий завершен | rows=%s | total_seconds=%.1f",
+            len(dataframe), time.perf_counter() - started_at,
+        )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -43,6 +44,8 @@ class AssemblyOrdersClient:
         """
         result: list[dict[str, Any]] = []
         cursor = 0
+        pages = 0
+        started_at = time.perf_counter()
         async with self._semaphore:
             while True:
                 params = {"limit": 1000, "next": cursor, "dateFrom": begin, "dateTo": end}
@@ -84,8 +87,13 @@ class AssemblyOrdersClient:
                     break
 
                 result.extend({**order, "account": account} for order in payload.get("orders", []))
+                pages += 1
                 cursor = int(payload.get("next", 0) or 0)
                 if cursor == 0:
+                    logger.info(
+                        "Заказы WB загружены по страницам | account=%s | rows=%s | pages=%s | seconds=%.1f",
+                        account, len(result), pages, time.perf_counter() - started_at,
+                    )
                     return result
                 await asyncio.sleep(self.settings.request_delay_seconds)
 
@@ -106,16 +114,18 @@ class AssemblyMarketSheetsClient:
         перезаписи листа.
         """
         connector = GoogleTabs(table_title=table, sheet_title=sheet)
+        started_at = time.perf_counter()
         exported = dataframe.copy()
         exported[self.settings.export_time_column] = datetime.now(
             ZoneInfo("Europe/Moscow")
         ).strftime("%Y-%m-%d %H:%M:%S")
         worksheet = connector.sheet_title
+        read_started_at = time.perf_counter()
         old_values = connector.get_all_values_with_retry()
         old_rows = len(old_values)
         old_columns = max((len(row) for row in old_values), default=0)
+        read_seconds = time.perf_counter() - read_started_at
         headers = exported.columns.astype(str).tolist()
-        rows = exported.astype(object).where(pd.notnull(exported), "").values.tolist()
         chunk_size = self.settings.sheets_write_chunk_rows
         if chunk_size <= 0:
             raise ValueError("Размер порции записи в Google Sheets должен быть больше нуля.")
@@ -124,8 +134,14 @@ class AssemblyMarketSheetsClient:
             "A1:" + rowcol_to_a1(1, len(headers)),
             [headers],
         )
-        for start in range(0, len(rows), chunk_size):
-            chunk = rows[start : start + chunk_size]
+        write_started_at = time.perf_counter()
+        for start in range(0, len(exported), chunk_size):
+            chunk_dataframe = exported.iloc[start : start + chunk_size]
+            chunk = (
+                chunk_dataframe.astype(object)
+                .where(pd.notnull(chunk_dataframe), "")
+                .values.tolist()
+            )
             start_row = start + 2
             end_row = start_row + len(chunk) - 1
             connector.update_range(
@@ -133,7 +149,7 @@ class AssemblyMarketSheetsClient:
                 chunk,
             )
 
-        new_rows = len(rows) + 1
+        new_rows = len(exported) + 1
         target_rows = max(old_rows, new_rows)
         target_columns = max(old_columns, len(headers))
         if old_rows > new_rows and target_columns:
@@ -144,8 +160,15 @@ class AssemblyMarketSheetsClient:
                 [[""] * target_columns for _ in range(clear_end - clear_start + 1)],
             )
         logger.info(
-            "Лист Google Sheets полностью обновлен порциями | table=%s | sheet=%s | rows=%s | chunk_rows=%s",
-            table, getattr(worksheet, "title", sheet), len(rows), chunk_size,
+            "Лист Google Sheets полностью обновлен порциями | table=%s | sheet=%s | rows=%s | chunk_rows=%s | chunks=%s | read_seconds=%.1f | write_seconds=%.1f | total_seconds=%.1f",
+            table,
+            getattr(worksheet, "title", sheet),
+            len(exported),
+            chunk_size,
+            (len(exported) + chunk_size - 1) // chunk_size,
+            read_seconds,
+            time.perf_counter() - write_started_at,
+            time.perf_counter() - started_at,
         )
 
     def read_values(self, table: str, sheet: str) -> list[list[str]]:
