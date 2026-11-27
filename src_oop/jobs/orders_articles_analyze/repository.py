@@ -329,15 +329,18 @@ class ArticleAnalyzeRepository:
                             ELSE 0
                         END
                     ) AS sales_count,
-                    SUM(
-                        CASE
+                    CASE
+                        -- В 2026 году эквайринг учитывается по всем строкам отчёта с исходным знаком.
+                        WHEN DATE(financial_sales.date_from) BETWEEN DATE '2026-01-01' AND DATE '2026-12-31'
+                            THEN SUM(COALESCE(financial_sales.acquiring_fee, 0))
+                        ELSE SUM(CASE
                             WHEN financial_sales.doc_type_name = 'Продажа'
                                 THEN COALESCE(financial_sales.acquiring_fee, 0)
                             WHEN financial_sales.doc_type_name = 'Возврат'
                                 THEN -COALESCE(financial_sales.acquiring_fee, 0)
                             ELSE 0
-                        END
-                    ) AS acquiring_fee
+                        END)
+                    END AS acquiring_fee
                 FROM daily_fin_reports_full financial_sales
                 INNER JOIN (
                     SELECT
@@ -448,10 +451,11 @@ class ArticleAnalyzeRepository:
     def get_fin_report_stat(self, days_ago: int, days_to: int) -> pd.DataFrame:
         """Возвращает финансовые метрики по аккаунту, товару и дате.
 
-        Для бизнеса продаж выручка, количество и фактический эквайринг
-        рассчитываются по финансовому отчёту: продажи прибавляются, возвраты
-        вычитаются. Другие типы документов в эти метрики не включаются;
-        количество возвратов дополнительно возвращается отдельно для контроля.
+        Выручка и количество продаж рассчитываются по финансовому отчёту:
+        продажи прибавляются, возвраты вычитаются. В 2026 году эквайринг
+        суммируется по всем строкам отчёта с исходным знаком; вне 2026 года
+        сохраняется прежний расчёт: продажи минус возвраты. Количество
+        возвратов возвращается отдельно для контроля.
         """
         sales_date_from = f"CURRENT_DATE - INTERVAL '{days_ago} days'"
         sales_date_to = f"CURRENT_DATE - INTERVAL '{days_to} days'"
@@ -527,11 +531,16 @@ class ArticleAnalyzeRepository:
                 SUM(CASE WHEN fin.doc_type_name = 'Продажа' THEN fin.quantity ELSE 0 END) -
                 SUM(CASE WHEN fin.doc_type_name = 'Возврат' THEN fin.quantity ELSE 0 END) AS sales_count_rep,
                 SUM(CASE WHEN fin.doc_type_name = 'Возврат' THEN fin.quantity ELSE 0 END) AS returns_count_rep,
-                SUM(CASE
-                    WHEN fin.doc_type_name = 'Продажа' THEN COALESCE(fin.acquiring_fee, 0)
-                    WHEN fin.doc_type_name = 'Возврат' THEN -COALESCE(fin.acquiring_fee, 0)
-                    ELSE 0
-                END) AS acquiring_fee_rep
+                CASE
+                    -- В 2026 году эквайринг учитывается по всем строкам отчёта с исходным знаком.
+                    WHEN fin.date BETWEEN DATE '2026-01-01' AND DATE '2026-12-31'
+                        THEN SUM(COALESCE(fin.acquiring_fee, 0))
+                    ELSE SUM(CASE
+                        WHEN fin.doc_type_name = 'Продажа' THEN COALESCE(fin.acquiring_fee, 0)
+                        WHEN fin.doc_type_name = 'Возврат' THEN -COALESCE(fin.acquiring_fee, 0)
+                        ELSE 0
+                    END)
+                END AS acquiring_fee_rep
             FROM fin_filtered fin
             INNER JOIN fin_latest_snapshot snapshot
                 ON snapshot.account = fin.account
