@@ -120,11 +120,6 @@ class AssemblyMarketSheetsClient:
             ZoneInfo("Europe/Moscow")
         ).strftime("%Y-%m-%d %H:%M:%S")
         worksheet = connector.sheet_title
-        read_started_at = time.perf_counter()
-        old_values = connector.get_all_values_with_retry()
-        old_rows = len(old_values)
-        old_columns = max((len(row) for row in old_values), default=0)
-        read_seconds = time.perf_counter() - read_started_at
         headers = exported.columns.astype(str).tolist()
         chunk_size = self.settings.sheets_write_chunk_rows
         if chunk_size <= 0:
@@ -150,23 +145,20 @@ class AssemblyMarketSheetsClient:
             )
 
         new_rows = len(exported) + 1
-        target_rows = max(old_rows, new_rows)
-        target_columns = max(old_columns, len(headers))
-        if old_rows > new_rows and target_columns:
-            clear_start = new_rows + 1
-            clear_end = target_rows
-            connector.update_range(
-                f"A{clear_start}:{rowcol_to_a1(clear_end, target_columns)}",
-                [[""] * target_columns for _ in range(clear_end - clear_start + 1)],
+        if worksheet.row_count > new_rows:
+            clear_range = f"A{new_rows + 1}:{rowcol_to_a1(worksheet.row_count, len(headers))}"
+            connector._execute_google_write_with_retry(
+                operation_name=f"batch_clear {sheet} {clear_range}",
+                func=worksheet.batch_clear,
+                ranges=[clear_range],
             )
         logger.info(
-            "Лист Google Sheets полностью обновлен порциями | table=%s | sheet=%s | rows=%s | chunk_rows=%s | chunks=%s | read_seconds=%.1f | write_seconds=%.1f | total_seconds=%.1f",
+            "Лист Google Sheets полностью обновлен порциями | table=%s | sheet=%s | rows=%s | chunk_rows=%s | chunks=%s | write_seconds=%.1f | total_seconds=%.1f",
             table,
             getattr(worksheet, "title", sheet),
             len(exported),
             chunk_size,
             (len(exported) + chunk_size - 1) // chunk_size,
-            read_seconds,
             time.perf_counter() - write_started_at,
             time.perf_counter() - started_at,
         )
@@ -174,6 +166,36 @@ class AssemblyMarketSheetsClient:
     def read_values(self, table: str, sheet: str) -> list[list[str]]:
         """Читает строки листа для переноса сборочных заданий между таблицами."""
         return GoogleTabs(table_title=table, sheet_title=sheet).get_all_values_with_retry()
+
+    def read_status_source(self, table: str, sheet: str) -> list[list[str]]:
+        """Читает ID и кабинет построчно, не загружая остальные колонки заказов."""
+        connector = GoogleTabs(table_title=table, sheet_title=sheet)
+        worksheet = connector.sheet_title
+        header = connector.execute_with_retry(
+            f"header {sheet}", worksheet.row_values, 1,
+        )
+        if not header:
+            return []
+        if not {"id", "ЛК"}.issubset(header):
+            raise ValueError("На листе сборочных заданий отсутствуют обязательные колонки id и ЛК.")
+        id_column = header.index("id") + 1
+        account_column = header.index("ЛК") + 1
+        if worksheet.row_count < 2:
+            return [["id", "ЛК"]]
+        ranges = [
+            f"{rowcol_to_a1(2, column)}:{rowcol_to_a1(worksheet.row_count, column)}"
+            for column in (id_column, account_column)
+        ]
+        columns = connector.execute_with_retry(
+            f"status_source {sheet}", worksheet.batch_get, ranges,
+        )
+        values = [["id", "ЛК"]]
+        for index in range(max(map(len, columns))):
+            values.append([
+                column[index][0] if index < len(column) and column[index] else ""
+                for column in columns
+            ])
+        return values
 
     def update_statuses(self, dataframe: pd.DataFrame) -> None:
         """Записывает объединенные статусы заказов на выделенный лист проекта."""

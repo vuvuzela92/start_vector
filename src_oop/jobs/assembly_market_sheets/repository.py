@@ -15,15 +15,18 @@ logger = logging.getLogger(__name__)
 class AssemblyMarketSheetsRepository:
     """Предоставляет явные поля статусов для публикации в Google Sheets."""
 
-    def fetch_statuses(self) -> pd.DataFrame:
-        """Читает ID задания и оба статуса без загрузки лишних колонок."""
+    def fetch_statuses(self, order_ids: list[int]) -> pd.DataFrame:
+        """Читает статусы только заданий исходного листа, сохраняя все совпавшие строки."""
+        if not order_ids:
+            return pd.DataFrame(columns=["assembly_task_id", "wb_status", "supplier_status"])
         query = text(
             """SELECT assembly_task_id, wb_status, supplier_status
-               FROM status_assembly_task"""
+               FROM status_assembly_task
+               WHERE assembly_task_id = ANY(:order_ids)"""
         )
         try:
             with Database.get_engine().connect() as connection:
-                dataframe = pd.read_sql(query, connection)
+                dataframe = pd.read_sql(query, connection, params={"order_ids": order_ids})
         except Exception as error:
             logger.error(
                 "Не удалось прочитать статусы сборочных заданий из PostgreSQL | error_type=%s",

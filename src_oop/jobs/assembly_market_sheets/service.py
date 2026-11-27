@@ -71,10 +71,13 @@ class AssemblyMarketSheetsService:
     def update_statuses(self) -> None:
         """Публикует статусы PostgreSQL для заданий, присутствующих в рабочем листе."""
         started_at = time.perf_counter()
-        values = self.sheets.read_values(
+        values = self.sheets.read_status_source(
             self.settings.market_table, self.settings.market_orders_sheet
         )
-        statuses = self.repository.fetch_statuses()
+        order_ids = pd.to_numeric(
+            pd.Series([row[0] for row in values[1:]]), errors="coerce"
+        ).dropna().astype("int64").unique().tolist() if values else []
+        statuses = self.repository.fetch_statuses(order_ids)
         dataframe = normalize_market_statuses(values, statuses)
         self.sheets.update_statuses(dataframe)
         logger.info(
