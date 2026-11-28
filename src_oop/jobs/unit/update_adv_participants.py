@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 
 import pandas as pd
-from gspread.utils import rowcol_to_a1
+from gspread.utils import ValueRenderOption, rowcol_to_a1
 
 from src_oop.core.database import Database
 from src_oop.core.my_gspread import GoogleTabs
@@ -121,6 +121,17 @@ def update_adv_participants_to_gs() -> None:
     `Артикул` считаются допустимыми и просто пропускаются. Если значение после
     очистки от пробелов остаётся непустым, но не является числом, задача
     завершается с точным адресом проблемной ячейки в Google Sheets.
+    Заголовки и две нужные колонки читаются отдельно. Общий клиент делает
+    до четырёх попыток при тайм-аутах, сетевых сбоях и HTTP 429/500/502/503/504.
+    Сначала читаются исходные значения в режиме FORMULA: обычные заголовки
+    и артикулы не требуют получения вычисленного представления листа. Если
+    нужный заголовок или артикул задан формулой, вычисленные значения читаются
+    отдельно. Формулы в колонке рекламы не вычисляются: нужен только её размер,
+    чтобы очистить прежние отметки в хвосте.
+    Запись использует найденный индекс колонки без повторного чтения заголовков.
+    Ошибка после исчерпания попыток прерывает задачу; успешное обновление
+    сообщается только после подтверждения записи. Если обе колонки пусты,
+    запись не выполняется. Старые отметки ниже списка артикулов очищаются.
     """
 
     database = Database()
@@ -130,17 +141,68 @@ def update_adv_participants_to_gs() -> None:
     sheet_title = unit_gs.sheet
     google_tabs = GoogleTabs(table_title, sheet_title)
 
-    sheet_data = google_tabs.sheet_title.get_all_values()
-    if not sheet_data:
+    headers = google_tabs.execute_with_retry(
+        "Чтение заголовков UNIT для обновления рекламы",
+        google_tabs.sheet_title.row_values,
+        GOOGLE_HEADER_ROW_INDEX,
+        value_render_option=ValueRenderOption.formula,
+    )
+    required_headers = (UNIT_ARTICLE_COLUMN, ADVERT_MARK_COLUMN)
+    if any(name not in headers for name in required_headers) and any(
+        isinstance(value, str) and value.startswith("=") for value in headers
+    ):
+        headers = google_tabs.execute_with_retry(
+            "Чтение вычисляемых заголовков UNIT для обновления рекламы",
+            google_tabs.sheet_title.row_values,
+            GOOGLE_HEADER_ROW_INDEX,
+            value_render_option=ValueRenderOption.formatted,
+        )
+    if not headers:
         raise ValueError(
             f"Лист '{sheet_title}' таблицы '{table_title}' пуст и не содержит заголовков."
         )
 
-    headers = sheet_data[GOOGLE_HEADER_ROW_INDEX - 1]
-    rows = sheet_data[GOOGLE_DATA_START_ROW - 1 :]
-    dataframe = pd.DataFrame(rows, columns=headers)
-
-    _ensure_required_column(headers, ADVERT_MARK_COLUMN, sheet_name=sheet_title)
+    article_index = _ensure_required_column(
+        headers, UNIT_ARTICLE_COLUMN, sheet_name=sheet_title
+    )
+    advert_index = _ensure_required_column(headers, ADVERT_MARK_COLUMN, sheet_name=sheet_title)
+    article_column = rowcol_to_a1(1, article_index + 1)[:-1]
+    advert_column = rowcol_to_a1(1, advert_index + 1)[:-1]
+    ranges = [
+        f"{article_column}{GOOGLE_DATA_START_ROW}:{article_column}",
+        f"{advert_column}{GOOGLE_DATA_START_ROW}:{advert_column}",
+    ]
+    article_values, advert_values = google_tabs.execute_with_retry(
+        "Чтение артикулов и отметок рекламы UNIT",
+        google_tabs.sheet_title.batch_get,
+        ranges,
+        value_render_option=ValueRenderOption.formula,
+    )
+    if any(
+        row and isinstance(row[0], str) and row[0].startswith("=")
+        for row in article_values
+    ):
+        article_values = google_tabs.execute_with_retry(
+            "Чтение вычисляемых артикулов UNIT для обновления рекламы",
+            google_tabs.sheet_title.batch_get,
+            [ranges[0]],
+            value_render_option=ValueRenderOption.unformatted,
+        )[0]
+    row_count = max(len(article_values), len(advert_values))
+    if row_count == 0:
+        logger.info(
+            "Обновление рекламы UNIT завершено без записи: колонки артикулов "
+            "и рекламы пусты | table=%s | sheet=%s",
+            table_title,
+            sheet_title,
+        )
+        return
+    dataframe = pd.DataFrame(
+        {
+            UNIT_ARTICLE_COLUMN: [row[0] if row else "" for row in article_values]
+            + [""] * (row_count - len(article_values)),
+        }
+    )
     article_parsing_result = _parse_article_series_with_cell_context(
         dataframe,
         headers=headers,
@@ -168,7 +230,15 @@ def update_adv_participants_to_gs() -> None:
         sheet_title,
         len(result_values),
     )
-    google_tabs.update_column_by_name(ADVERT_MARK_COLUMN, result_values)
+    start_cell = rowcol_to_a1(GOOGLE_DATA_START_ROW, advert_index + 1)
+    end_cell = rowcol_to_a1(GOOGLE_DATA_START_ROW + row_count - 1, advert_index + 1)
+    google_tabs.execute_with_retry(
+        "Запись отметок рекламы UNIT",
+        google_tabs.sheet_title.update,
+        range_name=f"{start_cell}:{end_cell}",
+        values=[[value] for value in result_values],
+        value_input_option="RAW",
+    )
     logger.info(
         "Колонка признака рекламы обновлена в Google Sheets: table='%s', sheet='%s', column='%s', rows=%s.",
         table_title,
